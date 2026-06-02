@@ -10,6 +10,8 @@ router.get("/broker", verifyToken, ctrl.getBroker);
 router.get("/washing", verifyToken, ctrl.getWashing);
 // GET mesin crusher (IdBagianMesin = 3)
 router.get("/crusher", verifyToken, ctrl.getCrusher);
+// GET mesin gilingan (IdBagianMesin = 3)
+router.get("/gilingan", verifyToken, ctrl.getGilingan);
 
 // GET by idbagian (only active by default)
 // The regex enforces numeric-only for :idbagian
