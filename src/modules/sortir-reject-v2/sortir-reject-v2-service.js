@@ -653,7 +653,7 @@ exports.deleteSortirReject = async (noBJSortir, ctx) => {
           SELECT j.code FROM OPENJSON(@CodesJson)
           WITH (code varchar(50) '$.code') AS j
         )
-        AND HasBeenPrinted <> 0 
+        AND (HasBeenPrinted IS NULL OR HasBeenPrinted > 0)
       `);
       if (printedReject.recordset.length > 0) {
         throw conflict("Tidak bisa hapus: label output sudah pernah dicetak");
@@ -700,7 +700,7 @@ exports.deleteSortirReject = async (noBJSortir, ctx) => {
           SELECT j.code FROM OPENJSON(@CodesJson)
           WITH (code varchar(50) '$.code') AS j
         )
-        AND HasBeenPrinted <> 0
+        AND (HasBeenPrinted IS NULL OR HasBeenPrinted > 0)
       `);
       if (printedOutput.recordset.length > 0) {
         throw conflict("Tidak bisa hapus: label output sudah pernah dicetak");

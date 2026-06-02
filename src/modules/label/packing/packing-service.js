@@ -1207,6 +1207,7 @@ exports.resetHasBeenPrinted = async (payload) => {
     throw e;
   }
 };
+
 exports.getByNoBJ = async (NoBJ) => {
   const pool = await poolPromise;
 
