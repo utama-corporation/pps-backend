@@ -67,4 +67,10 @@ router.delete(
   gilinganProduksiController.deleteInputsAndPartials,
 );
 
+router.post(
+  "/gilingan/split-time/:idMesin/:tanggal",
+  verifyToken,
+  gilinganProduksiController.splitProduksiTime,
+);
+
 module.exports = router;

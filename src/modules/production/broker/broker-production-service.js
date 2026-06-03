@@ -76,7 +76,7 @@ async function getAllProduksi(
 
   if (total === 0) return { data: [], total: 0 };
 
-  // 2) Data + Flag Tutup Transaksi (ambil lastClosed sekali)
+  // 2) Data + multi-operator + Flag Tutup Transaksi
   const dataQry = `
     ;WITH LastClosed AS (
       SELECT TOP 1
@@ -84,15 +84,51 @@ async function getAllProduksi(
       FROM dbo.MstTutupTransaksiHarian WITH (NOLOCK)
       WHERE [Lock] = 1
       ORDER BY CONVERT(date, PeriodHarian) DESC, Id DESC
+    ),
+    OpRows AS (
+      SELECT
+        od.NoProduksi,
+        od.IdOperator
+      FROM dbo.BrokerProduksiOperator_d od WITH (NOLOCK)
+      INNER JOIN dbo.BrokerProduksi_h h WITH (NOLOCK) ON h.NoProduksi = od.NoProduksi
+      ${whereClause}
+    ),
+    OpDistinct AS (
+      SELECT DISTINCT NoProduksi, IdOperator
+      FROM OpRows
+      WHERE IdOperator IS NOT NULL
     )
     SELECT
       h.NoProduksi,
       h.TglProduksi,
       h.IdMesin,
       ms.NamaMesin,
-      h.IdOperator,
-      op.NamaOperator,
-      h.Jam         AS JamKerja,
+      h.IdRegu,
+      rg.NamaRegu,
+      JSON_QUERY(
+        COALESCE(
+          (
+            SELECT d.IdOperator AS [value]
+            FROM OpDistinct d
+            WHERE d.NoProduksi = h.NoProduksi
+            ORDER BY d.IdOperator
+            FOR JSON PATH
+          ),
+          '[]'
+        )
+      ) AS IdOperators,
+      COALESCE(
+        (
+          SELECT STRING_AGG(opd.NamaOperator, ', ')
+          FROM OpDistinct d
+          INNER JOIN dbo.MstOperator opd WITH (NOLOCK) ON opd.IdOperator = d.IdOperator
+          WHERE d.NoProduksi = h.NoProduksi
+        ),
+        ''
+      ) AS NamaOperators,
+      h.OutputJenisId,
+      mb.Nama         AS OutputJenisNama,
+      h.Jam           AS JamKerja,
       h.Shift,
       h.CreateBy,
       h.CheckBy1,
@@ -103,13 +139,9 @@ async function getAllProduksi(
       h.HourMeter,
       CONVERT(VARCHAR(8), h.HourStart, 108) AS HourStart,
       CONVERT(VARCHAR(8), h.HourEnd, 108) AS HourEnd,
-      h.IdRegu,
-      rg.NamaRegu,
 
-      -- (opsional utk frontend)
       lc.LastClosedDate AS LastClosedDate,
 
-      -- flag tutup transaksi
       CASE
         WHEN lc.LastClosedDate IS NOT NULL
          AND CONVERT(date, h.TglProduksi) <= lc.LastClosedDate
@@ -118,9 +150,9 @@ async function getAllProduksi(
       END AS IsLocked
 
     FROM dbo.BrokerProduksi_h h WITH (NOLOCK)
-    LEFT JOIN dbo.MstMesin    ms WITH (NOLOCK) ON ms.IdMesin     = h.IdMesin
-    LEFT JOIN dbo.MstOperator op WITH (NOLOCK) ON op.IdOperator  = h.IdOperator
-    LEFT JOIN dbo.MstRegu     rg WITH (NOLOCK) ON rg.IdRegu      = h.IdRegu
+    LEFT JOIN dbo.MstMesin ms WITH (NOLOCK) ON ms.IdMesin   = h.IdMesin
+    LEFT JOIN dbo.MstRegu  rg WITH (NOLOCK) ON rg.IdRegu    = h.IdRegu
+    LEFT JOIN dbo.MstBroker mb WITH (NOLOCK) ON mb.IdBroker = h.OutputJenisId
 
     OUTER APPLY (
       SELECT TOP 1 LastClosedDate
@@ -129,7 +161,6 @@ async function getAllProduksi(
 
     ${whereClause}
 
-    -- rekomendasi: urutkan konsisten berdasarkan tanggal + jam + nomor
     ORDER BY h.TglProduksi DESC, h.Jam ASC, h.NoProduksi DESC
     OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
   `;
@@ -143,7 +174,16 @@ async function getAllProduksi(
   dataReq.input("limit", sql.Int, ps);
 
   const dataRes = await dataReq.query(dataQry);
-  return { data: dataRes.recordset || [], total };
+
+  const rows = (dataRes.recordset || []).map((r) => ({
+    ...r,
+    IdOperators:
+      typeof r.IdOperators === "string"
+        ? JSON.parse(r.IdOperators).map((x) => x.value)
+        : (r.IdOperators ?? []),
+  }));
+
+  return { data: rows, total };
 }
 
 // fetchInputs(): main items + partial items (with full keys) in SAME list
@@ -626,10 +666,25 @@ async function createBrokerProduksi(payload, ctx) {
   // ===============================
   const body = payload && typeof payload === "object" ? payload : {};
 
+  const operatorIdsRaw = Array.isArray(body?.idOperators)
+    ? body.idOperators
+    : body?.idOperator != null
+      ? [body.idOperator]
+      : [];
+  const operatorIds = [
+    ...new Set(
+      operatorIdsRaw
+        .map((v) => Number(v))
+        .filter((n) => Number.isFinite(n) && n > 0)
+        .map((n) => Math.trunc(n)),
+    ),
+  ];
+  const primaryOperatorId = operatorIds[0] ?? null;
+
   const must = [];
   if (!body?.tglProduksi) must.push("tglProduksi");
   if (body?.idMesin == null) must.push("idMesin");
-  if (body?.idOperator == null) must.push("idOperator");
+  if (primaryOperatorId == null) must.push("idOperators");
   if (!body?.hourStart) must.push("hourStart");
   if (!body?.hourEnd) must.push("hourEnd");
   if (body?.shift == null) must.push("shift");
@@ -734,39 +789,40 @@ async function createBrokerProduksi(payload, ctx) {
       .input("NoProduksi", sql.VarChar(50), noProduksi)
       .input("TglProduksi", sql.Date, docDateOnly)
       .input("IdMesin", sql.Int, body.idMesin)
-      .input("IdOperator", sql.Int, body.idOperator)
+      .input("IdOperator", sql.Int, primaryOperatorId)
+      .input("OutputJenisId", sql.Int, body.outputJenisId ?? null)
       .input("Jam", sql.Int, jamInt)
       .input("Shift", sql.Int, body.shift)
-      .input("CreateBy", sql.VarChar(100), body.createBy) // controller overwrite
+      .input("CreateBy", sql.VarChar(100), body.createBy)
       .input("CheckBy1", sql.VarChar(100), body.checkBy1 ?? null)
       .input("CheckBy2", sql.VarChar(100), body.checkBy2 ?? null)
       .input("ApproveBy", sql.VarChar(100), body.approveBy ?? null)
       .input("JmlhAnggota", sql.Int, body.jmlhAnggota ?? null)
       .input("Hadir", sql.Int, body.hadir ?? null)
       .input("HourMeter", sql.Decimal(18, 2), body.hourMeter ?? null)
-      // kirim string, biar SQL yang CAST ke time(7)
       .input("HourStart", sql.VarChar(20), body.hourStart ?? null)
       .input("HourEnd", sql.VarChar(20), body.hourEnd ?? null)
       .input("IdRegu", sql.Int, body.idRegu ?? null);
 
     const insertSql = `
       DECLARE @out TABLE (
-        NoProduksi   varchar(50),
-        TglProduksi  date,
-        IdMesin      int,
-        IdOperator   int,
-        Jam          int,
-        Shift        int,
-        CreateBy     varchar(100),
-        CheckBy1     varchar(100),
-        CheckBy2     varchar(100),
-        ApproveBy    varchar(100),
-        JmlhAnggota  int,
-        Hadir        int,
-        HourMeter    decimal(18,2),
-        HourStart    time(7),
-        HourEnd      time(7),
-        IdRegu       int
+        NoProduksi    varchar(50),
+        TglProduksi   date,
+        IdMesin       int,
+        IdOperator    int,
+        OutputJenisId int,
+        Jam           int,
+        Shift         int,
+        CreateBy      varchar(100),
+        CheckBy1      varchar(100),
+        CheckBy2      varchar(100),
+        ApproveBy     varchar(100),
+        JmlhAnggota   int,
+        Hadir         int,
+        HourMeter     decimal(18,2),
+        HourStart     time(7),
+        HourEnd       time(7),
+        IdRegu        int
       );
 
       INSERT INTO dbo.BrokerProduksi_h (
@@ -774,6 +830,7 @@ async function createBrokerProduksi(payload, ctx) {
         TglProduksi,
         IdMesin,
         IdOperator,
+        OutputJenisId,
         Jam,
         Shift,
         CreateBy,
@@ -792,6 +849,7 @@ async function createBrokerProduksi(payload, ctx) {
         INSERTED.TglProduksi,
         INSERTED.IdMesin,
         INSERTED.IdOperator,
+        INSERTED.OutputJenisId,
         INSERTED.Jam,
         INSERTED.Shift,
         INSERTED.CreateBy,
@@ -810,6 +868,7 @@ async function createBrokerProduksi(payload, ctx) {
         @TglProduksi,
         @IdMesin,
         @IdOperator,
+        @OutputJenisId,
         @Jam,
         @Shift,
         @CreateBy,
@@ -829,11 +888,29 @@ async function createBrokerProduksi(payload, ctx) {
 
     const insRes = await rqIns.query(insertSql);
 
+    // Insert operator detail rows
+    if (operatorIds.length > 0) {
+      const rqOp = new sql.Request(tx);
+      rqOp.input("NoProduksi", sql.VarChar(50), noProduksi);
+      const opValues = operatorIds.map((opId, i) => {
+        const p = `DetailOp${i}`;
+        rqOp.input(p, sql.Int, opId);
+        return `(@NoProduksi, @${p})`;
+      });
+      await rqOp.query(`
+        INSERT INTO dbo.BrokerProduksiOperator_d (NoProduksi, IdOperator)
+        VALUES ${opValues.join(", ")};
+      `);
+    }
+
     await tx.commit();
 
     return {
-      header: insRes.recordset?.[0] || null,
-      audit, // optional debug / tracing
+      header: {
+        ...(insRes.recordset?.[0] || {}),
+        IdOperators: operatorIds,
+      },
+      audit,
     };
   } catch (e) {
     try {
@@ -2332,7 +2409,11 @@ async function splitProduksiTime(selector, payload, ctx) {
   }
 
   const hourStart = String(payload?.hourStart || "").trim();
+  const outputJenisId = Number(payload?.outputJenisId);
   if (!hourStart) throw badReq("hourStart wajib diisi");
+  if (!Number.isInteger(outputJenisId) || outputJenisId <= 0) {
+    throw badReq("outputJenisId wajib integer positif");
+  }
   const toSeconds = (hhmmss) => {
     const m = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(
       String(hhmmss || "").trim(),
@@ -2568,44 +2649,47 @@ async function splitProduksiTime(selector, payload, ctx) {
       .input("NewNoProduksi", sql.VarChar(50), newNoProduksi)
       .input("SourceNoProduksi", sql.VarChar(50), sourceNo)
       .input("NewHourStart", sql.VarChar(20), hourStart)
-      .input("NewHourEnd", sql.VarChar(20), hourEnd);
+      .input("NewHourEnd", sql.VarChar(20), hourEnd)
+      .input("OutputJenisId", sql.Int, outputJenisId);
 
     const insertRes = await insReq.query(`
       DECLARE @out TABLE (
-        NoProduksi varchar(50),
-        TglProduksi date,
-        IdMesin int,
-        IdOperator int,
-        Jam int,
-        Shift int,
-        CreateBy varchar(100),
-        CheckBy1 varchar(100),
-        CheckBy2 varchar(100),
-        ApproveBy varchar(100),
-        JmlhAnggota int,
-        Hadir int,
-        HourMeter decimal(18,2),
-        HourStart time(7),
-        HourEnd time(7),
-        IdRegu int
+        NoProduksi    varchar(50),
+        TglProduksi   date,
+        IdMesin       int,
+        IdOperator    int,
+        OutputJenisId int,
+        Jam           int,
+        Shift         int,
+        CreateBy      varchar(100),
+        CheckBy1      varchar(100),
+        CheckBy2      varchar(100),
+        ApproveBy     varchar(100),
+        JmlhAnggota   int,
+        Hadir         int,
+        HourMeter     decimal(18,2),
+        HourStart     time(7),
+        HourEnd       time(7),
+        IdRegu        int
       );
 
       INSERT INTO dbo.BrokerProduksi_h (
-        NoProduksi, TglProduksi, IdMesin, IdOperator, Jam, Shift, CreateBy,
+        NoProduksi, TglProduksi, IdMesin, IdOperator, OutputJenisId, Jam, Shift, CreateBy,
         CheckBy1, CheckBy2, ApproveBy, JmlhAnggota, Hadir, HourMeter,
         HourStart, HourEnd, IdRegu
       )
       OUTPUT
         INSERTED.NoProduksi, INSERTED.TglProduksi, INSERTED.IdMesin, INSERTED.IdOperator,
-        INSERTED.Jam, INSERTED.Shift, INSERTED.CreateBy, INSERTED.CheckBy1, INSERTED.CheckBy2,
-        INSERTED.ApproveBy, INSERTED.JmlhAnggota, INSERTED.Hadir, INSERTED.HourMeter,
-        INSERTED.HourStart, INSERTED.HourEnd, INSERTED.IdRegu
+        INSERTED.OutputJenisId, INSERTED.Jam, INSERTED.Shift, INSERTED.CreateBy,
+        INSERTED.CheckBy1, INSERTED.CheckBy2, INSERTED.ApproveBy, INSERTED.JmlhAnggota,
+        INSERTED.Hadir, INSERTED.HourMeter, INSERTED.HourStart, INSERTED.HourEnd, INSERTED.IdRegu
       INTO @out
       SELECT
         @NewNoProduksi,
         h.TglProduksi,
         h.IdMesin,
         h.IdOperator,
+        @OutputJenisId,
         h.Jam,
         h.Shift,
         h.CreateBy,
@@ -2616,12 +2700,17 @@ async function splitProduksiTime(selector, payload, ctx) {
         h.Hadir,
         h.HourMeter,
         CAST(@NewHourStart AS time(7)),
-        CAST(@NewHourEnd AS time(7)),
+        CAST(@NewHourEnd   AS time(7)),
         h.IdRegu
       FROM dbo.BrokerProduksi_h h WITH (UPDLOCK, HOLDLOCK)
       WHERE h.NoProduksi = @SourceNoProduksi;
 
-      SELECT * FROM @out;
+      SELECT
+        o.*,
+        mb.Nama AS OutputJenisNama
+      FROM @out o
+      LEFT JOIN dbo.MstBroker mb WITH (NOLOCK)
+        ON mb.IdBroker = o.OutputJenisId;
     `);
 
     await new sql.Request(tx)

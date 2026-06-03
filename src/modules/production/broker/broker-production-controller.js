@@ -270,13 +270,20 @@ async function createProduksi(req, res) {
   };
 
   // ✅ payload business (tanpa audit fields)
+  const idOperators = Array.isArray(b.idOperators)
+    ? b.idOperators.map(Number).filter((n) => Number.isFinite(n) && n > 0)
+    : b.idOperator != null
+      ? [toInt(b.idOperator)].filter(Boolean)
+      : [];
+
   const payload = {
-    tglProduksi: b.tglProduksi, // 'YYYY-MM-DD'
-    idMesin: toInt(b.idMesin), // number
-    idOperator: toInt(b.idOperator), // number
-    jam: b.jam, // number or 'HH:mm-HH:mm'
-    shift: toInt(b.shift), // number
-    createBy: actorUsername, // controller overwrite dari token
+    tglProduksi: b.tglProduksi,
+    idMesin: toInt(b.idMesin),
+    idOperators,
+    outputJenisId: toInt(b.outputJenisId),
+    jam: b.jam,
+    shift: toInt(b.shift),
+    createBy: actorUsername,
 
     checkBy1: b.checkBy1 ?? null,
     checkBy2: b.checkBy2 ?? null,
@@ -285,17 +292,16 @@ async function createProduksi(req, res) {
     hadir: toInt(b.hadir),
     hourMeter: toFloat(b.hourMeter),
 
-    hourStart: b.hourStart || null, // ex: '08:00:00'
-    hourEnd: b.hourEnd || null, // ex: '09:00:00'
+    hourStart: b.hourStart || null,
+    hourEnd: b.hourEnd || null,
 
     idRegu: toInt(b.idRegu) ?? null,
   };
 
-  // optional: validasi cepat agar error 400 rapih (service juga akan validasi)
   const must = [];
   if (!payload.tglProduksi) must.push("tglProduksi");
   if (payload.idMesin == null) must.push("idMesin");
-  if (payload.idOperator == null) must.push("idOperator");
+  if (idOperators.length === 0) must.push("idOperators");
   if (!payload.hourStart) must.push("hourStart");
   if (!payload.hourEnd) must.push("hourEnd");
   if (payload.shift == null) must.push("shift");
@@ -984,6 +990,7 @@ async function splitProduksiTime(req, res) {
 
   const body = req.body && typeof req.body === "object" ? req.body : {};
   const hourStart = String(body.hourStart || "").trim();
+  const outputJenisId = Number(body.outputJenisId);
 
   if (!hourStart) {
     return res.status(400).json({
@@ -996,6 +1003,12 @@ async function splitProduksiTime(req, res) {
     return res.status(400).json({
       success: false,
       message: "Format hourStart harus HH:mm atau HH:mm:ss",
+    });
+  }
+  if (!Number.isInteger(outputJenisId) || outputJenisId <= 0) {
+    return res.status(400).json({
+      success: false,
+      message: "outputJenisId wajib integer positif",
     });
   }
 
@@ -1015,7 +1028,7 @@ async function splitProduksiTime(req, res) {
     const ctx = { actorId, actorUsername, requestId };
     const result = await brokerProduksiService.splitProduksiTime(
       { idMesin, tanggal },
-      { hourStart },
+      { hourStart, outputJenisId },
       ctx,
     );
 
