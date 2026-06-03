@@ -6,7 +6,12 @@ async function list(req, res) {
   const orderBy = (req.query.orderBy || 'NamaRegu').toString();
   const orderDir =
     (req.query.orderDir || 'ASC').toString().toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
-  const idBagian = req.query.idBagian || null;
+  const idBagianRaw = req.query.idBagian;
+  const idBagian = idBagianRaw
+    ? (Array.isArray(idBagianRaw) ? idBagianRaw : String(idBagianRaw).split(","))
+        .map((v) => parseInt(v, 10))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    : [];
 
   try {
     const rows = await service.listAll({ q, orderBy, orderDir, idBagian });

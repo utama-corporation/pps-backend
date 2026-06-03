@@ -5,7 +5,7 @@ async function listAll({
   q = "",
   orderBy = "NamaRegu",
   orderDir = "ASC",
-  idBagian = null,
+  idBagian = [],
 }) {
   const pool = await poolPromise;
   const request = pool.request();
@@ -26,9 +26,12 @@ async function listAll({
     request.input("q", `%${q}%`);
   }
 
-  if (idBagian) {
-    conditions.push("a.IdBagian = @idBagian");
-    request.input("idBagian", idBagian);
+  if (Array.isArray(idBagian) && idBagian.length > 0) {
+    const params = idBagian.map((id, i) => {
+      request.input(`idBagian${i}`, sql.Int, id);
+      return `@idBagian${i}`;
+    });
+    conditions.push(`a.IdBagian IN (${params.join(", ")})`);
   }
 
   const where =
