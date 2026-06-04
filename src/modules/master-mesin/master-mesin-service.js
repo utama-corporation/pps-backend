@@ -871,6 +871,148 @@ async function getStampingByNoProduksi({
   return result.recordset || [];
 }
 
+async function getPasangKunciByNoProduksi({
+  idBagianMesin = 10,
+  includeDisabled = true,
+}) {
+  const pool = await poolPromise;
+  const request = pool.request();
+  request.input("IdBagianMesin", idBagianMesin);
+
+  const whereEnable = includeDisabled ? "1=1" : "ISNULL(m.Enable, 1) = 1";
+
+  const query = `
+    ;WITH CurrentCtx AS (
+      SELECT
+        CONVERT(date, GETDATE()) AS CurrentDate,
+        CAST(GETDATE() AS time(0)) AS CurrentTime
+    ),
+    LatestShiftSet AS (
+      SELECT TOP 1
+        h.IdShiftHourSet,
+        h.ValidFrmDate
+      FROM dbo.MstShiftHourSet h WITH (NOLOCK)
+      CROSS JOIN CurrentCtx c
+      WHERE CONVERT(date, h.ValidFrmDate) <= c.CurrentDate
+      ORDER BY CONVERT(date, h.ValidFrmDate) DESC, h.IdShiftHourSet DESC
+    ),
+    ActiveShift AS (
+      SELECT TOP 1
+        d.NoShift,
+        d.HourStart,
+        d.HourEnd,
+        ls.ValidFrmDate
+      FROM LatestShiftSet ls
+      INNER JOIN dbo.MstShiftHourSet_d d WITH (NOLOCK)
+        ON d.IdShiftHourSet = ls.IdShiftHourSet
+      CROSS JOIN CurrentCtx c
+      WHERE
+        (
+          d.HourStart <= d.HourEnd
+          AND c.CurrentTime >= CAST(d.HourStart AS time(0))
+          AND c.CurrentTime < CAST(d.HourEnd AS time(0))
+        )
+        OR
+        (
+          d.HourStart > d.HourEnd
+          AND (
+            c.CurrentTime >= CAST(d.HourStart AS time(0))
+            OR c.CurrentTime < CAST(d.HourEnd AS time(0))
+          )
+        )
+      ORDER BY d.NoShift ASC
+    )
+    SELECT
+      m.IdMesin,
+      m.NamaMesin,
+      m.Bagian,
+      m.IdBagianMesin,
+      h.NoProduksi,
+      CONVERT(date, h.Tanggal) AS TglProduksi,
+      h.IdRegu,
+      rg.NamaRegu,
+      h.OutputJenisId,
+      cw.Nama     AS OutputJenisNama,
+      cw.ItemCode AS OutputJenisItemCode,
+      JSON_QUERY(
+        COALESCE(
+          (
+            SELECT od.IdOperator AS [value]
+            FROM dbo.PasangKunciOperator_d od WITH (NOLOCK)
+            WHERE od.NoProduksi = h.NoProduksi
+            ORDER BY od.IdOperator
+            FOR JSON PATH
+          ),
+          '[]'
+        )
+      ) AS IdOperators,
+      COALESCE(
+        (
+          SELECT STRING_AGG(op.NamaOperator, ', ')
+          FROM dbo.PasangKunciOperator_d od WITH (NOLOCK)
+          INNER JOIN dbo.MstOperator op WITH (NOLOCK)
+            ON op.IdOperator = od.IdOperator
+          WHERE od.NoProduksi = h.NoProduksi
+        ),
+        ''
+      ) AS Operators,
+      h.Shift,
+      CONVERT(varchar(8), h.HourStart, 108) AS HourStart,
+      CONVERT(varchar(8), h.HourEnd,   108) AS HourEnd,
+      m.Target,
+      CONVERT(varchar(10), c.CurrentDate, 23) AS CurrentDate,
+      CONVERT(varchar(8), c.CurrentTime, 108) AS CurrentTime,
+      s.NoShift AS ActiveShift,
+      CONVERT(varchar(8), s.HourStart, 108) AS ActiveShiftHourStart,
+      CONVERT(varchar(8), s.HourEnd,   108) AS ActiveShiftHourEnd,
+      s.ValidFrmDate AS ActiveShiftValidFrmDate
+    FROM dbo.MstMesin m WITH (NOLOCK)
+    OUTER APPLY (
+      SELECT TOP 1
+        pk.NoProduksi,
+        pk.Tanggal,
+        pk.IdRegu,
+        pk.OutputJenisId,
+        pk.Shift,
+        pk.HourStart,
+        pk.HourEnd
+      FROM dbo.PasangKunci_h pk WITH (NOLOCK)
+      CROSS JOIN CurrentCtx c
+      WHERE pk.IdMesin = m.IdMesin
+        AND CONVERT(date, pk.Tanggal) = c.CurrentDate
+        AND pk.Shift = (SELECT TOP 1 NoShift FROM ActiveShift)
+        AND (
+          (
+            pk.HourStart <= pk.HourEnd
+            AND c.CurrentTime >= CAST(pk.HourStart AS time(0))
+            AND c.CurrentTime < CAST(pk.HourEnd AS time(0))
+          )
+          OR
+          (
+            pk.HourStart > pk.HourEnd
+            AND (
+              c.CurrentTime >= CAST(pk.HourStart AS time(0))
+              OR c.CurrentTime < CAST(pk.HourEnd AS time(0))
+            )
+          )
+        )
+      ORDER BY pk.HourStart DESC, pk.NoProduksi DESC
+    ) h
+    LEFT JOIN dbo.MstCabinetWIP cw WITH (NOLOCK)
+      ON cw.IdCabinetWIP = h.OutputJenisId
+    LEFT JOIN dbo.MstRegu rg WITH (NOLOCK)
+      ON rg.IdRegu = h.IdRegu
+    OUTER APPLY (SELECT TOP 1 * FROM ActiveShift) s
+    CROSS JOIN CurrentCtx c
+    WHERE ${whereEnable}
+      AND m.IdBagianMesin = @IdBagianMesin
+    ORDER BY m.NamaMesin ASC;
+  `;
+
+  const result = await request.query(query);
+  return result.recordset || [];
+}
+
 module.exports = {
   getByIdBagian,
   getBrokerByNoProduksi,
@@ -879,4 +1021,5 @@ module.exports = {
   getGilinganByNoProduksi,
   getMixerByNoProduksi,
   getStampingByNoProduksi,
+  getPasangKunciByNoProduksi,
 };

@@ -926,19 +926,47 @@ async function fetchOutputsReject(noProduksi) {
   req.input("no", sql.VarChar(50), noProduksi);
 
   const q = `
+    WITH RejectPartialAgg AS (
+      SELECT
+        NoReject,
+        SUM(ISNULL(Berat, 0)) AS TotalPartialBerat
+      FROM dbo.RejectV2Partial
+      GROUP BY NoReject
+    )
     SELECT DISTINCT
       o.NoProduksi,
       o.NoReject,
-      ISNULL(rj.HasBeenPrinted, 0) AS HasBeenPrinted
+      rj.IdReject AS IdJenis,
+      mr.NamaReject AS NamaJenis,
+      ISNULL(CAST(rj.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
+      CASE
+        WHEN ISNULL(rj.Berat, 0) - ISNULL(rp.TotalPartialBerat, 0) < 0
+          THEN 0
+        ELSE ISNULL(rj.Berat, 0) - ISNULL(rp.TotalPartialBerat, 0)
+      END AS Berat,
+      CAST(NULL AS int) AS Pcs
     FROM dbo.HotStampingOutputRejectV2 o WITH (NOLOCK)
     LEFT JOIN dbo.RejectV2 rj WITH (NOLOCK)
       ON rj.NoReject = o.NoReject
+    LEFT JOIN dbo.MstReject mr WITH (NOLOCK)
+      ON mr.IdReject = rj.IdReject
+    LEFT JOIN RejectPartialAgg rp
+      ON rp.NoReject = rj.NoReject
     WHERE o.NoProduksi = @no
     ORDER BY o.NoReject DESC;
   `;
 
   const rs = await req.query(q);
-  return rs.recordset || [];
+  const rows = rs.recordset || [];
+  return rows.map((r) => ({
+    NoProduksi: r.NoProduksi,
+    NoReject: r.NoReject,
+    IdJenis: r.IdJenis ?? null,
+    NamaJenis: r.NamaJenis ?? null,
+    HasBeenPrinted: r.HasBeenPrinted ?? 0,
+    Berat: r.Berat ?? null,
+    Pcs: r.Pcs ?? null,
+  }));
 }
 
 async function validateFwipLabel(labelCode) {

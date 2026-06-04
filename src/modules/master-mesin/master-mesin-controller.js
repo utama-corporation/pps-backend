@@ -570,6 +570,88 @@ async function getStamping(req, res) {
   }
 }
 
+async function getPasangKunci(req, res) {
+  const idBagianMesin = 10;
+  const includeDisabled = String(req.query.includeDisabled || "1") === "1";
+
+  try {
+    const rows = await service.getPasangKunciByNoProduksi({
+      idBagianMesin,
+      includeDisabled,
+    });
+
+    const normalizeIdOperators = (raw) => {
+      let arr = [];
+      if (Array.isArray(raw)) {
+        arr = raw;
+      } else if (typeof raw === "string" && raw.trim()) {
+        try {
+          arr = JSON.parse(raw);
+        } catch (_) {
+          arr = [];
+        }
+      }
+      return [
+        ...new Set(
+          arr
+            .map((v) => Number(v?.value ?? v))
+            .filter((n) => Number.isFinite(n))
+            .map((n) => Math.trunc(n)),
+        ),
+      ];
+    };
+
+    const activeShiftMeta =
+      rows.length > 0
+        ? {
+            noShift: rows[0].ActiveShift ?? null,
+            hourStart: rows[0].ActiveShiftHourStart ?? null,
+            hourEnd: rows[0].ActiveShiftHourEnd ?? null,
+            validFrmDate: rows[0].ActiveShiftValidFrmDate ?? null,
+            currentDate: rows[0].CurrentDate ?? null,
+            currentTime: rows[0].CurrentTime ?? null,
+          }
+        : null;
+
+    const data = rows.map((r) => ({
+      IdMesin: r.IdMesin,
+      NamaMesin: r.NamaMesin,
+      Bagian: r.Bagian,
+      IdBagianMesin: r.IdBagianMesin,
+      Target: r.Target ?? null,
+      NoProduksi: r.NoProduksi ?? null,
+      TglProduksi: r.TglProduksi ?? null,
+      IdRegu: r.IdRegu ?? null,
+      NamaRegu: r.NamaRegu ?? null,
+      OutputJenisId: r.OutputJenisId ?? null,
+      OutputJenisNama: r.OutputJenisNama ?? null,
+      OutputJenisItemCode: r.OutputJenisItemCode ?? null,
+      IdOperators: normalizeIdOperators(r.IdOperators),
+      Operators: r.Operators ?? "",
+      Shift: r.Shift ?? null,
+      HourStart: r.HourStart ?? null,
+      HourEnd: r.HourEnd ?? null,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      message: "Data pasang kunci per NoProduksi hari ini berhasil diambil",
+      idBagianMesin,
+      includeDisabled,
+      activeShift: activeShiftMeta,
+      totalData: data.length,
+      data,
+    });
+  } catch (error) {
+    console.error("Error fetching MstMesin pasang kunci:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   getByIdBagian,
   getBroker,
@@ -578,4 +660,5 @@ module.exports = {
   getGilingan,
   getMixer,
   getStamping,
+  getPasangKunci,
 };
