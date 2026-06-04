@@ -19,6 +19,12 @@ router.get(
 // ✅ POST CREATE (baru)
 router.post("/key-fitting", verifyToken, keyFittingController.createProduksi);
 
+router.post(
+  "/key-fitting/split-time/:idMesin/:tanggal",
+  verifyToken,
+  keyFittingController.splitProduksiTime,
+);
+
 // routes/key-fitting-production-route.js
 router.put(
   "/key-fitting/:noProduksi",
