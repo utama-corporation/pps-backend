@@ -29,7 +29,10 @@ exports.insertFurnitureWipHeader = async (
     `);
 };
 
-exports.insertOutputMapping = async (tx, { mappingTable, outputCode, noFurnitureWip }) => {
+exports.insertOutputMapping = async (
+  tx,
+  { mappingTable, outputCode, noFurnitureWip },
+) => {
   const rqMap = new sql.Request(tx)
     .input("OutputCode", sql.VarChar(50), outputCode)
     .input("NoFurnitureWIP", sql.VarChar(50), noFurnitureWip);
@@ -121,13 +124,19 @@ exports.updateFurnitureWipHeader = async (
 };
 
 exports.deleteFurnitureWipPartials = async (tx, noFurnitureWip) => {
-  await new sql.Request(tx).input("NoFurnitureWIP", sql.VarChar(50), noFurnitureWip)
-    .query(`DELETE FROM dbo.FurnitureWIPPartial WHERE NoFurnitureWIP = @NoFurnitureWIP;`);
+  await new sql.Request(tx)
+    .input("NoFurnitureWIP", sql.VarChar(50), noFurnitureWip)
+    .query(
+      `DELETE FROM dbo.FurnitureWIPPartial WHERE NoFurnitureWIP = @NoFurnitureWIP;`,
+    );
 };
 
 exports.deleteFurnitureWipHeader = async (tx, noFurnitureWip) => {
-  const res = await new sql.Request(tx).input("NoFurnitureWIP", sql.VarChar(50), noFurnitureWip)
-    .query(`DELETE FROM dbo.FurnitureWIP WHERE NoFurnitureWIP = @NoFurnitureWIP;`);
+  const res = await new sql.Request(tx)
+    .input("NoFurnitureWIP", sql.VarChar(50), noFurnitureWip)
+    .query(
+      `DELETE FROM dbo.FurnitureWIP WHERE NoFurnitureWIP = @NoFurnitureWIP;`,
+    );
   return res.rowsAffected?.[0] ?? 0;
 };
 

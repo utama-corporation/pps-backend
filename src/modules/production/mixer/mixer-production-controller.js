@@ -58,11 +58,27 @@ async function getAllProduksi(req, res) {
     (typeof req.query.search === "string" && req.query.search) ||
     "";
 
+  const idMesin =
+    req.query.idMesin != null && req.query.idMesin !== ""
+      ? parseInt(req.query.idMesin, 10) || null
+      : null;
+  const tanggal =
+    typeof req.query.tanggal === "string" && req.query.tanggal
+      ? req.query.tanggal
+      : null;
+  const shift =
+    req.query.shift != null && req.query.shift !== ""
+      ? parseInt(req.query.shift, 10) || null
+      : null;
+
   try {
     const { data, total } = await mixerProduksiService.getAllProduksi(
       page,
       pageSize,
       search,
+      idMesin,
+      tanggal,
+      shift,
     );
 
     return res.status(200).json({
@@ -77,6 +93,9 @@ async function getAllProduksi(req, res) {
         hasNextPage: page * pageSize < total,
         hasPrevPage: page > 1,
         search,
+        idMesin,
+        tanggal,
+        shift,
       },
     });
   } catch (error) {
@@ -121,11 +140,19 @@ async function createProduksi(req, res) {
     // ===============================
     // Payload business
     // ===============================
+    const idOperators = Array.isArray(b.idOperators)
+      ? b.idOperators.map(Number).filter((n) => Number.isFinite(n) && n > 0)
+      : b.idOperator != null
+        ? [toInt(b.idOperator)].filter(Boolean)
+        : [];
+
     const payload = {
-      tglProduksi: b.tglProduksi, // 'YYYY-MM-DD'
+      tglProduksi: b.tglProduksi,
       idMesin: toInt(b.idMesin),
-      idOperator: toInt(b.idOperator),
-      jam: b.jam, // number or 'HH:mm-HH:mm'
+      idOperators,
+      outputJenisId: toInt(b.outputJenisId),
+      idRegu: toInt(b.idRegu),
+      jam: b.jam,
       shift: toInt(b.shift),
       createBy: actorUsername,
       checkBy1: b.checkBy1 ?? null,
@@ -134,8 +161,8 @@ async function createProduksi(req, res) {
       jmlhAnggota: toInt(b.jmlhAnggota),
       hadir: toInt(b.hadir),
       hourMeter: toFloat(b.hourMeter),
-      hourStart: b.hourStart || null, // '08:00:00'
-      hourEnd: b.hourEnd || null, // '09:00:00'
+      hourStart: normalizeTime(b.hourStart) ?? null,
+      hourEnd: normalizeTime(b.hourEnd) ?? null,
     };
 
     // ===============================
@@ -144,8 +171,9 @@ async function createProduksi(req, res) {
     const must = [];
     if (!payload.tglProduksi) must.push("tglProduksi");
     if (payload.idMesin == null) must.push("idMesin");
-    if (payload.idOperator == null) must.push("idOperator");
-    if (!payload.jam) must.push("jam");
+    if (idOperators.length === 0) must.push("idOperators");
+    if (payload.outputJenisId == null) must.push("outputJenisId");
+    if (payload.idRegu == null) must.push("idRegu");
     if (payload.shift == null) must.push("shift");
 
     if (must.length) {
@@ -676,6 +704,106 @@ async function deleteInputsAndPartials(req, res) {
   }
 }
 
+async function splitProduksiTime(req, res) {
+  const normalizeSqlTimeToHms = (value) => {
+    if (value == null) return value;
+    if (value instanceof Date) {
+      const hh = String(value.getUTCHours()).padStart(2, "0");
+      const mm = String(value.getUTCMinutes()).padStart(2, "0");
+      const ss = String(value.getUTCSeconds()).padStart(2, "0");
+      return `${hh}:${mm}:${ss}`;
+    }
+    const raw = String(value).trim();
+    const m = /(\d{2}):(\d{2}):(\d{2})/.exec(raw);
+    return m ? `${m[1]}:${m[2]}:${m[3]}` : raw;
+  };
+
+  const idMesin = Number(String(req.params.idMesin || "").trim());
+  const tanggal = String(req.params.tanggal || "").trim();
+
+  if (!Number.isInteger(idMesin) || idMesin <= 0) {
+    return res
+      .status(400)
+      .json({ success: false, message: "idMesin harus integer positif" });
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(tanggal)) {
+    return res.status(400).json({
+      success: false,
+      message: "tanggal harus format YYYY-MM-DD",
+    });
+  }
+
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const hourStart = String(body.hourStart || "").trim();
+  const outputJenisId = Number(body.outputJenisId);
+
+  if (!hourStart) {
+    return res
+      .status(400)
+      .json({ success: false, message: "hourStart wajib diisi" });
+  }
+  if (!/^\d{2}:\d{2}(:\d{2})?$/.test(hourStart)) {
+    return res.status(400).json({
+      success: false,
+      message: "Format hourStart harus HH:mm atau HH:mm:ss",
+    });
+  }
+  if (!Number.isInteger(outputJenisId) || outputJenisId <= 0) {
+    return res.status(400).json({
+      success: false,
+      message: "outputJenisId wajib integer positif",
+    });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res
+      .status(401)
+      .json({ success: false, message: "Unauthorized (idUsername missing)" });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const ctx = { actorId, actorUsername, requestId };
+    const result = await mixerProduksiService.splitProduksiTime(
+      { idMesin, tanggal },
+      { hourStart, outputJenisId },
+      ctx,
+    );
+
+    const header = result?.header
+      ? {
+          ...result.header,
+          HourStart: normalizeSqlTimeToHms(result.header.HourStart),
+          HourEnd: normalizeSqlTimeToHms(result.header.HourEnd),
+        }
+      : result?.header;
+
+    return res.status(201).json({
+      success: true,
+      message: "Produksi berhasil di-split",
+      data: { ...result, header },
+      meta: { audit: { actorId, actorUsername, requestId } },
+    });
+  } catch (err) {
+    console.error("[mixer.splitProduksiTime]", err);
+    const status = err.statusCode || err.status || 500;
+    return res.status(status).json({
+      success: false,
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      },
+    });
+  }
+}
+
 module.exports = {
   getProduksiByDate,
   getAllProduksi,
@@ -687,4 +815,5 @@ module.exports = {
   validateLabel,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
+  splitProduksiTime,
 };
