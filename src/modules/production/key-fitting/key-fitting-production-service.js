@@ -247,7 +247,11 @@ async function createKeyFittingProduksi(payload, ctx) {
         CreateBy, CheckBy1, CheckBy2, ApproveBy,
         HourMeter, HourStart, HourEnd
       )
-      OUTPUT INSERTED.* INTO @tmp
+      OUTPUT INSERTED.NoProduksi, INSERTED.Tanggal, INSERTED.IdMesin, INSERTED.IdOperator,
+             INSERTED.Shift, INSERTED.JamKerja, INSERTED.CreateBy,
+             INSERTED.CheckBy1, INSERTED.CheckBy2, INSERTED.ApproveBy,
+             INSERTED.HourMeter, INSERTED.HourStart, INSERTED.HourEnd
+        INTO @tmp
       VALUES (
         @NoProduksi, @Tanggal, @IdMesin, @IdOperator, @Shift, @JamKerja,
         @CreateBy, @CheckBy1, @CheckBy2, @ApproveBy, @HourMeter,
