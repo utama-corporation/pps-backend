@@ -145,10 +145,18 @@ async function createProduksi(req, res) {
     // ===============================
     // Payload business
     // ===============================
+    const idOperators = Array.isArray(b.idOperators)
+      ? b.idOperators.map(Number).filter((n) => Number.isFinite(n) && n > 0)
+      : b.idOperator != null
+        ? [toInt(b.idOperator)].filter(Boolean)
+        : [];
+
     const payload = {
       tglProduksi: b.tglProduksi,
       idMesin: toInt(b.idMesin),
-      idOperator: toInt(b.idOperator),
+      idOperators,
+      outputJenisId: toInt(b.outputJenisId),
+      idRegu: toInt(b.idRegu),
       shift: toInt(b.shift),
       jamKerja: b.jamKerja ?? null,
       hourMeter: toFloat(b.hourMeter),
@@ -168,7 +176,9 @@ async function createProduksi(req, res) {
     const must = [];
     if (!payload.tglProduksi) must.push("tglProduksi");
     if (payload.idMesin == null) must.push("idMesin");
-    if (payload.idOperator == null) must.push("idOperator");
+    if (idOperators.length === 0) must.push("idOperators");
+    if (payload.outputJenisId == null) must.push("outputJenisId");
+    if (payload.idRegu == null) must.push("idRegu");
     if (payload.shift == null) must.push("shift");
     if (!payload.hourStart) must.push("hourStart");
     if (!payload.hourEnd) must.push("hourEnd");

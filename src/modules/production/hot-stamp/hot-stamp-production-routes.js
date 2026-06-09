@@ -17,6 +17,12 @@ router.get("/hot-stamp", verifyToken, hotStampingController.getAllProduksi);
 
 router.post("/hot-stamp", verifyToken, hotStampingController.createProduksi);
 
+router.post(
+  "/hot-stamp/split-time/:idMesin/:tanggal",
+  verifyToken,
+  hotStampingController.splitProduksiTime,
+);
+
 router.put(
   "/hot-stamp/:noProduksi",
   verifyToken,

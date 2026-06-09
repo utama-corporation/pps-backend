@@ -58,7 +58,14 @@ async function getProduksiByDate(date) {
  * Join MstMesin untuk ambil NamaMesin.
  * (Opsional) Join MstOperator untuk NamaOperator (biar sama kayak Broker).
  */
-async function getAllProduksi(page = 1, pageSize = 20, search = "") {
+async function getAllProduksi(
+  page = 1,
+  pageSize = 20,
+  search = "",
+  idMesin = null,
+  tanggal = null,
+  shift = null,
+) {
   const pool = await poolPromise;
 
   const p = Math.max(1, Number(page) || 1);
@@ -69,9 +76,11 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
 
   const whereClause = `
     WHERE (@search = '' OR h.NoProduksi LIKE '%' + @search + '%')
+      AND (@idMesin IS NULL OR h.IdMesin = @idMesin)
+      AND (@tanggal IS NULL OR CONVERT(date, h.TglProduksi) = @tanggal)
+      AND (@shift IS NULL OR h.Shift = @shift)
   `;
 
-  // 1) Count (tanpa join, ringan)
   const countQry = `
     SELECT COUNT(1) AS total
     FROM dbo.MixerProduksi_h h WITH (NOLOCK)
@@ -80,13 +89,15 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
 
   const countReq = pool.request();
   countReq.input("search", sql.VarChar(100), searchTerm);
+  countReq.input("idMesin", sql.Int, idMesin);
+  countReq.input("tanggal", sql.Date, tanggal);
+  countReq.input("shift", sql.Int, shift);
 
   const countRes = await countReq.query(countQry);
   const total = countRes.recordset?.[0]?.total || 0;
 
   if (total === 0) return { data: [], total: 0 };
 
-  // 2) Data + LastClosedDate + IsLocked
   const dataQry = `
     ;WITH LastClosed AS (
       SELECT TOP 1
@@ -94,15 +105,51 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
       FROM dbo.MstTutupTransaksiHarian WITH (NOLOCK)
       WHERE [Lock] = 1
       ORDER BY CONVERT(date, PeriodHarian) DESC, Id DESC
+    ),
+    OpRows AS (
+      SELECT
+        od.NoProduksi,
+        od.IdOperator
+      FROM dbo.MixerProduksiOperator_d od WITH (NOLOCK)
+      INNER JOIN dbo.MixerProduksi_h h WITH (NOLOCK) ON h.NoProduksi = od.NoProduksi
+      ${whereClause}
+    ),
+    OpDistinct AS (
+      SELECT DISTINCT NoProduksi, IdOperator
+      FROM OpRows
+      WHERE IdOperator IS NOT NULL
     )
     SELECT
       h.NoProduksi,
       h.TglProduksi,
       h.IdMesin,
       ms.NamaMesin,
-      h.IdOperator,
-      op.NamaOperator,
-      h.Jam AS JamKerja,
+      h.IdRegu,
+      rg.NamaRegu,
+      JSON_QUERY(
+        COALESCE(
+          (
+            SELECT d.IdOperator AS [value]
+            FROM OpDistinct d
+            WHERE d.NoProduksi = h.NoProduksi
+            ORDER BY d.IdOperator
+            FOR JSON PATH
+          ),
+          '[]'
+        )
+      ) AS IdOperators,
+      COALESCE(
+        (
+          SELECT STRING_AGG(opd.NamaOperator, ', ')
+          FROM OpDistinct d
+          INNER JOIN dbo.MstOperator opd WITH (NOLOCK) ON opd.IdOperator = d.IdOperator
+          WHERE d.NoProduksi = h.NoProduksi
+        ),
+        ''
+      ) AS NamaOperators,
+      h.OutputJenisId,
+      mm.Jenis AS OutputJenisNama,
+      h.Jam    AS JamKerja,
       h.Shift,
       h.CreateBy,
       h.CheckBy1,
@@ -112,12 +159,10 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
       h.Hadir,
       h.HourMeter,
       CONVERT(VARCHAR(8), h.HourStart, 108) AS HourStart,
-      CONVERT(VARCHAR(8), h.HourEnd, 108)   AS HourEnd,
+      CONVERT(VARCHAR(8), h.HourEnd,   108) AS HourEnd,
 
-      -- (opsional utk FE)
       lc.LastClosedDate AS LastClosedDate,
 
-      -- ✅ flag tutup transaksi
       CASE
         WHEN lc.LastClosedDate IS NOT NULL
          AND CONVERT(date, h.TglProduksi) <= lc.LastClosedDate
@@ -126,10 +171,9 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
       END AS IsLocked
 
     FROM dbo.MixerProduksi_h h WITH (NOLOCK)
-    LEFT JOIN dbo.MstMesin ms WITH (NOLOCK)
-      ON ms.IdMesin = h.IdMesin
-    LEFT JOIN dbo.MstOperator op WITH (NOLOCK)
-      ON op.IdOperator = h.IdOperator
+    LEFT JOIN dbo.MstMesin  ms WITH (NOLOCK) ON ms.IdMesin  = h.IdMesin
+    LEFT JOIN dbo.MstRegu   rg WITH (NOLOCK) ON rg.IdRegu   = h.IdRegu
+    LEFT JOIN dbo.MstMixer  mm WITH (NOLOCK) ON mm.IdMixer  = h.OutputJenisId
 
     OUTER APPLY (
       SELECT TOP 1 LastClosedDate
@@ -138,29 +182,55 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
 
     ${whereClause}
 
-    -- rekomendasi urut konsisten
     ORDER BY h.TglProduksi DESC, h.Jam ASC, h.NoProduksi DESC
     OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
   `;
 
   const dataReq = pool.request();
   dataReq.input("search", sql.VarChar(100), searchTerm);
+  dataReq.input("idMesin", sql.Int, idMesin);
+  dataReq.input("tanggal", sql.Date, tanggal);
+  dataReq.input("shift", sql.Int, shift);
   dataReq.input("offset", sql.Int, offset);
   dataReq.input("limit", sql.Int, ps);
 
   const dataRes = await dataReq.query(dataQry);
-  return { data: dataRes.recordset || [], total };
+
+  const rows = (dataRes.recordset || []).map((r) => ({
+    ...r,
+    IdOperators: typeof r.IdOperators === "string"
+      ? JSON.parse(r.IdOperators).map((x) => x.value)
+      : (r.IdOperators ?? []),
+  }));
+
+  return { data: rows, total };
 }
 
 // =========================
 // create MixerProduksi_h
 // =========================
 async function createMixerProduksi(payload, ctx) {
+  const operatorIdsRaw = Array.isArray(payload?.idOperators)
+    ? payload.idOperators
+    : payload?.idOperator != null
+      ? [payload.idOperator]
+      : [];
+  const operatorIds = [
+    ...new Set(
+      operatorIdsRaw
+        .map((v) => Number(v))
+        .filter((n) => Number.isFinite(n) && n > 0)
+        .map((n) => Math.trunc(n)),
+    ),
+  ];
+  const primaryOperatorId = operatorIds[0] ?? null;
+
   const must = [];
   if (!payload?.tglProduksi) must.push("tglProduksi");
   if (payload?.idMesin == null) must.push("idMesin");
-  if (payload?.idOperator == null) must.push("idOperator");
-  if (payload?.jam == null) must.push("jam");
+  if (primaryOperatorId == null) must.push("idOperators");
+  if (payload?.outputJenisId == null) must.push("outputJenisId");
+  if (payload?.idRegu == null) must.push("idRegu");
   if (payload?.shift == null) must.push("shift");
   if (must.length) throw badReq(`Field wajib: ${must.join(", ")}`);
 
@@ -220,16 +290,24 @@ async function createMixerProduksi(payload, ctx) {
       });
     }
 
-    // 5) Parse jam -> int
-    const jamInt = parseJamToInt(payload.jam);
+    // 5) Parse jam -> int (atau hitung dari hourStart-hourEnd)
+    let jamKerja = payload.jam ?? null;
+    if (jamKerja == null) {
+      const calc = calcJamKerjaFromStartEnd(payload?.hourStart, payload?.hourEnd);
+      if (calc != null) jamKerja = calc;
+    }
+    if (jamKerja == null) throw badReq("Field wajib: jam (atau isi hourStart-hourEnd)");
+    const jamInt = parseJamToInt(jamKerja);
 
-    // 6) Insert (tanpa OUTPUT langsung, ambil via SELECT setelah insert)
+    // 6) Insert header
     const rqIns = new sql.Request(tx);
     rqIns
       .input("NoProduksi", sql.VarChar(50), noProduksi)
-      .input("IdOperator", sql.Int, payload.idOperator)
+      .input("IdOperator", sql.Int, primaryOperatorId)
       .input("IdMesin", sql.Int, payload.idMesin)
       .input("TglProduksi", sql.Date, effectiveDate)
+      .input("OutputJenisId", sql.Int, payload.outputJenisId ?? null)
+      .input("IdRegu", sql.Int, payload.idRegu ?? null)
       .input("Jam", sql.Int, jamInt)
       .input("Shift", sql.Int, payload.shift)
       .input("CreateBy", sql.VarChar(100), payload.createBy)
@@ -244,26 +322,48 @@ async function createMixerProduksi(payload, ctx) {
 
     const insertSql = `
       INSERT INTO dbo.MixerProduksi_h (
-        NoProduksi, IdOperator, IdMesin, TglProduksi, Jam, Shift,
+        NoProduksi, IdOperator, IdMesin, TglProduksi,
+        OutputJenisId, IdRegu, Jam, Shift,
         CreateBy, CheckBy1, CheckBy2, ApproveBy, JmlhAnggota, Hadir,
         HourMeter, HourStart, HourEnd
       )
       VALUES (
-        @NoProduksi, @IdOperator, @IdMesin, @TglProduksi, @Jam, @Shift,
+        @NoProduksi, @IdOperator, @IdMesin, @TglProduksi,
+        @OutputJenisId, @IdRegu, @Jam, @Shift,
         @CreateBy, @CheckBy1, @CheckBy2, @ApproveBy, @JmlhAnggota, @Hadir,
-        @HourMeter, CAST(@HourStart AS time(7)), CAST(@HourEnd AS time(7))
+        @HourMeter,
+        CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL ELSE CAST(@HourStart AS time(7)) END,
+        CASE WHEN @HourEnd   IS NULL OR LTRIM(RTRIM(@HourEnd))   = '' THEN NULL ELSE CAST(@HourEnd   AS time(7)) END
       );
 
-      SELECT *
-      FROM dbo.MixerProduksi_h
-      WHERE NoProduksi = @NoProduksi;
+      SELECT * FROM dbo.MixerProduksi_h WHERE NoProduksi = @NoProduksi;
     `;
 
     const insRes = await rqIns.query(insertSql);
-    const insertedHeader = insRes.recordset?.[0] || null;
+
+    // 7) Insert operator detail rows
+    if (operatorIds.length > 0) {
+      const rqOp = new sql.Request(tx);
+      rqOp.input("NoProduksi", sql.VarChar(50), noProduksi);
+      const opValues = operatorIds.map((opId, i) => {
+        const p = `DetailOp${i}`;
+        rqOp.input(p, sql.Int, opId);
+        return `(@NoProduksi, @${p})`;
+      });
+      await rqOp.query(`
+        INSERT INTO dbo.MixerProduksiOperator_d (NoProduksi, IdOperator)
+        VALUES ${opValues.join(", ")};
+      `);
+    }
 
     await tx.commit();
-    return { header: insertedHeader, audit };
+    return {
+      header: {
+        ...(insRes.recordset?.[0] || {}),
+        IdOperators: operatorIds,
+      },
+      audit,
+    };
   } catch (e) {
     try {
       await tx.rollback();
@@ -1021,19 +1121,57 @@ async function fetchOutputs(noProduksi) {
   req.input("no", sql.VarChar(50), noProduksi);
 
   const q = `
-    SELECT DISTINCT
-      o.NoProduksi,
+    SELECT
+      @no          AS NoProduksi,
       o.NoMixer,
-      ISNULL(h.HasBeenPrinted, 0) AS HasBeenPrinted
-    FROM dbo.MixerProduksiOutput o WITH (NOLOCK)
+      h.IdMixer    AS IdJenis,
+      mm.Jenis     AS NamaJenis,
+      ISNULL(h.HasBeenPrinted, 0) AS HasBeenPrinted,
+      d.NoSak,
+      d.Berat,
+      d.DateUsage,
+      d.IsPartial
+    FROM (
+      SELECT DISTINCT NoMixer
+      FROM dbo.MixerProduksiOutput WITH (NOLOCK)
+      WHERE NoProduksi = @no
+    ) o
     LEFT JOIN dbo.Mixer_h h WITH (NOLOCK)
       ON h.NoMixer = o.NoMixer
-    WHERE o.NoProduksi = @no
-    ORDER BY o.NoMixer DESC;
+    LEFT JOIN dbo.MstMixer mm WITH (NOLOCK)
+      ON mm.IdMixer = h.IdMixer
+    LEFT JOIN dbo.Mixer_d d WITH (NOLOCK)
+      ON d.NoMixer = o.NoMixer
+    ORDER BY o.NoMixer DESC, d.NoSak ASC;
   `;
 
   const rs = await req.query(q);
-  return rs.recordset || [];
+  const rows = rs.recordset || [];
+  const byMixer = new Map();
+
+  for (const row of rows) {
+    if (!byMixer.has(row.NoMixer)) {
+      byMixer.set(row.NoMixer, {
+        NoProduksi: row.NoProduksi,
+        NoMixer: row.NoMixer,
+        IdJenis: row.IdJenis ?? null,
+        NamaJenis: row.NamaJenis ?? null,
+        HasBeenPrinted: row.HasBeenPrinted ?? 0,
+        DetailSak: [],
+      });
+    }
+
+    if (row.NoSak != null) {
+      byMixer.get(row.NoMixer).DetailSak.push({
+        NoSak: row.NoSak,
+        Berat: row.Berat ?? null,
+        DateUsage: row.DateUsage ?? null,
+        IsPartial: row.IsPartial ?? null,
+      });
+    }
+  }
+
+  return Array.from(byMixer.values());
 }
 
 async function validateLabel(labelCode) {
@@ -1459,6 +1597,340 @@ async function deleteInputsAndPartials(noProduksi, payload, ctx) {
   });
 }
 
+async function splitProduksiTime(selector, payload, ctx) {
+  const idMesin = Number(selector?.idMesin);
+  const tanggal = String(selector?.tanggal || "").trim();
+  if (!Number.isInteger(idMesin) || idMesin <= 0) {
+    throw badReq("idMesin harus integer positif");
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(tanggal)) {
+    throw badReq("tanggal harus format YYYY-MM-DD");
+  }
+
+  const hourStart = String(payload?.hourStart || "").trim();
+  const outputJenisId = Number(payload?.outputJenisId);
+  if (!hourStart) throw badReq("hourStart wajib diisi");
+  if (!Number.isInteger(outputJenisId) || outputJenisId <= 0) {
+    throw badReq("outputJenisId wajib integer positif");
+  }
+
+  const toSeconds = (hhmmss) => {
+    const m = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(
+      String(hhmmss || "").trim(),
+    );
+    if (!m) return null;
+    const hh = Number(m[1]);
+    const mm = Number(m[2]);
+    const ss = Number(m[3] || "0");
+    if (hh > 23 || mm > 59 || ss > 59) return null;
+    return hh * 3600 + mm * 60 + ss;
+  };
+  const normalizeTimeValue = (v) => {
+    if (v == null) return null;
+    if (v instanceof Date) {
+      const hh = String(v.getUTCHours()).padStart(2, "0");
+      const mm = String(v.getUTCMinutes()).padStart(2, "0");
+      const ss = String(v.getUTCSeconds()).padStart(2, "0");
+      return `${hh}:${mm}:${ss}`;
+    }
+    const s = String(v).trim();
+    const m = /(\d{2}):(\d{2}):(\d{2})/.exec(s);
+    return m ? `${m[1]}:${m[2]}:${m[3]}` : null;
+  };
+  const reqStartSec = toSeconds(hourStart);
+  if (reqStartSec == null) {
+    throw badReq("Format hourStart harus HH:mm atau HH:mm:ss");
+  }
+  const normalizeIntoShiftWindow = (sec, shiftStartSec, shiftEndSec) => {
+    const isOvernight = shiftStartSec > shiftEndSec;
+    if (!isOvernight) return sec;
+    return sec < shiftStartSec ? sec + 86400 : sec;
+  };
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const srcRes = await new sql.Request(tx)
+      .input("IdMesin", sql.Int, idMesin)
+      .input("Tanggal", sql.Date, tanggal).query(`
+        SELECT TOP 1 *
+        FROM dbo.MixerProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdMesin = @IdMesin
+          AND CONVERT(date, TglProduksi) = @Tanggal
+        ORDER BY HourStart DESC, NoProduksi DESC
+      `);
+
+    const src = srcRes.recordset?.[0];
+    if (!src) {
+      throw notFound(
+        `Produksi mixer tidak ditemukan untuk idMesin ${idMesin} dan tanggal ${tanggal}`,
+      );
+    }
+    const sourceNo = String(src.NoProduksi || "").trim();
+    if (!sourceNo) throw conflict("Data produksi terakhir tidak valid");
+    const srcShift = Number(src.Shift);
+    if (!Number.isInteger(srcShift) || srcShift <= 0) {
+      throw conflict(`Data shift produksi sumber tidak valid pada ${sourceNo}.`);
+    }
+
+    const shiftRefRes = await new sql.Request(tx)
+      .input("Tanggal", sql.Date, tanggal)
+      .input("NoShift", sql.Int, srcShift).query(`
+        ;WITH LatestShiftSet AS (
+          SELECT TOP 1
+            h.IdShiftHourSet,
+            h.ValidFrmDate
+          FROM dbo.MstShiftHourSet h WITH (NOLOCK)
+          WHERE CONVERT(date, h.ValidFrmDate) <= @Tanggal
+          ORDER BY CONVERT(date, h.ValidFrmDate) DESC, h.IdShiftHourSet DESC
+        )
+        SELECT TOP 1
+          ls.IdShiftHourSet,
+          ls.ValidFrmDate,
+          d.NoShift,
+          CONVERT(varchar(8), d.HourStart, 108) AS HourStart,
+          CONVERT(varchar(8), d.HourEnd, 108) AS HourEnd
+        FROM LatestShiftSet ls
+        INNER JOIN dbo.MstShiftHourSet_d d WITH (NOLOCK)
+          ON d.IdShiftHourSet = ls.IdShiftHourSet
+        WHERE d.NoShift = @NoShift;
+      `);
+
+    const shiftRef = shiftRefRes.recordset?.[0];
+    if (!shiftRef) {
+      throw notFound(
+        `Master shift tidak ditemukan untuk tanggal ${tanggal} dan shift ${srcShift}.`,
+      );
+    }
+
+    const shiftStartSec = toSeconds(shiftRef.HourStart);
+    const hourEnd = String(shiftRef.HourEnd || "").trim();
+    const shiftEndSec = toSeconds(hourEnd);
+    if (shiftStartSec == null || shiftEndSec == null) {
+      throw conflict("Master shift memiliki HourStart/HourEnd tidak valid.");
+    }
+
+    const reqStartInWindow = normalizeIntoShiftWindow(reqStartSec, shiftStartSec, shiftEndSec);
+    const reqEndInWindow = normalizeIntoShiftWindow(shiftEndSec, shiftStartSec, shiftEndSec);
+    const shiftEndBound = shiftStartSec > shiftEndSec ? shiftEndSec + 86400 : shiftEndSec;
+
+    if (
+      reqStartInWindow < shiftStartSec ||
+      reqStartInWindow > shiftEndBound ||
+      reqEndInWindow < shiftStartSec ||
+      reqEndInWindow > shiftEndBound
+    ) {
+      throw badReq(
+        `Range jam harus berada dalam batas shift ${srcShift} (${shiftRef.HourStart}-${shiftRef.HourEnd}) untuk tanggal ${tanggal}.`,
+      );
+    }
+    if (reqEndInWindow <= reqStartInWindow) {
+      throw badReq("hourEnd harus lebih besar dari hourStart dalam rentang shift yang sama");
+    }
+
+    const srcHourStartStr = normalizeTimeValue(src.HourStart);
+    const srcStartSec = toSeconds(srcHourStartStr);
+    const srcHourEndStr = normalizeTimeValue(src.HourEnd);
+    const srcEndSec = toSeconds(srcHourEndStr);
+    if (srcStartSec == null || srcEndSec == null) {
+      throw conflict(`Data jam produksi sumber tidak valid pada ${sourceNo} (HourStart/HourEnd).`);
+    }
+    const reqStartInSource = normalizeIntoShiftWindow(reqStartSec, srcStartSec, srcEndSec);
+    if (reqStartInSource <= srcStartSec) {
+      throw badReq(`Jam Mulai harus lebih besar dari ${srcHourStartStr}.`);
+    }
+
+    const duplicateRes = await new sql.Request(tx)
+      .input("IdMesin", sql.Int, idMesin)
+      .input("Tanggal", sql.Date, tanggal)
+      .input("HourStart", sql.VarChar(20), hourStart)
+      .input("HourEnd", sql.VarChar(20), hourEnd).query(`
+        SELECT TOP 1 NoProduksi
+        FROM dbo.MixerProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdMesin = @IdMesin
+          AND CONVERT(date, TglProduksi) = @Tanggal
+          AND HourStart = CAST(@HourStart AS time(7))
+          AND HourEnd = CAST(@HourEnd AS time(7))
+        ORDER BY NoProduksi DESC
+      `);
+    if (duplicateRes.recordset?.length) {
+      const existingNo = duplicateRes.recordset[0].NoProduksi;
+      throw conflict(`Rentang waktu ${hourStart}-${hourEnd} sudah ada pada produksi ${existingNo}.`);
+    }
+
+    const docDateOnly = toDateOnly(src.TglProduksi);
+    await assertNotLocked({
+      date: docDateOnly,
+      runner: tx,
+      action: `split time MixerProduksi ${sourceNo}`,
+      useLock: true,
+    });
+
+    const gen = async () =>
+      generateNextCode(tx, {
+        tableName: "dbo.MixerProduksi_h",
+        columnName: "NoProduksi",
+        prefix: "I.",
+        width: 10,
+      });
+
+    let newNoProduksi = await gen();
+    const exists = await new sql.Request(tx).input(
+      "NoProduksi", sql.VarChar(50), newNoProduksi,
+    ).query(`
+        SELECT 1 FROM dbo.MixerProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi
+      `);
+    if (exists.recordset.length > 0) {
+      const retry = await gen();
+      const exists2 = await new sql.Request(tx).input(
+        "NoProduksi", sql.VarChar(50), retry,
+      ).query(`
+          SELECT 1 FROM dbo.MixerProduksi_h WITH (UPDLOCK, HOLDLOCK)
+          WHERE NoProduksi = @NoProduksi
+        `);
+      if (exists2.recordset.length > 0) {
+        throw conflict("Gagal generate NoProduksi unik, coba lagi.");
+      }
+      newNoProduksi = retry;
+    }
+
+    const insReq = new sql.Request(tx);
+    insReq
+      .input("NewNoProduksi", sql.VarChar(50), newNoProduksi)
+      .input("SourceNoProduksi", sql.VarChar(50), sourceNo)
+      .input("NewHourStart", sql.VarChar(20), hourStart)
+      .input("NewHourEnd", sql.VarChar(20), hourEnd)
+      .input("OutputJenisId", sql.Int, outputJenisId);
+
+    const insertRes = await insReq.query(`
+      DECLARE @out TABLE (
+        NoProduksi    varchar(50),
+        TglProduksi   date,
+        IdMesin       int,
+        IdOperator    int,
+        OutputJenisId int,
+        IdRegu        int,
+        Jam           int,
+        Shift         int,
+        CreateBy      varchar(100),
+        CheckBy1      varchar(100),
+        CheckBy2      varchar(100),
+        ApproveBy     varchar(100),
+        JmlhAnggota   int,
+        Hadir         int,
+        HourMeter     decimal(18,2),
+        HourStart     time(7),
+        HourEnd       time(7)
+      );
+
+      INSERT INTO dbo.MixerProduksi_h (
+        NoProduksi, TglProduksi, IdMesin, IdOperator, OutputJenisId, IdRegu,
+        Jam, Shift, CreateBy, CheckBy1, CheckBy2, ApproveBy, JmlhAnggota, Hadir,
+        HourMeter, HourStart, HourEnd
+      )
+      OUTPUT
+        INSERTED.NoProduksi, INSERTED.TglProduksi, INSERTED.IdMesin, INSERTED.IdOperator,
+        INSERTED.OutputJenisId, INSERTED.IdRegu, INSERTED.Jam, INSERTED.Shift,
+        INSERTED.CreateBy, INSERTED.CheckBy1, INSERTED.CheckBy2,
+        INSERTED.ApproveBy, INSERTED.JmlhAnggota, INSERTED.Hadir, INSERTED.HourMeter,
+        INSERTED.HourStart, INSERTED.HourEnd
+      INTO @out
+      SELECT
+        @NewNoProduksi,
+        h.TglProduksi,
+        h.IdMesin,
+        h.IdOperator,
+        @OutputJenisId,
+        h.IdRegu,
+        h.Jam,
+        h.Shift,
+        h.CreateBy,
+        h.CheckBy1,
+        h.CheckBy2,
+        h.ApproveBy,
+        h.JmlhAnggota,
+        h.Hadir,
+        h.HourMeter,
+        CAST(@NewHourStart AS time(7)),
+        CAST(@NewHourEnd   AS time(7))
+      FROM dbo.MixerProduksi_h h WITH (UPDLOCK, HOLDLOCK)
+      WHERE h.NoProduksi = @SourceNoProduksi;
+
+      SELECT
+        o.*,
+        mm.Jenis AS OutputJenisNama
+      FROM @out o
+      LEFT JOIN dbo.MstMixer mm WITH (NOLOCK)
+        ON mm.IdMixer = o.OutputJenisId;
+    `);
+
+    await new sql.Request(tx)
+      .input("SourceNoProduksi", sql.VarChar(50), sourceNo)
+      .input("NewHourStart", sql.VarChar(20), hourStart).query(`
+        UPDATE dbo.MixerProduksi_h
+        SET HourEnd = CAST(@NewHourStart AS time(7))
+        WHERE NoProduksi = @SourceNoProduksi
+      `);
+
+    await new sql.Request(tx)
+      .input("SourceNoProduksi", sql.VarChar(50), sourceNo)
+      .input("NewNoProduksi", sql.VarChar(50), newNoProduksi).query(`
+        INSERT INTO dbo.MixerProduksiOperator_d (NoProduksi, IdOperator)
+        SELECT @NewNoProduksi, od.IdOperator
+        FROM dbo.MixerProduksiOperator_d od
+        WHERE od.NoProduksi = @SourceNoProduksi;
+      `);
+
+    const opRes = await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), newNoProduksi).query(`
+        SELECT IdOperator
+        FROM dbo.MixerProduksiOperator_d
+        WHERE NoProduksi = @NoProduksi
+        ORDER BY IdOperator;
+      `);
+    const idOperators = (opRes.recordset || [])
+      .map((r) => Number(r.IdOperator))
+      .filter((n) => Number.isFinite(n))
+      .map((n) => Math.trunc(n));
+
+    await tx.commit();
+    return {
+      idMesin,
+      tanggal,
+      sourceNoProduksi: sourceNo,
+      newNoProduksi,
+      sourceHourEndUpdatedTo: hourStart,
+      newHourStart: hourStart,
+      newHourEnd: hourEnd,
+      header: {
+        ...(insertRes.recordset?.[0] || {}),
+        IdOperators: [...new Set(idOperators)],
+      },
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
+}
+
 module.exports = {
   getProduksiByDate,
   getAllProduksi,
@@ -1470,4 +1942,5 @@ module.exports = {
   validateLabel,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
+  splitProduksiTime,
 };

@@ -58,4 +58,10 @@ router.delete(
   mixerProduksiController.deleteInputsAndPartials,
 );
 
+router.post(
+  "/mixer/split-time/:idMesin/:tanggal",
+  verifyToken,
+  mixerProduksiController.splitProduksiTime,
+);
+
 module.exports = router;
