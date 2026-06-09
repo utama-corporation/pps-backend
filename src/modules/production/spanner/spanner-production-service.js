@@ -803,7 +803,6 @@ async function fetchInputs(noProduksi) {
   // MAIN rows
   for (const r of mainRows) {
     const base = {
-      berat: r.Berat ?? null,
       pcs: r.Pcs ?? null,
       isPartial: r.IsPartial ?? null,
       idJenis: r.IdJenis ?? null,
@@ -822,8 +821,9 @@ async function fetchInputs(noProduksi) {
 
       case "material":
         out.cabinetMaterial.push({
-          idCabinetMaterial: r.Ref1, // string cast (konsisten dgn keyfitting)
+          idCabinetMaterial: r.Ref1, // string cast (konsisten)
           jumlah: r.Pcs ?? null, // jumlah disimpan ke jumlah
+          berat: r.Berat ?? null,
           ...base,
         });
         break;
@@ -837,7 +837,6 @@ async function fetchInputs(noProduksi) {
       noFurnitureWip: p.NoFurnitureWIP ?? null, // header
       pcs: p.PcsPartial ?? null, // pcs partial
       pcsHeader: p.PcsHeader ?? null, // optional
-      berat: p.Berat ?? null,
       idJenis: p.IdJenis ?? null,
       namaJenis: p.NamaJenis ?? null,
       namaUom: p.NamaUOM ?? null,

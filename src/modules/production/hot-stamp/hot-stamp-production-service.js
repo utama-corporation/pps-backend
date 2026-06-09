@@ -804,8 +804,8 @@ WHERE map.NoProduksi = @no
 SELECT
   mp.NoFurnitureWIPPartial,
   fwp.NoFurnitureWIP,
-  fwp.Pcs,
-  fw.Berat,
+  fwp.Pcs                AS PcsPartial,
+  fw.Pcs                 AS PcsHeader,
   fw.IDFurnitureWIP AS IdJenis,
 
   mw.Nama           AS NamaJenis,
@@ -842,24 +842,29 @@ ORDER BY mp.NoFurnitureWIPPartial DESC;
 
   // ========== MAIN ROWS ==========
   for (const r of mainRows) {
+    const base = {
+      pcs: r.Pcs ?? null,
+      isPartial: r.IsPartial ?? null,
+      idJenis: r.IdJenis ?? null,
+      namaJenis: r.NamaJenis ?? null,
+      namaUom: r.NamaUOM ?? null,
+      datetimeInput: null,
+    };
+
     switch (r.Src) {
       case "fwip":
         out.furnitureWip.push({
           noFurnitureWip: r.Ref1,
-          berat: r.Berat ?? null,
-          pcs: r.Pcs ?? null,
-          isPartial: r.IsPartial ?? null,
-          idJenis: r.IdJenis ?? null,
-          namaJenis: r.NamaJenis ?? null,
+          ...base,
         });
         break;
 
       case "material":
         out.cabinetMaterial.push({
           idCabinetMaterial: r.Ref1,
-          pcs: r.Pcs ?? null,
-          namaJenis: r.NamaJenis ?? null, // nama material
-          namaUom: r.NamaUOM ?? null, // nama UOM untuk display
+          jumlah: r.Pcs ?? null,
+          berat: r.Berat ?? null,
+          ...base,
         });
         break;
     }
@@ -870,10 +875,13 @@ ORDER BY mp.NoFurnitureWIPPartial DESC;
     out.furnitureWip.push({
       noFurnitureWipPartial: p.NoFurnitureWIPPartial,
       noFurnitureWip: p.NoFurnitureWIP ?? null,
-      pcs: p.Pcs ?? null,
-      berat: p.Berat ?? null,
+      pcs: p.PcsPartial ?? null,
+      pcsHeader: p.PcsHeader ?? null,
       idJenis: p.IdJenis ?? null,
       namaJenis: p.NamaJenis ?? null,
+      namaUom: p.NamaUOM ?? null,
+      isPartial: true,
+      isPartialRow: true,
     });
   }
 

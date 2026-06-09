@@ -385,7 +385,22 @@ async function createKeyFittingProduksi(payload, ctx) {
         CreateBy, CheckBy1, CheckBy2, ApproveBy,
         HourMeter, HourStart, HourEnd
       )
-      OUTPUT INSERTED.* INTO @tmp
+      OUTPUT
+        INSERTED.NoProduksi,
+        INSERTED.Tanggal,
+        INSERTED.IdMesin,
+        INSERTED.Shift,
+        INSERTED.JamKerja,
+        INSERTED.CreateBy,
+        INSERTED.CheckBy1,
+        INSERTED.CheckBy2,
+        INSERTED.ApproveBy,
+        INSERTED.HourMeter,
+        INSERTED.HourStart,
+        INSERTED.HourEnd,
+        INSERTED.OutputJenisId,
+        INSERTED.IdRegu
+      INTO @tmp
       VALUES (
         @NoProduksi, @Tanggal, @IdMesin, @OutputJenisId, @IdRegu, @Shift, @JamKerja,
         @CreateBy, @CheckBy1, @CheckBy2, @ApproveBy, @HourMeter,
@@ -917,7 +932,6 @@ async function fetchInputs(noProduksi) {
   // MAIN (seperti gilingan: base object)
   for (const r of mainRows) {
     const base = {
-      berat: r.Berat ?? null,
       pcs: r.Pcs ?? null,
       isPartial: r.IsPartial ?? null,
       idJenis: r.IdJenis ?? null,
@@ -935,6 +949,7 @@ async function fetchInputs(noProduksi) {
         out.cabinetMaterial.push({
           idCabinetMaterial: r.Ref1, // string cast
           jumlah: r.Pcs ?? null,
+          berat: r.Berat ?? null,
           ...base,
         });
         break;
@@ -948,7 +963,6 @@ async function fetchInputs(noProduksi) {
       noFurnitureWip: p.NoFurnitureWIP ?? null, // header
       pcs: p.PcsPartial ?? null, // pcs partial
       pcsHeader: p.PcsHeader ?? null, // opsional
-      berat: p.Berat ?? null,
       idJenis: p.IdJenis ?? null,
       namaJenis: p.NamaJenis ?? null,
       namaUom: p.NamaUOM ?? null,
