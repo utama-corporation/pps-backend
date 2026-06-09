@@ -134,10 +134,26 @@ async function createPackingProduksi(payload, ctx) {
   // ===============================
   // Validasi wajib
   // ===============================
+  const operatorIdsRaw = Array.isArray(body?.idOperators)
+    ? body.idOperators
+    : body?.idOperator != null
+      ? [body.idOperator]
+      : [];
+  const operatorIds = [
+    ...new Set(
+      operatorIdsRaw
+        .map((v) => Number(v))
+        .filter((n) => Number.isFinite(n) && n > 0)
+        .map((n) => Math.trunc(n)),
+    ),
+  ];
+
   const must = [];
   if (!body?.tglProduksi) must.push("tglProduksi");
   if (body?.idMesin == null) must.push("idMesin");
-  if (body?.idOperator == null) must.push("idOperator");
+  if (operatorIds.length === 0) must.push("idOperators");
+  if (body?.outputJenisId == null) must.push("outputJenisId");
+  if (body?.idRegu == null) must.push("idRegu");
   if (body?.shift == null) must.push("shift");
   if (!body?.hourStart) must.push("hourStart");
   if (!body?.hourEnd) must.push("hourEnd");
@@ -233,7 +249,8 @@ async function createPackingProduksi(payload, ctx) {
       .input("NoPacking", sql.VarChar(50), noPacking)
       .input("Tanggal", sql.Date, effectiveDate)
       .input("IdMesin", sql.Int, body.idMesin)
-      .input("IdOperator", sql.Int, body.idOperator)
+      .input("OutputJenisId", sql.Int, body.outputJenisId ?? null)
+      .input("IdRegu", sql.Int, body.idRegu ?? null)
       .input("Shift", sql.Int, body.shift)
       .input("JamKerja", sql.Int, jamKerjaInt)
       .input("CreateBy", sql.VarChar(100), body.createBy)
@@ -249,7 +266,8 @@ async function createPackingProduksi(payload, ctx) {
         NoPacking varchar(50),
         Tanggal date,
         IdMesin int,
-        IdOperator int,
+        OutputJenisId int,
+        IdRegu int,
         Shift int,
         JamKerja int,
         CreateBy varchar(100),
@@ -262,13 +280,28 @@ async function createPackingProduksi(payload, ctx) {
       );
 
       INSERT INTO dbo.PackingProduksi_h (
-        NoPacking, Tanggal, IdMesin, IdOperator, Shift, JamKerja,
+        NoPacking, Tanggal, IdMesin, Shift, JamKerja,
         CreateBy, CheckBy1, CheckBy2, ApproveBy,
-        HourMeter, HourStart, HourEnd
+        HourMeter, HourStart, HourEnd, OutputJenisId, IdRegu
       )
-      OUTPUT INSERTED.* INTO @tmp
+      OUTPUT
+        INSERTED.NoPacking,
+        INSERTED.Tanggal,
+        INSERTED.IdMesin,
+        INSERTED.OutputJenisId,
+        INSERTED.IdRegu,
+        INSERTED.Shift,
+        INSERTED.JamKerja,
+        INSERTED.CreateBy,
+        INSERTED.CheckBy1,
+        INSERTED.CheckBy2,
+        INSERTED.ApproveBy,
+        INSERTED.HourMeter,
+        INSERTED.HourStart,
+        INSERTED.HourEnd
+      INTO @tmp
       VALUES (
-        @NoPacking, @Tanggal, @IdMesin, @IdOperator, @Shift, @JamKerja,
+        @NoPacking, @Tanggal, @IdMesin, @Shift, @JamKerja,
         @CreateBy, @CheckBy1, @CheckBy2, @ApproveBy, @HourMeter,
         CASE
           WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = ''
@@ -277,7 +310,9 @@ async function createPackingProduksi(payload, ctx) {
         CASE
           WHEN @HourEnd IS NULL OR LTRIM(RTRIM(@HourEnd)) = ''
           THEN NULL ELSE CAST(@HourEnd AS time(7))
-        END
+        END,
+        @OutputJenisId,
+        @IdRegu
       );
 
       SELECT * FROM @tmp;
@@ -285,10 +320,27 @@ async function createPackingProduksi(payload, ctx) {
 
     const insRes = await rqIns.query(insertSql);
 
+    if (operatorIds.length > 0) {
+      const rqOp = new sql.Request(tx);
+      rqOp.input("NoPacking", sql.VarChar(50), noPacking);
+      const opValues = operatorIds.map((opId, i) => {
+        const p = `DetailOp${i}`;
+        rqOp.input(p, sql.Int, opId);
+        return `(@NoPacking, @${p})`;
+      });
+      await rqOp.query(`
+        INSERT INTO dbo.PackingProduksiOperator_d (NoPacking, IdOperator)
+        VALUES ${opValues.join(", ")};
+      `);
+    }
+
     await tx.commit();
 
     return {
-      header: insRes.recordset?.[0] || null,
+      header: {
+        ...(insRes.recordset?.[0] || {}),
+        IdOperators: operatorIds,
+      },
       audit,
     };
   } catch (e) {
@@ -840,16 +892,29 @@ async function fetchOutputs(noPacking) {
     SELECT DISTINCT
       o.NoPacking,
       o.NoBJ,
-      ISNULL(bj.HasBeenPrinted, 0) AS HasBeenPrinted
+      bj.IdBJ AS IdJenis,
+      mbj.NamaBJ AS NamaJenis,
+      ISNULL(bj.HasBeenPrinted, 0) AS HasBeenPrinted,
+      bj.Pcs
     FROM dbo.PackingProduksiOutputLabelBJ o WITH (NOLOCK)
-    LEFT JOIN dbo.BarangJadi bj WITH (NOLOCK)
+    INNER JOIN dbo.BarangJadi bj WITH (NOLOCK)
       ON bj.NoBJ = o.NoBJ
+    LEFT JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
+      ON mbj.IdBJ = bj.IdBJ
     WHERE o.NoPacking = @no
     ORDER BY o.NoBJ DESC;
   `;
 
   const rs = await req.query(q);
-  return rs.recordset || [];
+  const rows = rs.recordset || [];
+  return rows.map((r) => ({
+    NoPacking: r.NoPacking,
+    NoBJ: r.NoBJ,
+    IdJenis: r.IdJenis ?? null,
+    NamaJenis: r.NamaJenis ?? null,
+    HasBeenPrinted: r.HasBeenPrinted ?? 0,
+    Pcs: r.Pcs ?? null,
+  }));
 }
 
 /**

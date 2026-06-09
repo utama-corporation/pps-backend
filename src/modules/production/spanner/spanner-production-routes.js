@@ -21,6 +21,12 @@ router.get(
 
 router.post("/spanner", verifyToken, spannerController.createProduksi);
 
+router.post(
+  "/spanner/split-time/:idMesin/:tanggal",
+  verifyToken,
+  spannerController.splitProduksiTime,
+);
+
 router.put(
   "/spanner/:noProduksi",
   verifyToken,

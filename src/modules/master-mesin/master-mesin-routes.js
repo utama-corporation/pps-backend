@@ -16,8 +16,12 @@ router.get("/gilingan", verifyToken, ctrl.getGilingan);
 router.get("/mixer", verifyToken, ctrl.getMixer);
 // GET mesin stamping (IdBagianMesin = 8)
 router.get("/stamping", verifyToken, ctrl.getStamping);
+// GET mesin spanner (IdBagianMesin = 9)
+router.get("/spanner", verifyToken, ctrl.getSpanner);
 // GET mesin pasang kunci (IdBagianMesin = 10)
 router.get("/pasang-kunci", verifyToken, ctrl.getPasangKunci);
+// GET mesin packing (IdBagianMesin = 11)
+router.get("/packing", verifyToken, ctrl.getPacking);
 
 // GET by idbagian (only active by default)
 // The regex enforces numeric-only for :idbagian
