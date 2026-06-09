@@ -430,7 +430,30 @@ async function createInjectProduksi(payload, ctx) {
         HourMeter, BeratProdukHasilTimbang,
         HourStart, HourEnd
       )
-      OUTPUT INSERTED.* INTO @tmp
+      OUTPUT
+        INSERTED.NoProduksi,
+        INSERTED.IdOperator,
+        INSERTED.IdMesin,
+        INSERTED.TglProduksi,
+        INSERTED.Jam,
+        INSERTED.Shift,
+        INSERTED.CreateBy,
+        INSERTED.CheckBy1,
+        INSERTED.CheckBy2,
+        INSERTED.ApproveBy,
+        INSERTED.JmlhAnggota,
+        INSERTED.Hadir,
+        INSERTED.IdCetakan,
+        INSERTED.IdWarna,
+        INSERTED.EnableOffset,
+        INSERTED.OffsetCurrent,
+        INSERTED.OffsetNext,
+        INSERTED.IdFurnitureMaterial,
+        INSERTED.HourMeter,
+        INSERTED.BeratProdukHasilTimbang,
+        INSERTED.HourStart,
+        INSERTED.HourEnd
+      INTO @tmp
       VALUES (
         @NoProduksi, @IdOperator, @IdMesin, @TglProduksi,
         @Jam, @Shift,
