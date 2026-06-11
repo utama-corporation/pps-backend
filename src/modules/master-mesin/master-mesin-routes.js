@@ -14,6 +14,8 @@ router.get("/crusher", verifyToken, ctrl.getCrusher);
 router.get("/gilingan", verifyToken, ctrl.getGilingan);
 // GET mesin mixer (IdBagianMesin = 5)
 router.get("/mixer", verifyToken, ctrl.getMixer);
+// GET mesin inject (IdBagianMesin = 4)
+router.get("/inject", verifyToken, ctrl.getInject);
 // GET mesin stamping (IdBagianMesin = 8)
 router.get("/stamping", verifyToken, ctrl.getStamping);
 // GET mesin spanner (IdBagianMesin = 9)

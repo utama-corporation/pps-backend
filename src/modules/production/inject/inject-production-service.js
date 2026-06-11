@@ -9,7 +9,7 @@ const {
   loadDocDateOnlyFromConfig,
 } = require("../../../core/shared/tutup-transaksi-guard");
 const sharedInputService = require("../../../core/shared/produksi-input.service");
-const { badReq, conflict } = require("../../../core/utils/http-error");
+const { badReq, conflict, notFound } = require("../../../core/utils/http-error");
 const { applyAuditContext } = require("../../../core/utils/db-audit-context");
 const {
   generateNextCode,
@@ -60,8 +60,12 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
       h.TglProduksi,
       h.IdMesin,
       ms.NamaMesin,
-      h.IdOperator,
-      op.NamaOperator,
+      h.IdRegu,
+      rg.NamaRegu,
+      opAgg.PrimaryIdOperator AS IdOperator,
+      opAgg.PrimaryNamaOperator AS NamaOperator,
+      opAgg.IdOperators,
+      opAgg.Operators,
 
       h.Jam,
       h.Shift,
@@ -73,13 +77,26 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
       h.Hadir,
 
       h.IdCetakan,
+      ct.NamaCetakan,
       h.IdWarna,
+      wr.Warna,
 
       h.EnableOffset,
       h.OffsetCurrent,
       h.OffsetNext,
 
       h.IdFurnitureMaterial,
+      mm.Nama AS NamaFurnitureMaterial,
+      CASE
+        WHEN fwCount.TotalCount > 0 THEN 'furnitureWip'
+        WHEN bjCount.TotalCount > 0 THEN 'barangjadi'
+        ELSE NULL
+      END AS OutputCategory,
+      CASE
+        WHEN fwCount.TotalCount > 0 THEN fwItems.OutputItems
+        WHEN bjCount.TotalCount > 0 THEN bjItems.OutputItems
+        ELSE NULL
+      END AS Outputs,
       h.HourMeter,
       h.BeratProdukHasilTimbang,
 
@@ -97,7 +114,146 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
 
     FROM dbo.InjectProduksi_h h WITH (NOLOCK)
     LEFT JOIN dbo.MstMesin    ms WITH (NOLOCK) ON ms.IdMesin    = h.IdMesin
-    LEFT JOIN dbo.MstOperator op WITH (NOLOCK) ON op.IdOperator = h.IdOperator
+    LEFT JOIN dbo.MstRegu     rg WITH (NOLOCK) ON rg.IdRegu     = h.IdRegu
+    LEFT JOIN dbo.MstCetakan  ct WITH (NOLOCK) ON ct.IdCetakan  = h.IdCetakan
+    LEFT JOIN dbo.MstWarna    wr WITH (NOLOCK) ON wr.IdWarna    = h.IdWarna
+    LEFT JOIN dbo.MstCabinetMaterial mm WITH (NOLOCK)
+      ON mm.IdCabinetMaterial = h.IdFurnitureMaterial
+    OUTER APPLY (
+      SELECT
+        (
+          SELECT TOP 1 odTop.IdOperator
+          FROM dbo.InjectProduksiOperator_d odTop WITH (NOLOCK)
+          WHERE odTop.NoProduksi = h.NoProduksi
+          ORDER BY odTop.IdOperator
+        ) AS PrimaryIdOperator,
+        (
+          SELECT TOP 1 opTop.NamaOperator
+          FROM dbo.InjectProduksiOperator_d odTop WITH (NOLOCK)
+          INNER JOIN dbo.MstOperator opTop WITH (NOLOCK)
+            ON opTop.IdOperator = odTop.IdOperator
+          WHERE odTop.NoProduksi = h.NoProduksi
+          ORDER BY odTop.IdOperator
+        ) AS PrimaryNamaOperator,
+        JSON_QUERY(
+          COALESCE(
+            (
+              SELECT od.IdOperator AS [value]
+              FROM dbo.InjectProduksiOperator_d od WITH (NOLOCK)
+              WHERE od.NoProduksi = h.NoProduksi
+              ORDER BY od.IdOperator
+              FOR JSON PATH
+            ),
+            '[]'
+          )
+        ) AS IdOperators,
+        COALESCE(
+          (
+            SELECT STRING_AGG(op.NamaOperator, ', ')
+            FROM dbo.InjectProduksiOperator_d od WITH (NOLOCK)
+            INNER JOIN dbo.MstOperator op WITH (NOLOCK)
+              ON op.IdOperator = od.IdOperator
+            WHERE od.NoProduksi = h.NoProduksi
+          ),
+          ''
+        ) AS Operators
+    ) opAgg
+    OUTER APPLY (
+      SELECT
+        COUNT(1) AS TotalCount
+      FROM (
+        SELECT DISTINCT
+          dFw.IdFurnitureWIP AS IdJenis,
+          cab.Nama AS NamaJenis
+        FROM dbo.CetakanWarnaToFurnitureWIP_d dFw WITH (NOLOCK)
+        INNER JOIN dbo.MstCabinetWIP cab WITH (NOLOCK)
+          ON cab.IdCabinetWIP = dFw.IdFurnitureWIP
+        WHERE dFw.IdCetakan = h.IdCetakan
+          AND dFw.IdWarna = h.IdWarna
+          AND (
+            (dFw.IdFurnitureMaterial IS NULL
+              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+            OR dFw.IdFurnitureMaterial = h.IdFurnitureMaterial
+          )
+      ) x
+    ) fwCount
+    OUTER APPLY (
+      SELECT
+        JSON_QUERY(
+          COALESCE(
+            (
+              SELECT
+                x.IdJenis AS idJenis,
+                x.NamaJenis AS namaJenis
+              FROM (
+                SELECT DISTINCT
+                  dFw.IdFurnitureWIP AS IdJenis,
+                  cab.Nama AS NamaJenis
+                FROM dbo.CetakanWarnaToFurnitureWIP_d dFw WITH (NOLOCK)
+                INNER JOIN dbo.MstCabinetWIP cab WITH (NOLOCK)
+                  ON cab.IdCabinetWIP = dFw.IdFurnitureWIP
+                WHERE dFw.IdCetakan = h.IdCetakan
+                  AND dFw.IdWarna = h.IdWarna
+                  AND (
+                    (dFw.IdFurnitureMaterial IS NULL
+                      AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+                    OR dFw.IdFurnitureMaterial = h.IdFurnitureMaterial
+                  )
+              ) x
+              FOR JSON PATH
+            ),
+            '[]'
+          )
+        ) AS OutputItems
+    ) fwItems
+    OUTER APPLY (
+      SELECT
+        COUNT(1) AS TotalCount
+      FROM (
+        SELECT DISTINCT
+          dBj.IdBarangJadi AS IdJenis,
+          mbj.NamaBJ AS NamaJenis
+        FROM dbo.CetakanWarnaToProduk_d dBj WITH (NOLOCK)
+        INNER JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
+          ON mbj.IdBJ = dBj.IdBarangJadi
+        WHERE dBj.IdCetakan = h.IdCetakan
+          AND dBj.IdWarna = h.IdWarna
+          AND (
+            (dBj.IdFurnitureMaterial IS NULL
+              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+            OR dBj.IdFurnitureMaterial = h.IdFurnitureMaterial
+          )
+      ) x
+    ) bjCount
+    OUTER APPLY (
+      SELECT
+        JSON_QUERY(
+          COALESCE(
+            (
+              SELECT
+                x.IdJenis AS idJenis,
+                x.NamaJenis AS namaJenis
+              FROM (
+                SELECT DISTINCT
+                  dBj.IdBarangJadi AS IdJenis,
+                  mbj.NamaBJ AS NamaJenis
+                FROM dbo.CetakanWarnaToProduk_d dBj WITH (NOLOCK)
+                INNER JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
+                  ON mbj.IdBJ = dBj.IdBarangJadi
+                WHERE dBj.IdCetakan = h.IdCetakan
+                  AND dBj.IdWarna = h.IdWarna
+                  AND (
+                    (dBj.IdFurnitureMaterial IS NULL
+                      AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+                    OR dBj.IdFurnitureMaterial = h.IdFurnitureMaterial
+                  )
+              ) x
+              FOR JSON PATH
+            ),
+            '[]'
+          )
+        ) AS OutputItems
+    ) bjItems
 
     OUTER APPLY (
       SELECT TOP 1 LastClosedDate
@@ -116,7 +272,47 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
   dataReq.input("limit", sql.Int, ps);
 
   const dataRes = await dataReq.query(dataQry);
-  return { data: dataRes.recordset || [], total };
+  const data = (dataRes.recordset || []).map((row) => {
+    let idOperators = [];
+    if (Array.isArray(row.IdOperators)) {
+      idOperators = row.IdOperators;
+    } else if (typeof row.IdOperators === "string" && row.IdOperators.trim()) {
+      try {
+        idOperators = JSON.parse(row.IdOperators).map((item) => {
+          if (item && typeof item === "object" && "value" in item) {
+            return Number(item.value);
+          }
+          return Number(item);
+        });
+      } catch (_) {
+        idOperators = [];
+      }
+    }
+    idOperators = idOperators
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value > 0);
+
+    let outputs = [];
+    if (Array.isArray(row.Outputs)) {
+      outputs = row.Outputs;
+    } else if (typeof row.Outputs === "string" && row.Outputs.trim()) {
+      try {
+        outputs = JSON.parse(row.Outputs);
+      } catch (_) {
+        outputs = [];
+      }
+    }
+
+    return {
+      ...row,
+      IdOperator: idOperators[0] ?? row.IdOperator ?? null,
+      NamaOperator: row.NamaOperator ?? null,
+      IdOperators: idOperators,
+      Outputs: outputs,
+    };
+  });
+
+  return { data, total };
 }
 
 // ============================================================
@@ -132,7 +328,12 @@ async function getProduksiByDate(date) {
       h.TglProduksi,
       h.IdMesin,
       m.NamaMesin,
-      h.IdOperator,
+      h.IdRegu,
+      rg.NamaRegu,
+      opAgg.PrimaryIdOperator AS IdOperator,
+      opAgg.PrimaryNamaOperator AS NamaOperator,
+      opAgg.IdOperators,
+      opAgg.Operators,
       h.Jam,
       h.Shift,
       h.CreateBy,
@@ -143,10 +344,12 @@ async function getProduksiByDate(date) {
       h.Hadir,
       h.IdCetakan,
       h.IdWarna,
+      wr.Warna,
       h.EnableOffset,
       h.OffsetCurrent,
       h.OffsetNext,
       h.IdFurnitureMaterial,
+      mm.Nama AS NamaFurnitureMaterial,
       h.HourMeter,
       h.BeratProdukHasilTimbang,
       CONVERT(VARCHAR(8), h.HourStart, 108) AS HourStart,
@@ -155,6 +358,49 @@ async function getProduksiByDate(date) {
       jenisAgg.NamaJenis AS NamaJenis
     FROM dbo.InjectProduksi_h h WITH (NOLOCK)
     LEFT JOIN dbo.MstMesin m WITH (NOLOCK) ON h.IdMesin = m.IdMesin
+    LEFT JOIN dbo.MstRegu rg WITH (NOLOCK) ON h.IdRegu = rg.IdRegu
+    LEFT JOIN dbo.MstWarna wr WITH (NOLOCK) ON h.IdWarna = wr.IdWarna
+    LEFT JOIN dbo.MstCabinetMaterial mm WITH (NOLOCK)
+      ON mm.IdCabinetMaterial = h.IdFurnitureMaterial
+    OUTER APPLY (
+      SELECT
+        (
+          SELECT TOP 1 odTop.IdOperator
+          FROM dbo.InjectProduksiOperator_d odTop WITH (NOLOCK)
+          WHERE odTop.NoProduksi = h.NoProduksi
+          ORDER BY odTop.IdOperator
+        ) AS PrimaryIdOperator,
+        (
+          SELECT TOP 1 opTop.NamaOperator
+          FROM dbo.InjectProduksiOperator_d odTop WITH (NOLOCK)
+          INNER JOIN dbo.MstOperator opTop WITH (NOLOCK)
+            ON opTop.IdOperator = odTop.IdOperator
+          WHERE odTop.NoProduksi = h.NoProduksi
+          ORDER BY odTop.IdOperator
+        ) AS PrimaryNamaOperator,
+        JSON_QUERY(
+          COALESCE(
+            (
+              SELECT od.IdOperator AS [value]
+              FROM dbo.InjectProduksiOperator_d od WITH (NOLOCK)
+              WHERE od.NoProduksi = h.NoProduksi
+              ORDER BY od.IdOperator
+              FOR JSON PATH
+            ),
+            '[]'
+          )
+        ) AS IdOperators,
+        COALESCE(
+          (
+            SELECT STRING_AGG(op.NamaOperator, ', ')
+            FROM dbo.InjectProduksiOperator_d od WITH (NOLOCK)
+            INNER JOIN dbo.MstOperator op WITH (NOLOCK)
+              ON op.IdOperator = od.IdOperator
+            WHERE od.NoProduksi = h.NoProduksi
+          ),
+          ''
+        ) AS Operators
+    ) opAgg
     OUTER APPLY (
       SELECT
         STRING_AGG(CONVERT(VARCHAR(50), x.IdJenis), ', ') AS IdJenis,
@@ -197,7 +443,32 @@ async function getProduksiByDate(date) {
 
   request.input("date", sql.Date, date);
   const result = await request.query(query);
-  return result.recordset;
+  return (result.recordset || []).map((row) => {
+    let idOperators = [];
+    if (Array.isArray(row.IdOperators)) {
+      idOperators = row.IdOperators;
+    } else if (typeof row.IdOperators === "string" && row.IdOperators.trim()) {
+      try {
+        idOperators = JSON.parse(row.IdOperators).map((item) => {
+          if (item && typeof item === "object" && "value" in item) {
+            return Number(item.value);
+          }
+          return Number(item);
+        });
+      } catch (_) {
+        idOperators = [];
+      }
+    }
+
+    return {
+      ...row,
+      IdOperator: idOperators[0] ?? row.IdOperator ?? null,
+      IdOperators: idOperators.filter(
+        (value) => Number.isFinite(Number(value)) && Number(value) > 0,
+      ),
+      NamaOperator: row.NamaOperator ?? null,
+    };
+  });
 }
 
 // ============================================================
@@ -273,10 +544,26 @@ async function createInjectProduksi(payload, ctx) {
   // ===============================
   // Validasi wajib
   // ===============================
+  const operatorIdsRaw = Array.isArray(body?.idOperators)
+    ? body.idOperators
+    : body?.idOperator != null
+      ? [body.idOperator]
+      : [];
+  const operatorIds = [
+    ...new Set(
+      operatorIdsRaw
+        .map((v) => Number(v))
+        .filter((n) => Number.isFinite(n) && n > 0)
+        .map((n) => Math.trunc(n)),
+    ),
+  ];
+  const primaryOperatorId = operatorIds[0] ?? null;
+
   const must = [];
   if (!body?.tglProduksi) must.push("tglProduksi");
   if (body?.idMesin == null) must.push("idMesin");
-  if (body?.idOperator == null) must.push("idOperator");
+  if (primaryOperatorId == null) must.push("idOperators");
+  if (body?.idRegu == null) must.push("idRegu");
   if (body?.shift == null) must.push("shift");
   if (!body?.hourStart) must.push("hourStart");
   if (!body?.hourEnd) must.push("hourEnd");
@@ -385,7 +672,8 @@ async function createInjectProduksi(payload, ctx) {
       .input("NoProduksi", sql.VarChar(50), noProduksi)
       .input("TglProduksi", sql.Date, effectiveDate)
       .input("IdMesin", sql.Int, body.idMesin)
-      .input("IdOperator", sql.Int, body.idOperator)
+      .input("IdOperator", sql.Int, primaryOperatorId)
+      .input("IdRegu", sql.Int, body.idRegu ?? null)
       .input("Shift", sql.Int, body.shift)
       .input("Jam", sql.Int, body.jam ?? null)
       .input("CreateBy", sql.VarChar(100), body.createBy)
@@ -412,7 +700,7 @@ async function createInjectProduksi(payload, ctx) {
     const insertSql = `
       DECLARE @tmp TABLE (
         NoProduksi varchar(50), IdOperator int, IdMesin int, TglProduksi date,
-        Jam int, Shift int, CreateBy varchar(100), CheckBy1 varchar(100),
+        Jam int, Shift int, IdRegu int, CreateBy varchar(100), CheckBy1 varchar(100),
         CheckBy2 varchar(100), ApproveBy varchar(100), JmlhAnggota int,
         Hadir int, IdCetakan int, IdWarna int, EnableOffset bit,
         OffsetCurrent int, OffsetNext int, IdFurnitureMaterial int,
@@ -422,6 +710,7 @@ async function createInjectProduksi(payload, ctx) {
 
       INSERT INTO dbo.InjectProduksi_h (
         NoProduksi, IdOperator, IdMesin, TglProduksi, Jam, Shift,
+        IdRegu,
         CreateBy, CheckBy1, CheckBy2, ApproveBy,
         JmlhAnggota, Hadir,
         IdCetakan, IdWarna,
@@ -437,6 +726,7 @@ async function createInjectProduksi(payload, ctx) {
         INSERTED.TglProduksi,
         INSERTED.Jam,
         INSERTED.Shift,
+        INSERTED.IdRegu,
         INSERTED.CreateBy,
         INSERTED.CheckBy1,
         INSERTED.CheckBy2,
@@ -456,7 +746,7 @@ async function createInjectProduksi(payload, ctx) {
       INTO @tmp
       VALUES (
         @NoProduksi, @IdOperator, @IdMesin, @TglProduksi,
-        @Jam, @Shift,
+        @Jam, @Shift, @IdRegu,
         @CreateBy, @CheckBy1, @CheckBy2, @ApproveBy,
         @JmlhAnggota, @Hadir,
         @IdCetakan, @IdWarna,
@@ -472,9 +762,29 @@ async function createInjectProduksi(payload, ctx) {
 
     const insRes = await rqIns.query(insertSql);
 
+    if (operatorIds.length > 0) {
+      const rqOp = new sql.Request(tx);
+      rqOp.input("NoProduksi", sql.VarChar(50), noProduksi);
+      const opValues = operatorIds.map((opId, i) => {
+        const p = `DetailOp${i}`;
+        rqOp.input(p, sql.Int, opId);
+        return `(@NoProduksi, @${p})`;
+      });
+      await rqOp.query(`
+        INSERT INTO dbo.InjectProduksiOperator_d (NoProduksi, IdOperator)
+        VALUES ${opValues.join(", ")};
+      `);
+    }
+
     await tx.commit();
 
-    return { header: insRes.recordset?.[0] || null, audit };
+    return {
+      header: {
+        ...(insRes.recordset?.[0] || {}),
+        IdOperators: operatorIds,
+      },
+      audit,
+    };
   } catch (e) {
     try {
       await tx.rollback();
@@ -552,6 +862,21 @@ async function updateInjectProduksi(noProduksi, payload, ctx) {
     // =====================================================
     const sets = [];
     const rqUpd = new sql.Request(tx);
+    const hasIdOperators = payload?.idOperators !== undefined;
+    const normalizedOperatorIds = hasIdOperators
+      ? [
+          ...new Set(
+            (Array.isArray(payload.idOperators) ? payload.idOperators : [])
+              .map((value) => Number(value))
+              .filter((value) => Number.isFinite(value) && value > 0)
+              .map((value) => Math.trunc(value)),
+          ),
+        ]
+      : [];
+
+    if (hasIdOperators && normalizedOperatorIds.length === 0) {
+      throw badReq("idOperators wajib berisi minimal 1 operator");
+    }
 
     if (isChangingDate) {
       sets.push("TglProduksi = @TglProduksi");
@@ -563,9 +888,17 @@ async function updateInjectProduksi(noProduksi, payload, ctx) {
       rqUpd.input("IdMesin", sql.Int, payload.idMesin);
     }
 
-    if (payload.idOperator !== undefined) {
+    if (hasIdOperators) {
+      sets.push("IdOperator = @IdOperator");
+      rqUpd.input("IdOperator", sql.Int, normalizedOperatorIds[0]);
+    } else if (payload.idOperator !== undefined) {
       sets.push("IdOperator = @IdOperator");
       rqUpd.input("IdOperator", sql.Int, payload.idOperator);
+    }
+
+    if (payload.idRegu !== undefined) {
+      sets.push("IdRegu = @IdRegu");
+      rqUpd.input("IdRegu", sql.Int, payload.idRegu ?? null);
     }
 
     if (payload.shift !== undefined) {
@@ -688,7 +1021,29 @@ async function updateInjectProduksi(noProduksi, payload, ctx) {
     // 5) execute update
     // =====================================================
     const updRes = await rqUpd.query(updateSql);
-    const updatedHeader = updRes.recordset?.[0] || null;
+    let updatedHeader = updRes.recordset?.[0] || null;
+
+    if (hasIdOperators) {
+      const rqDelOp = new sql.Request(tx);
+      rqDelOp.input("NoProduksi", sql.VarChar(50), noProduksi);
+      await rqDelOp.query(`
+        DELETE FROM dbo.InjectProduksiOperator_d
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+      const rqInsOp = new sql.Request(tx);
+      rqInsOp.input("NoProduksi", sql.VarChar(50), noProduksi);
+      const valuesSql = normalizedOperatorIds.map((opId, index) => {
+        const param = `IdOperator${index}`;
+        rqInsOp.input(param, sql.Int, opId);
+        return `(@NoProduksi, @${param})`;
+      });
+
+      await rqInsOp.query(`
+        INSERT INTO dbo.InjectProduksiOperator_d (NoProduksi, IdOperator)
+        VALUES ${valuesSql.join(", ")};
+      `);
+    }
 
     // =====================================================
     // 6) jika tanggal berubah -> sync DateUsage
@@ -796,6 +1151,57 @@ async function updateInjectProduksi(noProduksi, payload, ctx) {
           );
       `;
       await rqUsage.query(sqlUpdateUsage);
+    }
+
+    const rqFinal = new sql.Request(tx);
+    rqFinal.input("NoProduksi", sql.VarChar(50), noProduksi);
+    updatedHeader = (
+      await rqFinal.query(`
+        SELECT
+          h.*,
+          JSON_QUERY(
+            COALESCE(
+              (
+                SELECT od.IdOperator AS [value]
+                FROM dbo.InjectProduksiOperator_d od WITH (NOLOCK)
+                WHERE od.NoProduksi = h.NoProduksi
+                ORDER BY od.IdOperator
+                FOR JSON PATH
+              ),
+              '[]'
+            )
+          ) AS IdOperators,
+          COALESCE(
+            (
+              SELECT STRING_AGG(op.NamaOperator, ', ')
+              FROM dbo.InjectProduksiOperator_d od WITH (NOLOCK)
+              INNER JOIN dbo.MstOperator op WITH (NOLOCK)
+                ON op.IdOperator = od.IdOperator
+              WHERE od.NoProduksi = h.NoProduksi
+            ),
+            ''
+          ) AS Operators
+        FROM dbo.InjectProduksi_h h WITH (NOLOCK)
+        WHERE h.NoProduksi = @NoProduksi;
+      `)
+    ).recordset?.[0] || updatedHeader;
+
+    if (
+      updatedHeader &&
+      typeof updatedHeader.IdOperators === "string" &&
+      updatedHeader.IdOperators.trim()
+    ) {
+      try {
+        updatedHeader.IdOperators = JSON.parse(updatedHeader.IdOperators)
+          .map((item) =>
+            item && typeof item === "object" && "value" in item
+              ? Number(item.value)
+              : Number(item),
+          )
+          .filter((value) => Number.isFinite(value) && value > 0);
+      } catch (_) {
+        updatedHeader.IdOperators = [];
+      }
     }
 
     await tx.commit();
@@ -1417,14 +1823,32 @@ async function fetchOutputs(noProduksi) {
   const q = `
     SELECT DISTINCT
       o.NoProduksi,
-      o.NoMixer
-    FROM dbo.InjectProduksiOutputMixer o WITH (NOLOCK)
+      o.NoFurnitureWIP,
+      fw.IDFurnitureWIP AS IdJenis,
+      cw.Nama           AS NamaJenis,
+      ISNULL(fw.HasBeenPrinted, 0) AS HasBeenPrinted,
+      fw.Berat,
+      fw.Pcs
+    FROM dbo.InjectProduksiOutputFurnitureWIP o WITH (NOLOCK)
+    INNER JOIN dbo.FurnitureWIP fw WITH (NOLOCK)
+      ON fw.NoFurnitureWIP = o.NoFurnitureWIP
+    LEFT JOIN dbo.MstCabinetWIP cw WITH (NOLOCK)
+      ON cw.IdCabinetWIP = fw.IDFurnitureWIP
     WHERE o.NoProduksi = @no
-    ORDER BY o.NoMixer DESC;
+    ORDER BY o.NoFurnitureWIP DESC;
   `;
 
   const rs = await req.query(q);
-  return rs.recordset || [];
+  const rows = rs.recordset || [];
+  return rows.map((r) => ({
+    NoProduksi: r.NoProduksi,
+    NoFurnitureWIP: r.NoFurnitureWIP,
+    IdJenis: r.IdJenis ?? null,
+    NamaJenis: r.NamaJenis ?? null,
+    HasBeenPrinted: r.HasBeenPrinted ?? 0,
+    Berat: r.Berat ?? null,
+    Pcs: r.Pcs ?? null,
+  }));
 }
 
 async function fetchOutputsBonggolan(noProduksi) {
@@ -1436,10 +1860,15 @@ async function fetchOutputsBonggolan(noProduksi) {
     SELECT DISTINCT
       o.NoProduksi,
       o.NoBonggolan,
+      b.IdBonggolan,
+      mb.NamaBonggolan,
+      b.Berat,
       ISNULL(b.HasBeenPrinted, 0) AS HasBeenPrinted
     FROM dbo.InjectProduksiOutputBonggolan o WITH (NOLOCK)
     LEFT JOIN dbo.Bonggolan b WITH (NOLOCK)
       ON b.NoBonggolan = o.NoBonggolan
+    LEFT JOIN dbo.MstBonggolan mb WITH (NOLOCK)
+      ON mb.IdBonggolan = b.IdBonggolan
     WHERE o.NoProduksi = @no
     ORDER BY o.NoBonggolan DESC;
   `;
@@ -1478,16 +1907,29 @@ async function fetchOutputsPacking(noProduksi) {
     SELECT DISTINCT
       o.NoProduksi,
       o.NoBJ,
-      ISNULL(bj.HasBeenPrinted, 0) AS HasBeenPrinted
+      bj.IdBJ AS IdJenis,
+      mbj.NamaBJ AS NamaJenis,
+      ISNULL(bj.HasBeenPrinted, 0) AS HasBeenPrinted,
+      bj.Pcs
     FROM dbo.InjectProduksiOutputBarangJadi o WITH (NOLOCK)
-    LEFT JOIN dbo.BarangJadi bj WITH (NOLOCK)
+    INNER JOIN dbo.BarangJadi bj WITH (NOLOCK)
       ON bj.NoBJ = o.NoBJ
+    LEFT JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
+      ON mbj.IdBJ = bj.IdBJ
     WHERE o.NoProduksi = @no
     ORDER BY o.NoBJ DESC;
   `;
 
   const rs = await req.query(q);
-  return rs.recordset || [];
+  const rows = rs.recordset || [];
+  return rows.map((r) => ({
+    NoProduksi: r.NoProduksi,
+    NoBJ: r.NoBJ,
+    IdJenis: r.IdJenis ?? null,
+    NamaJenis: r.NamaJenis ?? null,
+    HasBeenPrinted: r.HasBeenPrinted ?? 0,
+    Pcs: r.Pcs ?? null,
+  }));
 }
 
 async function fetchOutputsReject(noProduksi) {
@@ -1496,19 +1938,47 @@ async function fetchOutputsReject(noProduksi) {
   req.input("no", sql.VarChar(50), noProduksi);
 
   const q = `
+    WITH RejectPartialAgg AS (
+      SELECT
+        NoReject,
+        SUM(ISNULL(Berat, 0)) AS TotalPartialBerat
+      FROM dbo.RejectV2Partial
+      GROUP BY NoReject
+    )
     SELECT DISTINCT
       o.NoProduksi,
       o.NoReject,
-      ISNULL(rj.HasBeenPrinted, 0) AS HasBeenPrinted
+      rj.IdReject AS IdJenis,
+      mr.NamaReject AS NamaJenis,
+      ISNULL(CAST(rj.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
+      CASE
+        WHEN ISNULL(rj.Berat, 0) - ISNULL(rp.TotalPartialBerat, 0) < 0
+          THEN 0
+        ELSE ISNULL(rj.Berat, 0) - ISNULL(rp.TotalPartialBerat, 0)
+      END AS Berat,
+      CAST(NULL AS int) AS Pcs
     FROM dbo.InjectProduksiOutputRejectV2 o WITH (NOLOCK)
     LEFT JOIN dbo.RejectV2 rj WITH (NOLOCK)
       ON rj.NoReject = o.NoReject
+    LEFT JOIN dbo.MstReject mr WITH (NOLOCK)
+      ON mr.IdReject = rj.IdReject
+    LEFT JOIN RejectPartialAgg rp
+      ON rp.NoReject = rj.NoReject
     WHERE o.NoProduksi = @no
     ORDER BY o.NoReject DESC;
   `;
 
   const rs = await req.query(q);
-  return rs.recordset || [];
+  const rows = rs.recordset || [];
+  return rows.map((r) => ({
+    NoProduksi: r.NoProduksi,
+    NoReject: r.NoReject,
+    IdJenis: r.IdJenis ?? null,
+    NamaJenis: r.NamaJenis ?? null,
+    HasBeenPrinted: r.HasBeenPrinted ?? 0,
+    Berat: r.Berat ?? null,
+    Pcs: r.Pcs ?? null,
+  }));
 }
 
 async function validateLabel(labelCode) {
@@ -1837,6 +2307,425 @@ async function deleteInputsAndPartials(noProduksi, payload, ctx) {
   );
 }
 
+async function splitProduksiTime(selector, payload, ctx) {
+  const idMesin = Number(selector?.idMesin);
+  const tanggal = String(selector?.tanggal || "").trim();
+  if (!Number.isInteger(idMesin) || idMesin <= 0) {
+    throw badReq("idMesin harus integer positif");
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(tanggal)) {
+    throw badReq("tanggal harus format YYYY-MM-DD");
+  }
+
+  const hourStart = String(payload?.hourStart || "").trim();
+  const idCetakan = Number(payload?.idCetakan);
+  const idWarna = Number(payload?.idWarna);
+  const idFurnitureMaterialRaw = payload?.idFurnitureMaterial;
+  const idFurnitureMaterial =
+    idFurnitureMaterialRaw === null ||
+    idFurnitureMaterialRaw === undefined ||
+    idFurnitureMaterialRaw === ""
+      ? null
+      : Number(idFurnitureMaterialRaw);
+
+  if (!hourStart) throw badReq("hourStart wajib diisi");
+  if (!Number.isInteger(idCetakan) || idCetakan <= 0) {
+    throw badReq("idCetakan wajib integer positif");
+  }
+  if (!Number.isInteger(idWarna) || idWarna <= 0) {
+    throw badReq("idWarna wajib integer positif");
+  }
+  if (
+    idFurnitureMaterial != null &&
+    (!Number.isInteger(idFurnitureMaterial) || idFurnitureMaterial <= 0)
+  ) {
+    throw badReq("idFurnitureMaterial harus integer positif bila diisi");
+  }
+
+  const toSeconds = (hhmmss) => {
+    const m = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(
+      String(hhmmss || "").trim(),
+    );
+    if (!m) return null;
+    const hh = Number(m[1]);
+    const mm = Number(m[2]);
+    const ss = Number(m[3] || "0");
+    if (hh > 23 || mm > 59 || ss > 59) return null;
+    return hh * 3600 + mm * 60 + ss;
+  };
+  const normalizeTimeValue = (v) => {
+    if (v == null) return null;
+    if (v instanceof Date) {
+      const hh = String(v.getUTCHours()).padStart(2, "0");
+      const mm = String(v.getUTCMinutes()).padStart(2, "0");
+      const ss = String(v.getUTCSeconds()).padStart(2, "0");
+      return `${hh}:${mm}:${ss}`;
+    }
+    const s = String(v).trim();
+    const m = /(\d{2}):(\d{2}):(\d{2})/.exec(s);
+    return m ? `${m[1]}:${m[2]}:${m[3]}` : null;
+  };
+  const reqStartSec = toSeconds(hourStart);
+  if (reqStartSec == null) {
+    throw badReq("Format hourStart harus HH:mm atau HH:mm:ss");
+  }
+  const normalizeIntoShiftWindow = (sec, shiftStartSec, shiftEndSec) => {
+    const isOvernight = shiftStartSec > shiftEndSec;
+    if (!isOvernight) return sec;
+    return sec < shiftStartSec ? sec + 86400 : sec;
+  };
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const comboRes = await new sql.Request(tx)
+      .input("IdCetakan", sql.Int, idCetakan)
+      .input("IdWarna", sql.Int, idWarna)
+      .input("IdFurnitureMaterial", sql.Int, idFurnitureMaterial).query(`
+        SELECT TOP 1 1 AS Found
+        FROM dbo.CetakanWarna_h WITH (NOLOCK)
+        WHERE IdCetakan = @IdCetakan
+          AND IdWarna = @IdWarna
+          AND (
+            (@IdFurnitureMaterial IS NULL AND IdFurnitureMaterial IS NULL)
+            OR IdFurnitureMaterial = @IdFurnitureMaterial
+          );
+      `);
+    if (!comboRes.recordset?.length) {
+      throw badReq(
+        "Cetakan, warna, dan material tidak valid atau belum terdaftar di master cetakan warna material.",
+      );
+    }
+
+    const srcRes = await new sql.Request(tx)
+      .input("IdMesin", sql.Int, idMesin)
+      .input("Tanggal", sql.Date, tanggal).query(`
+        SELECT TOP 1 *
+        FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdMesin = @IdMesin
+          AND CONVERT(date, TglProduksi) = @Tanggal
+        ORDER BY HourStart DESC, NoProduksi DESC
+      `);
+
+    const src = srcRes.recordset?.[0];
+    if (!src) {
+      throw notFound(
+        `Produksi inject tidak ditemukan untuk idMesin ${idMesin} dan tanggal ${tanggal}`,
+      );
+    }
+
+    const sourceNo = String(src.NoProduksi || "").trim();
+    if (!sourceNo) throw conflict("Data produksi terakhir tidak valid");
+    const srcShift = Number(src.Shift);
+    if (!Number.isInteger(srcShift) || srcShift <= 0) {
+      throw conflict(
+        `Data shift produksi sumber tidak valid pada ${sourceNo}.`,
+      );
+    }
+
+    const shiftRefRes = await new sql.Request(tx)
+      .input("Tanggal", sql.Date, tanggal)
+      .input("NoShift", sql.Int, srcShift).query(`
+        ;WITH LatestShiftSet AS (
+          SELECT TOP 1
+            h.IdShiftHourSet,
+            h.ValidFrmDate
+          FROM dbo.MstShiftHourSet h WITH (NOLOCK)
+          WHERE CONVERT(date, h.ValidFrmDate) <= @Tanggal
+          ORDER BY CONVERT(date, h.ValidFrmDate) DESC, h.IdShiftHourSet DESC
+        )
+        SELECT TOP 1
+          ls.IdShiftHourSet,
+          ls.ValidFrmDate,
+          d.NoShift,
+          CONVERT(varchar(8), d.HourStart, 108) AS HourStart,
+          CONVERT(varchar(8), d.HourEnd, 108) AS HourEnd
+        FROM LatestShiftSet ls
+        INNER JOIN dbo.MstShiftHourSet_d d WITH (NOLOCK)
+          ON d.IdShiftHourSet = ls.IdShiftHourSet
+        WHERE d.NoShift = @NoShift;
+      `);
+
+    const shiftRef = shiftRefRes.recordset?.[0];
+    if (!shiftRef) {
+      throw notFound(
+        `Master shift tidak ditemukan untuk tanggal ${tanggal} dan shift ${srcShift}.`,
+      );
+    }
+
+    const shiftStartSec = toSeconds(shiftRef.HourStart);
+    const hourEnd = String(shiftRef.HourEnd || "").trim();
+    const shiftEndSec = toSeconds(hourEnd);
+    if (shiftStartSec == null || shiftEndSec == null) {
+      throw conflict("Master shift memiliki HourStart/HourEnd tidak valid.");
+    }
+
+    const reqStartInWindow = normalizeIntoShiftWindow(
+      reqStartSec,
+      shiftStartSec,
+      shiftEndSec,
+    );
+    const reqEndInWindow = normalizeIntoShiftWindow(
+      shiftEndSec,
+      shiftStartSec,
+      shiftEndSec,
+    );
+    const shiftEndBound =
+      shiftStartSec > shiftEndSec ? shiftEndSec + 86400 : shiftEndSec;
+
+    if (
+      reqStartInWindow < shiftStartSec ||
+      reqStartInWindow > shiftEndBound ||
+      reqEndInWindow < shiftStartSec ||
+      reqEndInWindow > shiftEndBound
+    ) {
+      throw badReq(
+        `Range jam harus berada dalam batas shift ${srcShift} (${shiftRef.HourStart}-${shiftRef.HourEnd}) untuk tanggal ${tanggal}.`,
+      );
+    }
+    if (reqEndInWindow <= reqStartInWindow) {
+      throw badReq(
+        "hourEnd harus lebih besar dari hourStart dalam rentang shift yang sama",
+      );
+    }
+
+    const srcHourStartStr = normalizeTimeValue(src.HourStart);
+    const srcStartSec = toSeconds(srcHourStartStr);
+    const srcHourEndStr = normalizeTimeValue(src.HourEnd);
+    const srcEndSec = toSeconds(srcHourEndStr);
+    if (srcStartSec == null || srcEndSec == null) {
+      throw conflict(
+        `Data jam produksi sumber tidak valid pada ${sourceNo} (HourStart/HourEnd).`,
+      );
+    }
+    const reqStartInSource = normalizeIntoShiftWindow(
+      reqStartSec,
+      srcStartSec,
+      srcEndSec,
+    );
+    if (reqStartInSource <= srcStartSec) {
+      throw badReq(`Jam Mulai harus lebih besar dari ${srcHourStartStr}.`);
+    }
+
+    const duplicateRes = await new sql.Request(tx)
+      .input("IdMesin", sql.Int, idMesin)
+      .input("Tanggal", sql.Date, tanggal)
+      .input("HourStart", sql.VarChar(20), hourStart)
+      .input("HourEnd", sql.VarChar(20), hourEnd).query(`
+        SELECT TOP 1 NoProduksi
+        FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdMesin = @IdMesin
+          AND CONVERT(date, TglProduksi) = @Tanggal
+          AND HourStart = CAST(@HourStart AS time(7))
+          AND HourEnd = CAST(@HourEnd AS time(7))
+        ORDER BY NoProduksi DESC
+      `);
+    if (duplicateRes.recordset?.length) {
+      const existingNo = duplicateRes.recordset[0].NoProduksi;
+      throw conflict(
+        `Rentang waktu ${hourStart}-${hourEnd} sudah ada pada produksi ${existingNo}.`,
+      );
+    }
+
+    const docDateOnly = toDateOnly(src.TglProduksi);
+    await assertNotLocked({
+      date: docDateOnly,
+      runner: tx,
+      action: `split time InjectProduksi ${sourceNo}`,
+      useLock: true,
+    });
+
+    const gen = async () =>
+      generateNextCode(tx, {
+        tableName: "dbo.InjectProduksi_h",
+        columnName: "NoProduksi",
+        prefix: "S.",
+        width: 10,
+      });
+
+    let newNoProduksi = await gen();
+    const exists = await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), newNoProduksi)
+      .query(`
+        SELECT 1 FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi
+      `);
+    if (exists.recordset.length > 0) {
+      const retry = await gen();
+      const exists2 = await new sql.Request(tx)
+        .input("NoProduksi", sql.VarChar(50), retry)
+        .query(`
+          SELECT 1 FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK)
+          WHERE NoProduksi = @NoProduksi
+        `);
+      if (exists2.recordset.length > 0) {
+        throw conflict("Gagal generate NoProduksi unik, coba lagi.");
+      }
+      newNoProduksi = retry;
+    }
+
+    const insReq = new sql.Request(tx);
+    insReq
+      .input("NewNoProduksi", sql.VarChar(50), newNoProduksi)
+      .input("SourceNoProduksi", sql.VarChar(50), sourceNo)
+      .input("NewHourStart", sql.VarChar(20), hourStart)
+      .input("NewHourEnd", sql.VarChar(20), hourEnd)
+      .input("IdCetakan", sql.Int, idCetakan)
+      .input("IdWarna", sql.Int, idWarna)
+      .input("IdFurnitureMaterial", sql.Int, idFurnitureMaterial);
+
+    const insertRes = await insReq.query(`
+      DECLARE @out TABLE (
+        NoProduksi varchar(50),
+        IdMesin int,
+        TglProduksi date,
+        Jam int,
+        Shift int,
+        CreateBy varchar(100),
+        CheckBy1 varchar(100),
+        CheckBy2 varchar(100),
+        ApproveBy varchar(100),
+        JmlhAnggota int,
+        Hadir int,
+        IdCetakan int,
+        IdWarna int,
+        EnableOffset bit,
+        OffsetCurrent int,
+        OffsetNext int,
+        IdFurnitureMaterial int,
+        HourMeter decimal(18,2),
+        BeratProdukHasilTimbang decimal(18,2),
+        HourStart time(7),
+        HourEnd time(7),
+        IdRegu int,
+        IdOperator int
+      );
+
+      INSERT INTO dbo.InjectProduksi_h (
+        NoProduksi, IdMesin, TglProduksi, Jam, Shift, CreateBy,
+        CheckBy1, CheckBy2, ApproveBy, JmlhAnggota, Hadir,
+        IdCetakan, IdWarna, EnableOffset, OffsetCurrent, OffsetNext,
+        IdFurnitureMaterial, HourMeter, BeratProdukHasilTimbang,
+        HourStart, HourEnd, IdRegu, IdOperator
+      )
+      OUTPUT
+        INSERTED.NoProduksi, INSERTED.IdMesin, INSERTED.TglProduksi, INSERTED.Jam,
+        INSERTED.Shift, INSERTED.CreateBy, INSERTED.CheckBy1, INSERTED.CheckBy2,
+        INSERTED.ApproveBy, INSERTED.JmlhAnggota, INSERTED.Hadir, INSERTED.IdCetakan,
+        INSERTED.IdWarna, INSERTED.EnableOffset, INSERTED.OffsetCurrent, INSERTED.OffsetNext,
+        INSERTED.IdFurnitureMaterial, INSERTED.HourMeter, INSERTED.BeratProdukHasilTimbang,
+        INSERTED.HourStart, INSERTED.HourEnd, INSERTED.IdRegu, INSERTED.IdOperator
+      INTO @out
+      SELECT
+        @NewNoProduksi,
+        h.IdMesin,
+        h.TglProduksi,
+        h.Jam,
+        h.Shift,
+        h.CreateBy,
+        h.CheckBy1,
+        h.CheckBy2,
+        h.ApproveBy,
+        h.JmlhAnggota,
+        h.Hadir,
+        @IdCetakan,
+        @IdWarna,
+        h.EnableOffset,
+        h.OffsetCurrent,
+        h.OffsetNext,
+        @IdFurnitureMaterial,
+        h.HourMeter,
+        h.BeratProdukHasilTimbang,
+        CAST(@NewHourStart AS time(7)),
+        CAST(@NewHourEnd AS time(7)),
+        h.IdRegu,
+        h.IdOperator
+      FROM dbo.InjectProduksi_h h WITH (UPDLOCK, HOLDLOCK)
+      WHERE h.NoProduksi = @SourceNoProduksi;
+
+      SELECT
+        o.*,
+        mc.NamaCetakan,
+        mw.Warna,
+        mfw.Nama AS NamaFurnitureMaterial
+      FROM @out o
+      LEFT JOIN dbo.MstCetakan mc WITH (NOLOCK)
+        ON mc.IdCetakan = o.IdCetakan
+      LEFT JOIN dbo.MstWarna mw WITH (NOLOCK)
+        ON mw.IdWarna = o.IdWarna
+      LEFT JOIN dbo.MstCabinetWIP mfw WITH (NOLOCK)
+        ON mfw.IdCabinetWIP = o.IdFurnitureMaterial;
+    `);
+
+    await new sql.Request(tx)
+      .input("SourceNoProduksi", sql.VarChar(50), sourceNo)
+      .input("NewHourStart", sql.VarChar(20), hourStart)
+      .query(`
+        UPDATE dbo.InjectProduksi_h
+        SET HourEnd = CAST(@NewHourStart AS time(7))
+        WHERE NoProduksi = @SourceNoProduksi
+      `);
+
+    await new sql.Request(tx)
+      .input("SourceNoProduksi", sql.VarChar(50), sourceNo)
+      .input("NewNoProduksi", sql.VarChar(50), newNoProduksi)
+      .query(`
+        INSERT INTO dbo.InjectProduksiOperator_d (NoProduksi, IdOperator)
+        SELECT @NewNoProduksi, od.IdOperator
+        FROM dbo.InjectProduksiOperator_d od
+        WHERE od.NoProduksi = @SourceNoProduksi;
+      `);
+
+    const opRes = await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), newNoProduksi)
+      .query(`
+        SELECT IdOperator
+        FROM dbo.InjectProduksiOperator_d
+        WHERE NoProduksi = @NoProduksi
+        ORDER BY IdOperator;
+      `);
+    const idOperators = (opRes.recordset || [])
+      .map((r) => Number(r.IdOperator))
+      .filter((n) => Number.isFinite(n))
+      .map((n) => Math.trunc(n));
+
+    await tx.commit();
+    return {
+      idMesin,
+      tanggal,
+      sourceNoProduksi: sourceNo,
+      newNoProduksi,
+      sourceHourEndUpdatedTo: hourStart,
+      newHourStart: hourStart,
+      newHourEnd: hourEnd,
+      header: {
+        ...(insertRes.recordset?.[0] || {}),
+        IdOperators: [...new Set(idOperators)],
+      },
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
+}
+
 module.exports = {
   getAllProduksi,
   getProduksiByDate,
@@ -1854,4 +2743,5 @@ module.exports = {
   validateLabel,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
+  splitProduksiTime,
 };

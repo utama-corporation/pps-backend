@@ -729,6 +729,279 @@ async function getMixerByNoProduksi({
   return result.recordset || [];
 }
 
+async function getInjectByNoProduksi({
+  idBagianMesin = 4,
+  includeDisabled = true,
+}) {
+  const pool = await poolPromise;
+  const request = pool.request();
+  request.input("IdBagianMesin", idBagianMesin);
+
+  const whereEnable = includeDisabled ? "1=1" : "ISNULL(m.Enable, 1) = 1";
+
+  const query = `
+    ;WITH CurrentCtx AS (
+      SELECT
+        CONVERT(date, GETDATE()) AS CurrentDate,
+        CAST(GETDATE() AS time(0)) AS CurrentTime
+    ),
+    LatestShiftSet AS (
+      SELECT TOP 1
+        h.IdShiftHourSet,
+        h.ValidFrmDate
+      FROM dbo.MstShiftHourSet h WITH (NOLOCK)
+      CROSS JOIN CurrentCtx c
+      WHERE CONVERT(date, h.ValidFrmDate) <= c.CurrentDate
+      ORDER BY CONVERT(date, h.ValidFrmDate) DESC, h.IdShiftHourSet DESC
+    ),
+    ActiveShift AS (
+      SELECT TOP 1
+        d.NoShift,
+        d.HourStart,
+        d.HourEnd,
+        ls.ValidFrmDate
+      FROM LatestShiftSet ls
+      INNER JOIN dbo.MstShiftHourSet_d d WITH (NOLOCK)
+        ON d.IdShiftHourSet = ls.IdShiftHourSet
+      CROSS JOIN CurrentCtx c
+      WHERE
+        (
+          d.HourStart <= d.HourEnd
+          AND c.CurrentTime >= CAST(d.HourStart AS time(0))
+          AND c.CurrentTime < CAST(d.HourEnd AS time(0))
+        )
+        OR
+        (
+          d.HourStart > d.HourEnd
+          AND (
+            c.CurrentTime >= CAST(d.HourStart AS time(0))
+            OR c.CurrentTime < CAST(d.HourEnd AS time(0))
+          )
+        )
+      ORDER BY d.NoShift ASC
+    )
+    SELECT
+      m.IdMesin,
+      m.NamaMesin,
+      m.Bagian,
+      m.IdBagianMesin,
+      h.NoProduksi,
+      CONVERT(date, h.TglProduksi) AS TglProduksi,
+      h.IdRegu,
+      rg.NamaRegu,
+      h.IdCetakan,
+      ct.NamaCetakan,
+      h.IdWarna,
+      wr.Warna,
+      h.IdFurnitureMaterial,
+      fm.Nama AS NamaFurnitureMaterial,
+      CASE
+        WHEN fwCount.TotalCount > 0 THEN 'furnitureWip'
+        WHEN bjCount.TotalCount > 0 THEN 'barangjadi'
+        ELSE NULL
+      END AS OutputCategory,
+      CASE
+        WHEN fwCount.TotalCount > 0 THEN fwItems.OutputItems
+        WHEN bjCount.TotalCount > 0 THEN bjItems.OutputItems
+        ELSE NULL
+      END AS Outputs,
+      JSON_QUERY(
+        COALESCE(
+          (
+            SELECT od.IdOperator AS [value]
+            FROM dbo.InjectProduksiOperator_d od WITH (NOLOCK)
+            WHERE od.NoProduksi = h.NoProduksi
+            ORDER BY od.IdOperator
+            FOR JSON PATH
+          ),
+          '[]'
+        )
+      ) AS IdOperators,
+      COALESCE(
+        (
+          SELECT STRING_AGG(op.NamaOperator, ', ')
+          FROM dbo.InjectProduksiOperator_d od WITH (NOLOCK)
+          INNER JOIN dbo.MstOperator op WITH (NOLOCK)
+            ON op.IdOperator = od.IdOperator
+          WHERE od.NoProduksi = h.NoProduksi
+        ),
+        ''
+      ) AS Operators,
+      h.Shift,
+      CONVERT(varchar(8), h.HourStart, 108) AS HourStart,
+      CONVERT(varchar(8), h.HourEnd, 108) AS HourEnd,
+      m.Target,
+      CONVERT(varchar(10), c.CurrentDate, 23) AS CurrentDate,
+      CONVERT(varchar(8), c.CurrentTime, 108) AS CurrentTime,
+      s.NoShift AS ActiveShift,
+      CONVERT(varchar(8), s.HourStart, 108) AS ActiveShiftHourStart,
+      CONVERT(varchar(8), s.HourEnd, 108) AS ActiveShiftHourEnd,
+      s.ValidFrmDate AS ActiveShiftValidFrmDate
+    FROM dbo.MstMesin m WITH (NOLOCK)
+    OUTER APPLY (
+      SELECT TOP 1
+        ih.NoProduksi,
+        ih.TglProduksi,
+        ih.IdRegu,
+        ih.IdCetakan,
+        ih.IdWarna,
+        ih.IdFurnitureMaterial,
+        ih.Shift,
+        ih.HourStart,
+        ih.HourEnd
+      FROM dbo.InjectProduksi_h ih WITH (NOLOCK)
+      CROSS JOIN CurrentCtx c
+      WHERE ih.IdMesin = m.IdMesin
+        AND CONVERT(date, ih.TglProduksi) = c.CurrentDate
+        AND ih.Shift = (SELECT TOP 1 NoShift FROM ActiveShift)
+        AND (
+          (
+            ih.HourStart <= ih.HourEnd
+            AND c.CurrentTime >= CAST(ih.HourStart AS time(0))
+            AND c.CurrentTime < CAST(ih.HourEnd AS time(0))
+          )
+          OR
+          (
+            ih.HourStart > ih.HourEnd
+            AND (
+              c.CurrentTime >= CAST(ih.HourStart AS time(0))
+              OR c.CurrentTime < CAST(ih.HourEnd AS time(0))
+            )
+          )
+        )
+      ORDER BY ih.HourStart DESC, ih.NoProduksi DESC
+    ) h
+    LEFT JOIN dbo.MstCetakan ct WITH (NOLOCK)
+      ON ct.IdCetakan = h.IdCetakan
+    LEFT JOIN dbo.MstWarna wr WITH (NOLOCK)
+      ON wr.IdWarna = h.IdWarna
+    LEFT JOIN dbo.MstCabinetWIP fm WITH (NOLOCK)
+      ON fm.IdCabinetWIP = h.IdFurnitureMaterial
+    LEFT JOIN dbo.MstRegu rg WITH (NOLOCK)
+      ON rg.IdRegu = h.IdRegu
+    OUTER APPLY (
+      SELECT
+        COUNT(1) AS TotalCount
+      FROM (
+        SELECT DISTINCT
+          dFw.IdFurnitureWIP AS IdJenis,
+          cab.Nama AS NamaJenis
+        FROM dbo.CetakanWarnaToFurnitureWIP_d dFw WITH (NOLOCK)
+        INNER JOIN dbo.MstCabinetWIP cab WITH (NOLOCK)
+          ON cab.IdCabinetWIP = dFw.IdFurnitureWIP
+        WHERE dFw.IdCetakan = h.IdCetakan
+          AND dFw.IdWarna = h.IdWarna
+          AND (
+            (dFw.IdFurnitureMaterial IS NULL
+              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+            OR dFw.IdFurnitureMaterial = h.IdFurnitureMaterial
+          )
+      ) x
+    ) fwCount
+    OUTER APPLY (
+      SELECT
+        JSON_QUERY(
+          COALESCE(
+            (
+              SELECT
+                x.IdJenis AS idJenis,
+                x.NamaJenis AS namaJenis
+              FROM (
+                SELECT DISTINCT
+                  dFw.IdFurnitureWIP AS IdJenis,
+                  cab.Nama AS NamaJenis
+                FROM dbo.CetakanWarnaToFurnitureWIP_d dFw WITH (NOLOCK)
+                INNER JOIN dbo.MstCabinetWIP cab WITH (NOLOCK)
+                  ON cab.IdCabinetWIP = dFw.IdFurnitureWIP
+                WHERE dFw.IdCetakan = h.IdCetakan
+                  AND dFw.IdWarna = h.IdWarna
+                  AND (
+                    (dFw.IdFurnitureMaterial IS NULL
+                      AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+                    OR dFw.IdFurnitureMaterial = h.IdFurnitureMaterial
+                  )
+              ) x
+              FOR JSON PATH
+            ),
+            '[]'
+          )
+        ) AS OutputItems
+    ) fwItems
+    OUTER APPLY (
+      SELECT
+        COUNT(1) AS TotalCount
+      FROM (
+        SELECT DISTINCT
+          dBj.IdBarangJadi AS IdJenis,
+          mbj.NamaBJ AS NamaJenis
+        FROM dbo.CetakanWarnaToProduk_d dBj WITH (NOLOCK)
+        INNER JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
+          ON mbj.IdBJ = dBj.IdBarangJadi
+        WHERE dBj.IdCetakan = h.IdCetakan
+          AND dBj.IdWarna = h.IdWarna
+          AND (
+            (dBj.IdFurnitureMaterial IS NULL
+              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+            OR dBj.IdFurnitureMaterial = h.IdFurnitureMaterial
+          )
+      ) x
+    ) bjCount
+    OUTER APPLY (
+      SELECT
+        JSON_QUERY(
+          COALESCE(
+            (
+              SELECT
+                x.IdJenis AS idJenis,
+                x.NamaJenis AS namaJenis
+              FROM (
+                SELECT DISTINCT
+                  dBj.IdBarangJadi AS IdJenis,
+                  mbj.NamaBJ AS NamaJenis
+                FROM dbo.CetakanWarnaToProduk_d dBj WITH (NOLOCK)
+                INNER JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
+                  ON mbj.IdBJ = dBj.IdBarangJadi
+                WHERE dBj.IdCetakan = h.IdCetakan
+                  AND dBj.IdWarna = h.IdWarna
+                  AND (
+                    (dBj.IdFurnitureMaterial IS NULL
+                      AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+                    OR dBj.IdFurnitureMaterial = h.IdFurnitureMaterial
+                  )
+              ) x
+              FOR JSON PATH
+            ),
+            '[]'
+          )
+        ) AS OutputItems
+    ) bjItems
+    OUTER APPLY (SELECT TOP 1 * FROM ActiveShift) s
+    CROSS JOIN CurrentCtx c
+    WHERE ${whereEnable}
+      AND m.IdBagianMesin = @IdBagianMesin
+    ORDER BY m.NamaMesin ASC;
+  `;
+
+  const result = await request.query(query);
+  return (result.recordset || []).map((row) => {
+    let outputs = [];
+    if (Array.isArray(row.Outputs)) {
+      outputs = row.Outputs;
+    } else if (typeof row.Outputs === "string" && row.Outputs.trim()) {
+      try {
+        outputs = JSON.parse(row.Outputs);
+      } catch (_) {
+        outputs = [];
+      }
+    }
+
+    return {
+      ...row,
+      Outputs: outputs,
+    };
+  });
+}
+
 async function getStampingByNoProduksi({
   idBagianMesin = 8,
   includeDisabled = true,
@@ -1304,6 +1577,7 @@ module.exports = {
   getCrusherByNoProduksi,
   getGilinganByNoProduksi,
   getMixerByNoProduksi,
+  getInjectByNoProduksi,
   getStampingByNoProduksi,
   getSpannerByNoProduksi,
   getPasangKunciByNoProduksi,

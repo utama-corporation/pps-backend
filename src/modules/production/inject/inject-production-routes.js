@@ -31,6 +31,12 @@ router.get(
 
 router.post("/inject", verifyToken, injectProduksiController.createProduksi);
 
+router.post(
+  "/inject/split-time/:idMesin/:tanggal",
+  verifyToken,
+  injectProduksiController.splitProduksiTime,
+);
+
 router.put(
   "/inject/:noProduksi",
   verifyToken,
@@ -64,7 +70,7 @@ router.get(
 router.get(
   "/inject/:noProduksi/outputs/furniture-wip",
   verifyToken,
-  injectProduksiController.getOutputsFurnitureWipByNoProduksi,
+  injectProduksiController.getOutputsByNoProduksi,
 );
 
 router.get(
