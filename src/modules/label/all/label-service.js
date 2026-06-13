@@ -1,6 +1,19 @@
 const { sql, poolPromise } = require("../../../core/config/db");
 const { formatDate } = require("../../../core/utils/date-helper");
 
+const KATEGORI_LABELS = {
+  bahanbaku: "Bahan Baku",
+  washing: "Washing",
+  broker: "Broker",
+  crusher: "Crusher",
+  bonggolan: "Bonggolan",
+  gilingan: "Gilingan",
+  mixer: "Mixer",
+  furniturewip: "Furniture WIP",
+  barangjadi: "Barang Jadi",
+  reject: "Reject",
+};
+
 async function getAllLabels(
   page = 1,
   limit = 50,
@@ -19,7 +32,9 @@ A AS ( -- Bahan Baku (partial-aware)
     LabelCode = CAST(p.NoBahanBaku AS NVARCHAR(50)) + '-' + CAST(p.NoPallet AS NVARCHAR(10)),
     DateCreate = h.DateCreate,
     NamaJenis  = jp.Jenis,
-    Kategori   = N'bahanbaku',
+    KodeKategori = N'bahanbaku',
+    Kategori   = N'Bahan Baku',
+    Uom        = N'sak',
     Blok       = p.Blok,
     IdLokasi   = p.IdLokasi,
     Qty        = ISNULL(bbAgg.TotalPcs, 0),
@@ -58,7 +73,9 @@ B AS ( -- Washing (no partial)
     LabelCode = wh.NoWashing,
     DateCreate = wh.DateCreate,
     NamaJenis  = jp.Jenis,
-    Kategori   = N'washing',
+    KodeKategori = N'washing',
+    Kategori   = N'Washing',
+    Uom        = N'sak',
     Blok       = wh.Blok,
     IdLokasi   = wh.IdLokasi,
     Qty        = ISNULL(wAgg.TotalPcs,0),
@@ -81,7 +98,9 @@ D AS ( -- Broker (partial-aware)
     LabelCode = bh.NoBroker,
     DateCreate = bh.DateCreate,
     NamaJenis  = jp.Jenis,
-    Kategori   = N'broker',
+    KodeKategori = N'broker',
+    Kategori   = N'Broker',
+    Uom        = N'sak',
     Blok       = bh.Blok,
     IdLokasi   = bh.IdLokasi,
     Qty        = ISNULL(bAgg.TotalPcs,0),
@@ -118,7 +137,9 @@ F AS ( -- Crusher (header only)
     LabelCode = c.NoCrusher,
     DateCreate = c.DateCreate,
     NamaJenis  = mc.NamaCrusher,
-    Kategori   = N'crusher',
+    KodeKategori = N'crusher',
+    Kategori   = N'Crusher',
+    Uom        = N'kg',
     Blok       = c.Blok,
     IdLokasi   = c.IdLokasi,
     Qty        = NULL,
@@ -132,7 +153,9 @@ M AS ( -- Bonggolan (header only)
     LabelCode = b.NoBonggolan,
     DateCreate = b.DateCreate,
     NamaJenis  = mb.NamaBonggolan,
-    Kategori   = N'bonggolan',
+    KodeKategori = N'bonggolan',
+    Kategori   = N'Bonggolan',
+    Uom        = N'kg',
     Blok       = b.Blok,
     IdLokasi   = b.IdLokasi,
     Qty        = NULL,
@@ -146,7 +169,9 @@ V AS ( -- Gilingan (partial-aware, agregat dari tabel Gilingan + GilinganPartial
     LabelCode  = g.NoGilingan,
     DateCreate = g.DateCreate,
     NamaJenis  = mg.NamaGilingan,
-    Kategori   = N'gilingan',
+    KodeKategori = N'gilingan',
+    Kategori   = N'Gilingan',
+    Uom        = N'kg',
     Blok       = g.Blok,
     IdLokasi   = g.IdLokasi,
     Qty        = ISNULL(vAgg.TotalPcs,0),
@@ -180,7 +205,9 @@ H AS ( -- Mixer (partial-aware)
     LabelCode = mh.NoMixer,
     DateCreate = mh.DateCreate,
     NamaJenis  = mm.Jenis,
-    Kategori   = N'mixer',
+    KodeKategori = N'mixer',
+    Kategori   = N'Mixer',
+    Uom        = N'sak',
     Blok       = mh.Blok,
     IdLokasi   = mh.IdLokasi, 
     Qty        = ISNULL(hAgg.TotalPcs,0),
@@ -217,11 +244,13 @@ BB AS ( -- FurnitureWIP (partial-aware Pcs)
     LabelCode = fw.NoFurnitureWIP,
     DateCreate = fw.DateCreate,
     NamaJenis  = mcw.Nama,
-    Kategori   = N'furniturewip',
+    KodeKategori = N'furniturewip',
+    Kategori   = N'Furniture WIP',
+    Uom        = N'pcs',
     Blok       = fw.Blok,
     IdLokasi   = fw.IdLokasi,
     Qty        = ISNULL(bbAgg.TotalPcs,0),
-    Berat      = ISNULL(bbAgg.TotalBerat,0)
+    Berat      = NULL
   FROM dbo.FurnitureWIP fw
   LEFT JOIN dbo.MstCabinetWIP mcw ON mcw.IdCabinetWIP = fw.IdFurnitureWIP
   LEFT JOIN (
@@ -251,11 +280,13 @@ BA AS ( -- BarangJadi (partial-aware Pcs)
     LabelCode = bj.NoBJ,
     DateCreate = bj.DateCreate,
     NamaJenis  = mbj.NamaBJ,
-    Kategori   = N'barangjadi',
+    KodeKategori = N'barangjadi',
+    Kategori   = N'Barang Jadi',
+    Uom        = N'pcs',
     Blok       = bj.Blok,
     IdLokasi   = bj.IdLokasi,
     Qty        = ISNULL(baAgg.TotalPcs,0),
-    Berat      = ISNULL(baAgg.TotalBerat,0)
+    Berat      = NULL
   FROM dbo.BarangJadi bj
   LEFT JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = bj.IdBJ
   LEFT JOIN (
@@ -285,7 +316,9 @@ BF AS ( -- Reject (header only)
     LabelCode  = r.NoReject,
     DateCreate = r.DateCreate,
     NamaJenis  = mr.NamaReject,
-    Kategori   = N'reject',
+    KodeKategori = N'reject',
+    Kategori   = N'Reject',
+    Uom        = N'kg',
     Blok       = r.Blok,
     IdLokasi   = r.IdLokasi,
     Qty        = NULL,
@@ -359,7 +392,7 @@ BF AS ( -- Reject (header only)
   // DATA (paged)
   const dataQuery = `
 ${cte}
-SELECT LabelCode, DateCreate, NamaJenis, Kategori, Blok, IdLokasi,
+SELECT LabelCode, DateCreate, NamaJenis, KodeKategori, Kategori, Uom, Blok, IdLokasi,
        ISNULL(Qty,0)   AS Qty,
        ISNULL(Berat,0) AS Berat
 FROM (${filterUnion}) AS X
@@ -407,20 +440,32 @@ ${lokasiWhere};
     sumReq.query(sumQuery),
   ]);
 
-  const data = dataResult.recordset.map((r) => ({
-    ...r,
-    ...(r.DateCreate && { DateCreate: formatDate(r.DateCreate) }),
-  }));
+  const data = dataResult.recordset.map((r) => {
+    const item = {
+      ...r,
+      ...(r.DateCreate && { DateCreate: formatDate(r.DateCreate) }),
+    };
+
+    if (["furniturewip", "barangjadi"].includes((r.KodeKategori || "").toLowerCase())) {
+      delete item.Berat;
+    }
+
+    return item;
+  });
 
   const total = countResult.recordset[0]?.TotalCount || 0;
   const totalQty = sumResult.recordset[0]?.TotalQty || 0;
   const totalBerat = sumResult.recordset[0]?.TotalBerat || 0;
 
+  const kategoriKey = (kategori || "").toLowerCase();
+  const kategoriLabel = kategori ? (KATEGORI_LABELS[kategoriKey] || kategori) : "semua";
+
   return {
     // ✅ metadata baru (lebih ramah UI)
     success: true,
     message: `Data label${kategori ? ` (${kategori})` : ""} berhasil diambil`,
-    kategori: kategori || "semua",
+    kodeKategori: kategori || "semua",
+    kategori: kategoriLabel,
     blok: blok || "semua",
     idlokasi: idlokasi || "semua",
     totalData: total, // alias dari total

@@ -17,6 +17,7 @@ async function getAllLabelsHandler(req, res) {
       }${blok ? ` (blok ${blok})` : ''} berhasil diambil`,
 
       // metadata & informasi filter
+      kodeKategori : result.kodeKategori,
       kategori : result.kategori,
       idlokasi : result.idlokasi,
       blok     : result.blok,

@@ -20,6 +20,17 @@ router.get(
   verifyToken,
   injectProduksiController.getPackingByNoProduksi,
 );
+router.get(
+  "/inject/:noProduksi/formula-inputs",
+  verifyToken,
+  injectProduksiController.getFormulaInputsByNoProduksi,
+);
+
+router.get(
+  "/inject/:noProduksi/validate-label/:labelCode",
+  verifyToken,
+  injectProduksiController.validateInputLabelForNoProduksi,
+);
 
 // 🔹 GET InjectProduksi_h by date (YYYY-MM-DD)
 // ⚠️ keep this LAST so it doesn't conflict with /inject (list)

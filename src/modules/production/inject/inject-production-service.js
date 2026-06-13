@@ -538,6 +538,367 @@ async function getPackingListByNoProduksi(noProduksi) {
   return result.recordset;
 }
 
+function isSafeSqlIdentifier(value) {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(value || "").trim());
+}
+
+async function getKategoriByKode(pool, kodeKategori) {
+  const req = pool.request();
+  req.input("KodeKategori", sql.VarChar(50), String(kodeKategori || "").trim());
+  const res = await req.query(`
+    SELECT TOP 1
+      IdKategori,
+      KodeKategori,
+      NamaKategori,
+      PrefixLabel,
+      NamaTableJenis,
+      NamaKolomIdJenis,
+      NamaKolomNamaJenis,
+      NamaTableLabel,
+      NamaKolomNoLabel,
+      NamaKolomIdJenisDiLabel
+    FROM dbo.MstKategori WITH (NOLOCK)
+    WHERE LOWER(KodeKategori) = LOWER(@KodeKategori)
+      AND ISNULL(Enable, 1) = 1;
+  `);
+  return res.recordset?.[0] || null;
+}
+
+async function getKategoriByIds(pool, idKategoriList = []) {
+  const ids = [...new Set(idKategoriList.map(Number).filter(Number.isFinite))];
+  if (ids.length === 0) return new Map();
+
+  const req = pool.request();
+  ids.forEach((id, index) => {
+    req.input(`KategoriId${index}`, sql.Int, id);
+  });
+  const inClause = ids.map((_, index) => `@KategoriId${index}`).join(", ");
+  const res = await req.query(`
+    SELECT
+      IdKategori,
+      KodeKategori,
+      NamaKategori,
+      PrefixLabel,
+      NamaTableJenis,
+      NamaKolomIdJenis,
+      NamaKolomNamaJenis,
+      NamaTableLabel,
+      NamaKolomNoLabel,
+      NamaKolomIdJenisDiLabel
+    FROM dbo.MstKategori WITH (NOLOCK)
+    WHERE IdKategori IN (${inClause})
+      AND ISNULL(Enable, 1) = 1;
+  `);
+
+  return new Map(
+    (res.recordset || []).map((row) => [Number(row.IdKategori), row]),
+  );
+}
+
+async function loadJenisNamesForFormulaRows(pool, formulaRows = []) {
+  const rows = Array.isArray(formulaRows) ? formulaRows : [];
+  if (rows.length === 0) return new Map();
+
+  const kategoriMap = await getKategoriByIds(
+    pool,
+    rows.map((row) => row.InputKategoriId),
+  );
+  const nameMap = new Map();
+
+  const groups = new Map();
+  for (const row of rows) {
+    const kategoriId = Number(row.InputKategoriId);
+    const inputId = Number(row.InputId);
+    if (!Number.isFinite(kategoriId) || !Number.isFinite(inputId)) continue;
+    if (!groups.has(kategoriId)) groups.set(kategoriId, new Set());
+    groups.get(kategoriId).add(inputId);
+  }
+
+  for (const [kategoriId, idSet] of groups.entries()) {
+    const meta = kategoriMap.get(kategoriId);
+    if (!meta) continue;
+
+    const tableName = String(meta.NamaTableJenis || "").trim();
+    const idColumn = String(meta.NamaKolomIdJenis || "").trim();
+    const nameColumn = String(meta.NamaKolomNamaJenis || "").trim();
+
+    if (
+      !isSafeSqlIdentifier(tableName) ||
+      !isSafeSqlIdentifier(idColumn) ||
+      !isSafeSqlIdentifier(nameColumn)
+    ) {
+      continue;
+    }
+
+    const ids = [...idSet];
+    if (ids.length === 0) continue;
+
+    const req = pool.request();
+    ids.forEach((id, index) => {
+      req.input(`JenisId${kategoriId}_${index}`, sql.Int, id);
+    });
+    const inClause = ids
+      .map((_, index) => `@JenisId${kategoriId}_${index}`)
+      .join(", ");
+
+    const res = await req.query(`
+      SELECT
+        CAST(${idColumn} AS int) AS IdJenis,
+        CAST(${nameColumn} AS nvarchar(4000)) AS NamaJenis
+      FROM dbo.${tableName} WITH (NOLOCK)
+      WHERE ${idColumn} IN (${inClause});
+    `);
+
+    for (const item of res.recordset || []) {
+      nameMap.set(
+        `${kategoriId}:${Number(item.IdJenis)}`,
+        item.NamaJenis ?? null,
+      );
+    }
+  }
+
+  return nameMap;
+}
+
+async function getFormulaInputsByNoProduksi(noProduksi) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const pool = await poolPromise;
+  const request = pool.request();
+  request.input("NoProduksi", sql.VarChar(50), no);
+
+  const headerRes = await request.query(`
+    SELECT
+      h.NoProduksi,
+      h.IdCetakan,
+      h.IdWarna,
+      h.IdFurnitureMaterial,
+      CASE
+        WHEN fwCount.TotalCount > 0 THEN 'furnitureWip'
+        WHEN bjCount.TotalCount > 0 THEN 'barangjadi'
+        ELSE NULL
+      END AS OutputCategory,
+      CASE
+        WHEN fwCount.TotalCount > 0 THEN fwItems.OutputItems
+        WHEN bjCount.TotalCount > 0 THEN bjItems.OutputItems
+        ELSE NULL
+      END AS Outputs
+    FROM dbo.InjectProduksi_h h WITH (NOLOCK)
+    OUTER APPLY (
+      SELECT
+        COUNT(1) AS TotalCount
+      FROM (
+        SELECT DISTINCT
+          dFw.IdFurnitureWIP AS IdJenis
+        FROM dbo.CetakanWarnaToFurnitureWIP_d dFw WITH (NOLOCK)
+        WHERE dFw.IdCetakan = h.IdCetakan
+          AND dFw.IdWarna = h.IdWarna
+          AND (
+            (dFw.IdFurnitureMaterial IS NULL
+              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+            OR dFw.IdFurnitureMaterial = h.IdFurnitureMaterial
+          )
+      ) x
+    ) fwCount
+    OUTER APPLY (
+      SELECT
+        JSON_QUERY(
+          COALESCE(
+            (
+              SELECT
+                x.IdJenis AS idJenis,
+                x.NamaJenis AS namaJenis
+              FROM (
+                SELECT DISTINCT
+                  dFw.IdFurnitureWIP AS IdJenis,
+                  cab.Nama AS NamaJenis
+                FROM dbo.CetakanWarnaToFurnitureWIP_d dFw WITH (NOLOCK)
+                INNER JOIN dbo.MstCabinetWIP cab WITH (NOLOCK)
+                  ON cab.IdCabinetWIP = dFw.IdFurnitureWIP
+                WHERE dFw.IdCetakan = h.IdCetakan
+                  AND dFw.IdWarna = h.IdWarna
+                  AND (
+                    (dFw.IdFurnitureMaterial IS NULL
+                      AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+                    OR dFw.IdFurnitureMaterial = h.IdFurnitureMaterial
+                  )
+              ) x
+              FOR JSON PATH
+            ),
+            '[]'
+          )
+        ) AS OutputItems
+    ) fwItems
+    OUTER APPLY (
+      SELECT
+        COUNT(1) AS TotalCount
+      FROM (
+        SELECT DISTINCT
+          dBj.IdBarangJadi AS IdJenis
+        FROM dbo.CetakanWarnaToProduk_d dBj WITH (NOLOCK)
+        WHERE dBj.IdCetakan = h.IdCetakan
+          AND dBj.IdWarna = h.IdWarna
+          AND (
+            (dBj.IdFurnitureMaterial IS NULL
+              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+            OR dBj.IdFurnitureMaterial = h.IdFurnitureMaterial
+          )
+      ) x
+    ) bjCount
+    OUTER APPLY (
+      SELECT
+        JSON_QUERY(
+          COALESCE(
+            (
+              SELECT
+                x.IdJenis AS idJenis,
+                x.NamaJenis AS namaJenis
+              FROM (
+                SELECT DISTINCT
+                  dBj.IdBarangJadi AS IdJenis,
+                  mbj.NamaBJ AS NamaJenis
+                FROM dbo.CetakanWarnaToProduk_d dBj WITH (NOLOCK)
+                INNER JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
+                  ON mbj.IdBJ = dBj.IdBarangJadi
+                WHERE dBj.IdCetakan = h.IdCetakan
+                  AND dBj.IdWarna = h.IdWarna
+                  AND (
+                    (dBj.IdFurnitureMaterial IS NULL
+                      AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+                    OR dBj.IdFurnitureMaterial = h.IdFurnitureMaterial
+                  )
+              ) x
+              FOR JSON PATH
+            ),
+            '[]'
+          )
+        ) AS OutputItems
+    ) bjItems
+    WHERE h.NoProduksi = @NoProduksi;
+  `);
+
+  const header = headerRes.recordset?.[0];
+  if (!header) {
+    throw notFound(`InjectProduksi ${no} tidak ditemukan`);
+  }
+
+  let outputs = [];
+  if (Array.isArray(header.Outputs)) {
+    outputs = header.Outputs;
+  } else if (typeof header.Outputs === "string" && header.Outputs.trim()) {
+    try {
+      outputs = JSON.parse(header.Outputs);
+    } catch (_) {
+      outputs = [];
+    }
+  }
+
+  const normalizedOutputs = outputs
+    .map((item) => ({
+      idJenis: Number(item?.idJenis),
+      namaJenis: item?.namaJenis ?? null,
+    }))
+    .filter((item) => Number.isFinite(item.idJenis) && item.idJenis > 0);
+
+  if (!header.OutputCategory || normalizedOutputs.length === 0) {
+    return {
+      noProduksi: no,
+      outputCategory: header.OutputCategory ?? null,
+      outputCategoryId: null,
+      outputs: normalizedOutputs,
+      formulas: [],
+    };
+  }
+
+  const outputKategori = await getKategoriByKode(
+    pool,
+    String(header.OutputCategory).toLowerCase(),
+  );
+
+  if (!outputKategori) {
+    return {
+      noProduksi: no,
+      outputCategory: header.OutputCategory,
+      outputCategoryId: null,
+      outputs: normalizedOutputs,
+      formulas: [],
+    };
+  }
+
+  const formulaReq = pool.request();
+  formulaReq.input("MainOutputKategoriId", sql.Int, outputKategori.IdKategori);
+  normalizedOutputs.forEach((item, index) => {
+    formulaReq.input(`MainOutputId${index}`, sql.Int, item.idJenis);
+  });
+
+  const inClause = normalizedOutputs
+    .map((_, index) => `@MainOutputId${index}`)
+    .join(", ");
+
+  const formulaRes = await formulaReq.query(`
+    SELECT
+      f.IdFormula,
+      f.MainOutputKategoriId,
+      mk.KodeKategori AS MainOutputKategoriKode,
+      mk.NamaKategori AS MainOutputKategoriNama,
+      f.MainOutputId,
+      f.InputKategoriId,
+      ik.KodeKategori AS InputKategoriKode,
+      ik.NamaKategori AS InputKategoriNama,
+      ik.PrefixLabel AS InputPrefixLabel,
+      ik.NamaTableJenis AS InputNamaTableJenis,
+      ik.NamaKolomIdJenis AS InputNamaKolomIdJenis,
+      ik.NamaKolomNamaJenis AS InputNamaKolomNamaJenis,
+      ik.NamaTableLabel AS InputNamaTableLabel,
+      ik.NamaKolomNoLabel AS InputNamaKolomNoLabel,
+      ik.NamaKolomIdJenisDiLabel AS InputNamaKolomIdJenisDiLabel,
+      f.InputId
+    FROM dbo.MstFormulaInput f WITH (NOLOCK)
+    LEFT JOIN dbo.MstKategori mk WITH (NOLOCK)
+      ON mk.IdKategori = f.MainOutputKategoriId
+    LEFT JOIN dbo.MstKategori ik WITH (NOLOCK)
+      ON ik.IdKategori = f.InputKategoriId
+    WHERE f.MainOutputKategoriId = @MainOutputKategoriId
+      AND f.MainOutputId IN (${inClause})
+    ORDER BY f.MainOutputId ASC, f.InputKategoriId ASC, f.InputId ASC;
+  `);
+
+  const outputNameMap = new Map(
+    normalizedOutputs.map((item) => [item.idJenis, item.namaJenis ?? null]),
+  );
+  const inputNameMap = await loadJenisNamesForFormulaRows(
+    pool,
+    formulaRes.recordset || [],
+  );
+  const formulas = (formulaRes.recordset || []).map((row) => ({
+    ...row,
+    InputNama:
+      inputNameMap.get(
+        `${Number(row.InputKategoriId)}:${Number(row.InputId)}`,
+      ) ?? null,
+    MainOutputNama: outputNameMap.get(Number(row.MainOutputId)) ?? null,
+  }));
+
+  return {
+    noProduksi: no,
+    outputCategory: header.OutputCategory,
+    outputCategoryId: outputKategori.IdKategori,
+    outputCategoryKode: outputKategori.KodeKategori,
+    outputCategoryNama: outputKategori.NamaKategori,
+    outputPrefixLabel: outputKategori.PrefixLabel ?? null,
+    outputNamaTableJenis: outputKategori.NamaTableJenis ?? null,
+    outputNamaKolomIdJenis: outputKategori.NamaKolomIdJenis ?? null,
+    outputNamaKolomNamaJenis: outputKategori.NamaKolomNamaJenis ?? null,
+    outputNamaTableLabel: outputKategori.NamaTableLabel ?? null,
+    outputNamaKolomNoLabel: outputKategori.NamaKolomNoLabel ?? null,
+    outputNamaKolomIdJenisDiLabel:
+      outputKategori.NamaKolomIdJenisDiLabel ?? null,
+    outputs: normalizedOutputs,
+    formulas,
+  };
+}
+
 async function createInjectProduksi(payload, ctx) {
   const body = payload && typeof payload === "object" ? payload : {};
 
@@ -1981,6 +2342,21 @@ async function fetchOutputsReject(noProduksi) {
   }));
 }
 
+function getInjectInputCategoryCodeByPrefix(prefix) {
+  switch (String(prefix || "").toUpperCase()) {
+    case "BB.":
+      return "furniturewip";
+    case "D.":
+      return "broker";
+    case "H.":
+      return "mixer";
+    case "V.":
+      return "gilingan";
+    default:
+      return null;
+  }
+}
+
 async function validateLabel(labelCode) {
   const pool = await poolPromise;
 
@@ -2008,9 +2384,8 @@ async function validateLabel(labelCode) {
 
   // prefix rule: untuk BF. (3 char), lainnya 2 char (mis: D., H., V., BB.)
   let prefix = "";
-  if (raw.substring(0, 3).toUpperCase() === "BF.") prefix = "BF.";
-  else if (raw.substring(0, 3).toUpperCase() === "BB.")
-    prefix = "BB."; // ✅ FWIP (umum)
+  const prefix3 = raw.substring(0, 3).toUpperCase();
+  if (["BA.", "BB.", "BF.", "BL."].includes(prefix3)) prefix = prefix3;
   else prefix = raw.substring(0, 2).toUpperCase();
 
   let query = "";
@@ -2225,6 +2600,123 @@ async function validateLabel(labelCode) {
         `Invalid prefix: ${prefix}. Valid prefixes (Inject): BB., D., H., V.`,
       );
   }
+}
+
+async function validateInputLabelForNoProduksi(noProduksi, labelCode) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  let labelInfo;
+  try {
+    labelInfo = await validateLabel(labelCode);
+  } catch (error) {
+    if (/^Invalid prefix:/i.test(String(error?.message || ""))) {
+      return {
+        noProduksi: no,
+        labelCode: String(labelCode || "").trim(),
+        valid: false,
+        reason: "Kategori label ini tidak didukung sebagai input inject",
+        formulaMatch: null,
+        label: null,
+        output: null,
+      };
+    }
+    throw error;
+  }
+  if (!labelInfo?.found || !Array.isArray(labelInfo.data) || !labelInfo.data[0]) {
+    return {
+      noProduksi: no,
+      labelCode: String(labelCode || "").trim(),
+      valid: false,
+      reason: "Label tidak ditemukan, sudah terpakai, atau tidak punya sisa quantity",
+      formulaMatch: null,
+      labelInfo,
+    };
+  }
+
+  const formulaInfo = await getFormulaInputsByNoProduksi(no);
+  const categoryCode = getInjectInputCategoryCodeByPrefix(labelInfo.prefix);
+  if (!categoryCode) {
+    return {
+      noProduksi: no,
+      labelCode: String(labelCode || "").trim(),
+      valid: false,
+      reason: `Prefix ${labelInfo.prefix} tidak didukung sebagai input inject`,
+      formulaMatch: null,
+      labelInfo,
+      formulaInfo,
+    };
+  }
+
+  const pool = await poolPromise;
+  const kategoriRes = await pool
+    .request()
+    .input("KodeKategori", sql.VarChar(50), categoryCode)
+    .query(`
+      SELECT TOP 1 IdKategori, KodeKategori, NamaKategori
+      FROM dbo.MstKategori WITH (NOLOCK)
+      WHERE LOWER(KodeKategori) = LOWER(@KodeKategori)
+        AND ISNULL(Enable, 1) = 1;
+    `);
+  const kategori = kategoriRes.recordset?.[0] || null;
+
+  const firstRow = labelInfo.data[0] || {};
+  const inputId = Number(firstRow.idJenis);
+
+  if (!kategori || !Number.isFinite(inputId) || inputId <= 0) {
+    return {
+      noProduksi: no,
+      labelCode: String(labelCode || "").trim(),
+      valid: false,
+      reason: "Gagal menentukan kategori atau inputId dari label",
+      formulaMatch: null,
+      labelInfo,
+      formulaInfo,
+    };
+  }
+
+  const formulaMatch = Array.isArray(formulaInfo.formulas)
+    ? formulaInfo.formulas.find(
+        (row) =>
+          Number(row.InputKategoriId) === Number(kategori.IdKategori) &&
+          Number(row.InputId) === inputId,
+      ) || null
+    : null;
+
+  return {
+    noProduksi: no,
+    labelCode: String(labelCode || "").trim(),
+    valid: Boolean(formulaMatch),
+    reason: formulaMatch
+      ? "Label valid untuk NoProduksi ini"
+      : "Label tidak termasuk formula input yang diizinkan untuk NoProduksi ini",
+    formulaMatch: formulaMatch
+      ? {
+          idFormula: formulaMatch.IdFormula,
+          inputKategoriId: formulaMatch.InputKategoriId,
+          inputKategoriKode: formulaMatch.InputKategoriKode,
+          inputKategoriNama: formulaMatch.InputKategoriNama,
+          inputId: formulaMatch.InputId,
+        }
+      : null,
+    label: {
+      prefix: labelInfo.prefix,
+      tableName: labelInfo.tableName,
+      categoryId: kategori.IdKategori,
+      categoryKode: kategori.KodeKategori,
+      categoryNama: kategori.NamaKategori,
+      inputId,
+      namaJenis: firstRow.namaJenis ?? null,
+      rawData: firstRow,
+    },
+    output: {
+      category: formulaInfo.outputCategory ?? null,
+      categoryId: formulaInfo.outputCategoryId ?? null,
+      categoryKode: formulaInfo.outputCategoryKode ?? null,
+      categoryNama: formulaInfo.outputCategoryNama ?? null,
+      outputs: formulaInfo.outputs ?? [],
+    },
+  };
 }
 
 /**
@@ -2731,6 +3223,7 @@ module.exports = {
   getProduksiByDate,
   getFurnitureWipListByNoProduksi,
   getPackingListByNoProduksi,
+  getFormulaInputsByNoProduksi,
   createInjectProduksi,
   updateInjectProduksi,
   deleteInjectProduksi,
@@ -2741,6 +3234,7 @@ module.exports = {
   fetchOutputsPacking,
   fetchOutputsReject,
   validateLabel,
+  validateInputLabelForNoProduksi,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
   splitProduksiTime,
