@@ -60,6 +60,7 @@ const mstWarehouseRoutes = require("./modules/master/warehouse/master-warehouse-
 const mstPrinterRoutes = require("./modules/master/printer/master-printer-route");
 const mstReguRoutes = require("./modules/master/regu/master-regu-route");
 const mstShiftRoutes = require("./modules/master/shift/master-shift-route");
+const mstMaterialRoutes = require("./modules/master/material/master-material-route");
 const auditRoutes = require("./modules/audit/audit-route");
 const updateRoutes = require("./modules/update/update-routes");
 const printLockRoutes = require("./modules/label/print-lock/print-lock-routes");
@@ -143,6 +144,7 @@ app.use("/api/mst", mstPembeliRoutes);
 app.use("/api/mst", mstWarehouseRoutes);
 app.use("/api/mst", mstReguRoutes);
 app.use("/api/mst", mstShiftRoutes);
+app.use("/api/mst", mstMaterialRoutes);
 app.use("/api", mstPrinterRoutes);
 app.use("/api/audit", auditRoutes);
 

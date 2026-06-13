@@ -1,9 +1,5 @@
 // controllers/broker-production-controller.js
 const brokerProduksiService = require("./broker-production-service");
-const { poolPromise } = require("../../../core/config/db");
-const {
-  getBrokerProductionWeightSummary,
-} = require("../../../core/shared/broker-production-weight-guard");
 const {
   getActorId,
   getActorUsername,
@@ -70,34 +66,11 @@ async function getAllProduksi(req, res) {
       shift,
     );
 
-    const pool = await poolPromise;
-    const dataWithWeightSummary = [];
-    for (const row of data || []) {
-      const noProduksi = String(row?.NoProduksi || "").trim();
-      if (!noProduksi) {
-        dataWithWeightSummary.push({
-          ...row,
-          totalBeratInputKg: 0,
-          totalBeratOutputExistingKg: 0,
-        });
-        continue;
-      }
-
-      const summary = await getBrokerProductionWeightSummary(pool, noProduksi, {
-        useOutputLock: false,
-      });
-      dataWithWeightSummary.push({
-        ...row,
-        totalBeratInputKg: summary.totalBeratInputKg,
-        totalBeratOutputExistingKg: summary.totalBeratOutputExistingKg,
-      });
-    }
-
     return res.status(200).json({
       success: true,
       message: "BrokerProduksi_h retrieved successfully",
       totalData: total,
-      data: dataWithWeightSummary,
+      data: data || [],
       meta: {
         page,
         pageSize,

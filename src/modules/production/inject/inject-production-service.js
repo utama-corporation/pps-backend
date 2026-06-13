@@ -9,7 +9,11 @@ const {
   loadDocDateOnlyFromConfig,
 } = require("../../../core/shared/tutup-transaksi-guard");
 const sharedInputService = require("../../../core/shared/produksi-input.service");
-const { badReq, conflict, notFound } = require("../../../core/utils/http-error");
+const {
+  badReq,
+  conflict,
+  notFound,
+} = require("../../../core/utils/http-error");
 const { applyAuditContext } = require("../../../core/utils/db-audit-context");
 const {
   generateNextCode,
@@ -1516,8 +1520,9 @@ async function updateInjectProduksi(noProduksi, payload, ctx) {
 
     const rqFinal = new sql.Request(tx);
     rqFinal.input("NoProduksi", sql.VarChar(50), noProduksi);
-    updatedHeader = (
-      await rqFinal.query(`
+    updatedHeader =
+      (
+        await rqFinal.query(`
         SELECT
           h.*,
           JSON_QUERY(
@@ -1545,7 +1550,7 @@ async function updateInjectProduksi(noProduksi, payload, ctx) {
         FROM dbo.InjectProduksi_h h WITH (NOLOCK)
         WHERE h.NoProduksi = @NoProduksi;
       `)
-    ).recordset?.[0] || updatedHeader;
+      ).recordset?.[0] || updatedHeader;
 
     if (
       updatedHeader &&
@@ -2623,12 +2628,17 @@ async function validateInputLabelForNoProduksi(noProduksi, labelCode) {
     }
     throw error;
   }
-  if (!labelInfo?.found || !Array.isArray(labelInfo.data) || !labelInfo.data[0]) {
+  if (
+    !labelInfo?.found ||
+    !Array.isArray(labelInfo.data) ||
+    !labelInfo.data[0]
+  ) {
     return {
       noProduksi: no,
       labelCode: String(labelCode || "").trim(),
       valid: false,
-      reason: "Label tidak ditemukan, sudah terpakai, atau tidak punya sisa quantity",
+      reason:
+        "Label tidak ditemukan, sudah terpakai, atau tidak punya sisa quantity",
       formulaMatch: null,
       labelInfo,
     };
@@ -2651,8 +2661,7 @@ async function validateInputLabelForNoProduksi(noProduksi, labelCode) {
   const pool = await poolPromise;
   const kategoriRes = await pool
     .request()
-    .input("KodeKategori", sql.VarChar(50), categoryCode)
-    .query(`
+    .input("KodeKategori", sql.VarChar(50), categoryCode).query(`
       SELECT TOP 1 IdKategori, KodeKategori, NamaKategori
       FROM dbo.MstKategori WITH (NOLOCK)
       WHERE LOWER(KodeKategori) = LOWER(@KodeKategori)
@@ -3051,17 +3060,21 @@ async function splitProduksiTime(selector, payload, ctx) {
       });
 
     let newNoProduksi = await gen();
-    const exists = await new sql.Request(tx)
-      .input("NoProduksi", sql.VarChar(50), newNoProduksi)
-      .query(`
+    const exists = await new sql.Request(tx).input(
+      "NoProduksi",
+      sql.VarChar(50),
+      newNoProduksi,
+    ).query(`
         SELECT 1 FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoProduksi = @NoProduksi
       `);
     if (exists.recordset.length > 0) {
       const retry = await gen();
-      const exists2 = await new sql.Request(tx)
-        .input("NoProduksi", sql.VarChar(50), retry)
-        .query(`
+      const exists2 = await new sql.Request(tx).input(
+        "NoProduksi",
+        sql.VarChar(50),
+        retry,
+      ).query(`
           SELECT 1 FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK)
           WHERE NoProduksi = @NoProduksi
         `);
@@ -3166,8 +3179,7 @@ async function splitProduksiTime(selector, payload, ctx) {
 
     await new sql.Request(tx)
       .input("SourceNoProduksi", sql.VarChar(50), sourceNo)
-      .input("NewHourStart", sql.VarChar(20), hourStart)
-      .query(`
+      .input("NewHourStart", sql.VarChar(20), hourStart).query(`
         UPDATE dbo.InjectProduksi_h
         SET HourEnd = CAST(@NewHourStart AS time(7))
         WHERE NoProduksi = @SourceNoProduksi
@@ -3175,17 +3187,18 @@ async function splitProduksiTime(selector, payload, ctx) {
 
     await new sql.Request(tx)
       .input("SourceNoProduksi", sql.VarChar(50), sourceNo)
-      .input("NewNoProduksi", sql.VarChar(50), newNoProduksi)
-      .query(`
+      .input("NewNoProduksi", sql.VarChar(50), newNoProduksi).query(`
         INSERT INTO dbo.InjectProduksiOperator_d (NoProduksi, IdOperator)
         SELECT @NewNoProduksi, od.IdOperator
         FROM dbo.InjectProduksiOperator_d od
         WHERE od.NoProduksi = @SourceNoProduksi;
       `);
 
-    const opRes = await new sql.Request(tx)
-      .input("NoProduksi", sql.VarChar(50), newNoProduksi)
-      .query(`
+    const opRes = await new sql.Request(tx).input(
+      "NoProduksi",
+      sql.VarChar(50),
+      newNoProduksi,
+    ).query(`
         SELECT IdOperator
         FROM dbo.InjectProduksiOperator_d
         WHERE NoProduksi = @NoProduksi
