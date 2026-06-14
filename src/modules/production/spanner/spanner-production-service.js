@@ -51,6 +51,8 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
       m.NamaMesin,
       h.IdOperator,
       o.NamaOperator,
+      h.OutputJenisId,
+      cw.Nama AS OutputJenisNama,
       h.Shift,
       h.JamKerja,
       h.CreateBy,
@@ -65,6 +67,8 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
       ON h.IdMesin = m.IdMesin
     LEFT JOIN dbo.MstOperator o WITH (NOLOCK)
       ON h.IdOperator = o.IdOperator
+    LEFT JOIN dbo.MstCabinetWIP cw WITH (NOLOCK)
+      ON cw.IdCabinetWIP = h.OutputJenisId
     WHERE (@search = '' OR h.NoProduksi LIKE '%' + @search + '%')
     ORDER BY h.Tanggal DESC, h.NoProduksi DESC
     OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;
@@ -94,6 +98,8 @@ async function getProductionByDate(date) {
       m.NamaMesin,
       h.IdOperator,
       o.NamaOperator,
+      h.OutputJenisId,
+      cw.Nama AS OutputJenisNama,
       h.Shift,
       h.JamKerja,
       h.CreateBy,
@@ -108,6 +114,8 @@ async function getProductionByDate(date) {
       ON h.IdMesin = m.IdMesin
     LEFT JOIN dbo.MstOperator o WITH (NOLOCK)
       ON h.IdOperator = o.IdOperator
+    LEFT JOIN dbo.MstCabinetWIP cw WITH (NOLOCK)
+      ON cw.IdCabinetWIP = h.OutputJenisId
     WHERE CONVERT(date, h.Tanggal) = @date
     ORDER BY h.JamKerja ASC;
   `;

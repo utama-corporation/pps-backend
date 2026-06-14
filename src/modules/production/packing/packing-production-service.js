@@ -67,6 +67,8 @@ async function getAllProduksi(
       m.NamaMesin,
       h.IdOperator,
       o.NamaOperator,
+      h.OutputJenisId,
+      bj.NamaBJ AS OutputJenisNama,
       h.Shift,
       h.JamKerja,
       h.CreateBy,
@@ -79,6 +81,7 @@ async function getAllProduksi(
     FROM dbo.PackingProduksi_h h WITH (NOLOCK)
     LEFT JOIN dbo.MstMesin m WITH (NOLOCK) ON h.IdMesin = m.IdMesin
     LEFT JOIN dbo.MstOperator o WITH (NOLOCK) ON h.IdOperator = o.IdOperator
+    LEFT JOIN dbo.MstBarangJadi bj WITH (NOLOCK) ON bj.IdBJ = h.OutputJenisId
     ${qWhere}
     ORDER BY h.Tanggal DESC, h.NoPacking DESC
     OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;
@@ -105,6 +108,8 @@ async function getProduksiByDate(date) {
       m.NamaMesin,
       h.IdOperator,
       o.NamaOperator,
+      h.OutputJenisId,
+      bj.NamaBJ AS OutputJenisNama,
       h.Shift,
       h.JamKerja,
       h.CreateBy,
@@ -119,6 +124,8 @@ async function getProduksiByDate(date) {
       ON h.IdMesin = m.IdMesin
     LEFT JOIN [dbo].[MstOperator] o
       ON h.IdOperator = o.IdOperator
+    LEFT JOIN [dbo].[MstBarangJadi] bj
+      ON bj.IdBJ = h.OutputJenisId
     WHERE CONVERT(date, h.Tanggal) = @date
     ORDER BY h.JamKerja ASC;
   `;

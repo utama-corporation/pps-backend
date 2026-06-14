@@ -1347,8 +1347,8 @@ async function getSpannerByNoProduksi({
       h.IdRegu,
       rg.NamaRegu,
       h.OutputJenisId,
-      cw.Nama     AS OutputJenisNama,
-      cw.ItemCode AS OutputJenisItemCode,
+      mbj.NamaBJ  AS OutputJenisNama,
+      mbj.ItemCode AS OutputJenisItemCode,
       JSON_QUERY(
         COALESCE(
           (
@@ -1413,8 +1413,8 @@ async function getSpannerByNoProduksi({
         )
       ORDER BY sp.HourStart DESC, sp.NoProduksi DESC
     ) h
-    LEFT JOIN dbo.MstCabinetWIP cw WITH (NOLOCK)
-      ON cw.IdCabinetWIP = h.OutputJenisId
+    LEFT JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
+      ON mbj.IdBJ = h.OutputJenisId
     LEFT JOIN dbo.MstRegu rg WITH (NOLOCK)
       ON rg.IdRegu = h.IdRegu
     OUTER APPLY (SELECT TOP 1 * FROM ActiveShift) s
@@ -1489,8 +1489,8 @@ async function getPackingByNoProduksi({
       h.IdRegu,
       rg.NamaRegu,
       h.OutputJenisId,
-      cw.Nama     AS OutputJenisNama,
-      cw.ItemCode AS OutputJenisItemCode,
+      mbj.NamaBJ  AS OutputJenisNama,
+      mbj.ItemCode AS OutputJenisItemCode,
       JSON_QUERY(
         COALESCE(
           (
@@ -1555,8 +1555,8 @@ async function getPackingByNoProduksi({
         )
       ORDER BY pk.HourStart DESC, pk.NoPacking DESC
     ) h
-    LEFT JOIN dbo.MstCabinetWIP cw WITH (NOLOCK)
-      ON cw.IdCabinetWIP = h.OutputJenisId
+    LEFT JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
+      ON mbj.IdBJ = h.OutputJenisId
     LEFT JOIN dbo.MstRegu rg WITH (NOLOCK)
       ON rg.IdRegu = h.IdRegu
     OUTER APPLY (SELECT TOP 1 * FROM ActiveShift) s
