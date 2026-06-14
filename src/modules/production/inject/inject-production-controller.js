@@ -25,6 +25,19 @@ async function getAllProduksi(req, res) {
   const pageSizeRaw = parseInt(req.query.pageSize, 10) || 20;
   const pageSize = Math.min(Math.max(pageSizeRaw, 1), 100);
 
+  const idMesin =
+    req.query.idMesin != null && req.query.idMesin !== ""
+      ? parseInt(req.query.idMesin, 10) || null
+      : null;
+  const tanggal =
+    typeof req.query.tanggal === "string" && req.query.tanggal
+      ? req.query.tanggal
+      : null;
+  const shift =
+    req.query.shift != null && req.query.shift !== ""
+      ? parseInt(req.query.shift, 10) || null
+      : null;
+
   const search =
     (typeof req.query.noProduksi === "string" && req.query.noProduksi) ||
     (typeof req.query.search === "string" && req.query.search) ||
@@ -35,6 +48,9 @@ async function getAllProduksi(req, res) {
       page,
       pageSize,
       search,
+      idMesin,
+      tanggal,
+      shift,
     );
 
     return res.status(200).json({
@@ -49,6 +65,9 @@ async function getAllProduksi(req, res) {
         hasNextPage: page * pageSize < total,
         hasPrevPage: page > 1,
         search,
+        idMesin,
+        tanggal,
+        shift,
       },
     });
   } catch (error) {

@@ -22,7 +22,14 @@ const {
 // ============================================================
 // ✅ GET ALL (paged + search + lastClosed + isLocked)
 // ============================================================
-async function getAllProduksi(page = 1, pageSize = 20, search = "") {
+async function getAllProduksi(
+  page = 1,
+  pageSize = 20,
+  search = "",
+  idMesin = null,
+  tanggal = null,
+  shift = null,
+) {
   const pool = await poolPromise;
 
   const p = Math.max(1, Number(page) || 1);
@@ -33,6 +40,9 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
 
   const whereClause = `
     WHERE (@search = '' OR h.NoProduksi LIKE '%' + @search + '%')
+      AND (@idMesin IS NULL OR h.IdMesin = @idMesin)
+      AND (@tanggal IS NULL OR CONVERT(date, h.TglProduksi) = @tanggal)
+      AND (@shift IS NULL OR h.Shift = @shift)
   `;
 
   // 1) Count
@@ -44,6 +54,9 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
 
   const countReq = pool.request();
   countReq.input("search", sql.VarChar(100), searchTerm);
+  countReq.input("idMesin", sql.Int, idMesin);
+  countReq.input("tanggal", sql.Date, tanggal);
+  countReq.input("shift", sql.Int, shift);
 
   const countRes = await countReq.query(countQry);
   const total = countRes.recordset?.[0]?.total || 0;
@@ -272,6 +285,9 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
 
   const dataReq = pool.request();
   dataReq.input("search", sql.VarChar(100), searchTerm);
+  dataReq.input("idMesin", sql.Int, idMesin);
+  dataReq.input("tanggal", sql.Date, tanggal);
+  dataReq.input("shift", sql.Int, shift);
   dataReq.input("offset", sql.Int, offset);
   dataReq.input("limit", sql.Int, ps);
 
