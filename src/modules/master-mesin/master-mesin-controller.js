@@ -52,7 +52,7 @@ async function getByIdBagian(req, res) {
 async function getBroker(req, res) {
   const { username } = req;
   const idBagianMesin = 2;
-  const includeDisabled = String(req.query.includeDisabled || "1") === "1";
+  const includeDisabled = String(req.query.includeDisabled || "0") === "1";
 
   console.log(
     "🔍 Fetching MstMesin broker | Username:",
@@ -146,7 +146,7 @@ async function getBroker(req, res) {
 async function getWashing(req, res) {
   const { username } = req;
   const idBagianMesin = 7;
-  const includeDisabled = String(req.query.includeDisabled || "1") === "1";
+  const includeDisabled = String(req.query.includeDisabled || "0") === "1";
 
   console.log(
     "🔍 Fetching MstMesin washing | Username:",
@@ -223,7 +223,7 @@ async function getWashing(req, res) {
 async function getCrusher(req, res) {
   const { username } = req;
   const idBagianMesin = 3;
-  const includeDisabled = String(req.query.includeDisabled || "1") === "1";
+  const includeDisabled = String(req.query.includeDisabled || "0") === "1";
 
   console.log(
     "🔍 Fetching MstMesin crusher | Username:",
@@ -320,7 +320,7 @@ async function getCrusher(req, res) {
 async function getGilingan(req, res) {
   const { username } = req;
   const idBagianMesin = 3;
-  const includeDisabled = String(req.query.includeDisabled || "1") === "1";
+  const includeDisabled = String(req.query.includeDisabled || "0") === "1";
 
   console.log(
     "🔍 Fetching MstMesin gilingan | Username:",
@@ -416,7 +416,7 @@ async function getGilingan(req, res) {
 
 async function getMixer(req, res) {
   const idBagianMesin = 5;
-  const includeDisabled = String(req.query.includeDisabled || "1") === "1";
+  const includeDisabled = String(req.query.includeDisabled || "0") === "1";
 
   try {
     const rows = await service.getMixerByNoProduksi({
@@ -498,7 +498,7 @@ async function getMixer(req, res) {
 
 async function getInject(req, res) {
   const idBagianMesin = 4;
-  const includeDisabled = String(req.query.includeDisabled || "1") === "1";
+  const includeDisabled = String(req.query.includeDisabled || "0") === "1";
 
   try {
     const rows = await service.getInjectByNoProduksi({
@@ -585,7 +585,7 @@ async function getInject(req, res) {
 
 async function getStamping(req, res) {
   const idBagianMesin = 8;
-  const includeDisabled = String(req.query.includeDisabled || "1") === "1";
+  const includeDisabled = String(req.query.includeDisabled || "0") === "1";
 
   try {
     const rows = await service.getStampingByNoProduksi({
@@ -667,7 +667,7 @@ async function getStamping(req, res) {
 
 async function getPasangKunci(req, res) {
   const idBagianMesin = 10;
-  const includeDisabled = String(req.query.includeDisabled || "1") === "1";
+  const includeDisabled = String(req.query.includeDisabled || "0") === "1";
 
   try {
     const rows = await service.getPasangKunciByNoProduksi({
@@ -749,7 +749,7 @@ async function getPasangKunci(req, res) {
 
 async function getSpanner(req, res) {
   const idBagianMesin = 9;
-  const includeDisabled = String(req.query.includeDisabled || "1") === "1";
+  const includeDisabled = String(req.query.includeDisabled || "0") === "1";
 
   try {
     const rows = await service.getSpannerByNoProduksi({
@@ -831,7 +831,7 @@ async function getSpanner(req, res) {
 
 async function getPacking(req, res) {
   const idBagianMesin = 6;
-  const includeDisabled = String(req.query.includeDisabled || "1") === "1";
+  const includeDisabled = String(req.query.includeDisabled || "0") === "1";
 
   try {
     const rows = await service.getPackingByNoProduksi({

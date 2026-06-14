@@ -309,7 +309,7 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
 
     return {
       ...row,
-      IdOperator: idOperators[0] ?? row.IdOperator ?? null,
+      IdOperator: idOperators[0] ?? null,
       NamaOperator: row.NamaOperator ?? null,
       IdOperators: idOperators,
       Outputs: outputs,
@@ -466,7 +466,7 @@ async function getProduksiByDate(date) {
 
     return {
       ...row,
-      IdOperator: idOperators[0] ?? row.IdOperator ?? null,
+      IdOperator: idOperators[0] ?? null,
       IdOperators: idOperators.filter(
         (value) => Number.isFinite(Number(value)) && Number(value) > 0,
       ),
@@ -1037,7 +1037,6 @@ async function createInjectProduksi(payload, ctx) {
       .input("NoProduksi", sql.VarChar(50), noProduksi)
       .input("TglProduksi", sql.Date, effectiveDate)
       .input("IdMesin", sql.Int, body.idMesin)
-      .input("IdOperator", sql.Int, primaryOperatorId)
       .input("IdRegu", sql.Int, body.idRegu ?? null)
       .input("Shift", sql.Int, body.shift)
       .input("Jam", sql.Int, body.jam ?? null)
@@ -1064,7 +1063,7 @@ async function createInjectProduksi(payload, ctx) {
 
     const insertSql = `
       DECLARE @tmp TABLE (
-        NoProduksi varchar(50), IdOperator int, IdMesin int, TglProduksi date,
+        NoProduksi varchar(50), IdMesin int, TglProduksi date,
         Jam int, Shift int, IdRegu int, CreateBy varchar(100), CheckBy1 varchar(100),
         CheckBy2 varchar(100), ApproveBy varchar(100), JmlhAnggota int,
         Hadir int, IdCetakan int, IdWarna int, EnableOffset bit,
@@ -1074,7 +1073,7 @@ async function createInjectProduksi(payload, ctx) {
       );
 
       INSERT INTO dbo.InjectProduksi_h (
-        NoProduksi, IdOperator, IdMesin, TglProduksi, Jam, Shift,
+        NoProduksi, IdMesin, TglProduksi, Jam, Shift,
         IdRegu,
         CreateBy, CheckBy1, CheckBy2, ApproveBy,
         JmlhAnggota, Hadir,
@@ -1086,7 +1085,6 @@ async function createInjectProduksi(payload, ctx) {
       )
       OUTPUT
         INSERTED.NoProduksi,
-        INSERTED.IdOperator,
         INSERTED.IdMesin,
         INSERTED.TglProduksi,
         INSERTED.Jam,
@@ -1110,7 +1108,7 @@ async function createInjectProduksi(payload, ctx) {
         INSERTED.HourEnd
       INTO @tmp
       VALUES (
-        @NoProduksi, @IdOperator, @IdMesin, @TglProduksi,
+        @NoProduksi, @IdMesin, @TglProduksi,
         @Jam, @Shift, @IdRegu,
         @CreateBy, @CheckBy1, @CheckBy2, @ApproveBy,
         @JmlhAnggota, @Hadir,
@@ -1146,6 +1144,7 @@ async function createInjectProduksi(payload, ctx) {
     return {
       header: {
         ...(insRes.recordset?.[0] || {}),
+        IdOperator: primaryOperatorId,
         IdOperators: operatorIds,
       },
       audit,
@@ -1251,14 +1250,6 @@ async function updateInjectProduksi(noProduksi, payload, ctx) {
     if (payload.idMesin !== undefined) {
       sets.push("IdMesin = @IdMesin");
       rqUpd.input("IdMesin", sql.Int, payload.idMesin);
-    }
-
-    if (hasIdOperators) {
-      sets.push("IdOperator = @IdOperator");
-      rqUpd.input("IdOperator", sql.Int, normalizedOperatorIds[0]);
-    } else if (payload.idOperator !== undefined) {
-      sets.push("IdOperator = @IdOperator");
-      rqUpd.input("IdOperator", sql.Int, payload.idOperator);
     }
 
     if (payload.idRegu !== undefined) {
@@ -1568,6 +1559,9 @@ async function updateInjectProduksi(noProduksi, payload, ctx) {
       } catch (_) {
         updatedHeader.IdOperators = [];
       }
+    }
+    if (updatedHeader) {
+      updatedHeader.IdOperator = updatedHeader.IdOperators?.[0] ?? null;
     }
 
     await tx.commit();
@@ -3117,8 +3111,7 @@ async function splitProduksiTime(selector, payload, ctx) {
         BeratProdukHasilTimbang decimal(18,2),
         HourStart time(7),
         HourEnd time(7),
-        IdRegu int,
-        IdOperator int
+        IdRegu int
       );
 
       INSERT INTO dbo.InjectProduksi_h (
@@ -3126,7 +3119,7 @@ async function splitProduksiTime(selector, payload, ctx) {
         CheckBy1, CheckBy2, ApproveBy, JmlhAnggota, Hadir,
         IdCetakan, IdWarna, EnableOffset, OffsetCurrent, OffsetNext,
         IdFurnitureMaterial, HourMeter, BeratProdukHasilTimbang,
-        HourStart, HourEnd, IdRegu, IdOperator
+        HourStart, HourEnd, IdRegu
       )
       OUTPUT
         INSERTED.NoProduksi, INSERTED.IdMesin, INSERTED.TglProduksi, INSERTED.Jam,
@@ -3134,7 +3127,7 @@ async function splitProduksiTime(selector, payload, ctx) {
         INSERTED.ApproveBy, INSERTED.JmlhAnggota, INSERTED.Hadir, INSERTED.IdCetakan,
         INSERTED.IdWarna, INSERTED.EnableOffset, INSERTED.OffsetCurrent, INSERTED.OffsetNext,
         INSERTED.IdFurnitureMaterial, INSERTED.HourMeter, INSERTED.BeratProdukHasilTimbang,
-        INSERTED.HourStart, INSERTED.HourEnd, INSERTED.IdRegu, INSERTED.IdOperator
+        INSERTED.HourStart, INSERTED.HourEnd, INSERTED.IdRegu
       INTO @out
       SELECT
         @NewNoProduksi,
@@ -3158,8 +3151,7 @@ async function splitProduksiTime(selector, payload, ctx) {
         h.BeratProdukHasilTimbang,
         CAST(@NewHourStart AS time(7)),
         CAST(@NewHourEnd AS time(7)),
-        h.IdRegu,
-        h.IdOperator
+        h.IdRegu
       FROM dbo.InjectProduksi_h h WITH (UPDLOCK, HOLDLOCK)
       WHERE h.NoProduksi = @SourceNoProduksi;
 
@@ -3220,6 +3212,7 @@ async function splitProduksiTime(selector, payload, ctx) {
       newHourEnd: hourEnd,
       header: {
         ...(insertRes.recordset?.[0] || {}),
+        IdOperator: idOperators[0] ?? null,
         IdOperators: [...new Set(idOperators)],
       },
     };
