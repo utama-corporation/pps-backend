@@ -11,6 +11,9 @@ const { generateLabelPdf } = require("../../../core/utils/pdf/label-generator");
 const {
   buildBrokerLabelHtml,
 } = require("../../../core/utils/pdf/templates/broker-label-pdf/broker-label-pdf");
+const {
+  buildBrokerQcLabelHtml,
+} = require("../../../core/utils/pdf/templates/broker-qc-label-pdf/broker-qc-label-pdf");
 
 // GET all header broker
 exports.getAll = async (req, res) => {
@@ -347,6 +350,57 @@ exports.generatePdf = async (req, res) => {
     return res.end(pdfBuffer);
   } catch (err) {
     console.error("Broker PDF Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, message: err.message });
+  }
+};
+
+exports.generateQcPdf = async (req, res) => {
+  try {
+    const NoBroker = String(req.params.nobroker || "").trim();
+    if (!NoBroker) {
+      return res
+        .status(400)
+        .json({ success: false, message: "nobroker wajib diisi" });
+    }
+
+    const row = await brokerService.getQcPdfByNoBroker(NoBroker);
+
+    const formatDecimal = (value) =>
+      value == null || Number.isNaN(Number(value))
+        ? "-"
+        : Number(value).toFixed(3);
+
+    const data = {
+      noLabel: row.NoBroker,
+      jenisPlastik: row.JenisPlastik,
+      density: formatDecimal(row.AvgDensity),
+      moisture: formatDecimal(row.AvgMoisture),
+      mfi: row.MFI == null ? "-" : String(row.MFI),
+      tanggal: (() => {
+        const d = new Date(row.DateCreate);
+        const dd = String(d.getDate()).padStart(2, "0");
+        const mmm = d.toLocaleDateString("id-ID", { month: "short" });
+        const yy = String(d.getFullYear()).slice(-2);
+        return `${dd}-${mmm}-${yy}`;
+      })(),
+      createBy: row.CreateBy || "-",
+      watermarkText: row.HasBeenPrinted > 0 ? `COPY ${row.HasBeenPrinted}` : "",
+    };
+
+    const pdfBuffer = await generateLabelPdf(data, buildBrokerQcLabelHtml, {
+      width: "80mm",
+    });
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="label-qc-${NoBroker}.pdf"`,
+      "Content-Length": pdfBuffer.length,
+    });
+
+    return res.end(pdfBuffer);
+  } catch (err) {
+    console.error("Broker QC PDF Error:", err);
     const status = err.statusCode || 500;
     return res.status(status).json({ success: false, message: err.message });
   }

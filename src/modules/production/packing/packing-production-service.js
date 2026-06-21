@@ -8,7 +8,7 @@ const {
   loadDocDateOnlyFromConfig,
 } = require("../../../core/shared/tutup-transaksi-guard");
 const sharedInputService = require("../../../core/shared/produksi-input.service");
-const { badReq, conflict } = require("../../../core/utils/http-error");
+const { badReq, conflict, notFound } = require("../../../core/utils/http-error");
 const { applyAuditContext } = require("../../../core/utils/db-audit-context");
 const {
   generateNextCode,
@@ -989,6 +989,359 @@ async function deleteInputsAndPartials(noProduksi, payload, ctx) {
   );
 }
 
+async function splitProduksiTime(selector, payload, ctx) {
+  const idMesin = Number(selector?.idMesin);
+  const tanggal = String(selector?.tanggal || "").trim();
+  if (!Number.isInteger(idMesin) || idMesin <= 0) {
+    throw badReq("idMesin harus integer positif");
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(tanggal)) {
+    throw badReq("tanggal harus format YYYY-MM-DD");
+  }
+
+  const hourStart = String(payload?.hourStart || "").trim();
+  const outputJenisId = Number(payload?.outputJenisId);
+  if (!hourStart) throw badReq("hourStart wajib diisi");
+  if (!Number.isInteger(outputJenisId) || outputJenisId <= 0) {
+    throw badReq("outputJenisId wajib integer positif");
+  }
+
+  const toSeconds = (hhmmss) => {
+    const match = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(
+      String(hhmmss || "").trim(),
+    );
+    if (!match) return null;
+    const hh = Number(match[1]);
+    const mm = Number(match[2]);
+    const ss = Number(match[3] || "0");
+    if (hh > 23 || mm > 59 || ss > 59) return null;
+    return hh * 3600 + mm * 60 + ss;
+  };
+  const normalizeTimeValue = (value) => {
+    if (value == null) return null;
+    if (value instanceof Date) {
+      const hh = String(value.getUTCHours()).padStart(2, "0");
+      const mm = String(value.getUTCMinutes()).padStart(2, "0");
+      const ss = String(value.getUTCSeconds()).padStart(2, "0");
+      return `${hh}:${mm}:${ss}`;
+    }
+    const raw = String(value).trim();
+    const match = /(\d{2}):(\d{2}):(\d{2})/.exec(raw);
+    return match ? `${match[1]}:${match[2]}:${match[3]}` : null;
+  };
+  const reqStartSec = toSeconds(hourStart);
+  if (reqStartSec == null) {
+    throw badReq("Format hourStart harus HH:mm atau HH:mm:ss");
+  }
+  const normalizeIntoShiftWindow = (sec, shiftStartSec, shiftEndSec) => {
+    const isOvernight = shiftStartSec > shiftEndSec;
+    if (!isOvernight) return sec;
+    return sec < shiftStartSec ? sec + 86400 : sec;
+  };
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const srcRes = await new sql.Request(tx)
+      .input("IdMesin", sql.Int, idMesin)
+      .input("Tanggal", sql.Date, tanggal).query(`
+        SELECT TOP 1 *
+        FROM dbo.PackingProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdMesin = @IdMesin
+          AND CONVERT(date, Tanggal) = @Tanggal
+        ORDER BY HourStart DESC, NoPacking DESC
+      `);
+
+    const src = srcRes.recordset?.[0];
+    if (!src) {
+      throw notFound(
+        `Produksi packing tidak ditemukan untuk idMesin ${idMesin} dan tanggal ${tanggal}`,
+      );
+    }
+    const sourceNo = String(src.NoPacking || "").trim();
+    if (!sourceNo) throw conflict("Data produksi terakhir tidak valid");
+    const srcShift = Number(src.Shift);
+    if (!Number.isInteger(srcShift) || srcShift <= 0) {
+      throw conflict(
+        `Data shift produksi sumber tidak valid pada ${sourceNo}.`,
+      );
+    }
+
+    const shiftRefRes = await new sql.Request(tx)
+      .input("Tanggal", sql.Date, tanggal)
+      .input("NoShift", sql.Int, srcShift).query(`
+        ;WITH LatestShiftSet AS (
+          SELECT TOP 1
+            h.IdShiftHourSet,
+            h.ValidFrmDate
+          FROM dbo.MstShiftHourSet h WITH (NOLOCK)
+          WHERE CONVERT(date, h.ValidFrmDate) <= @Tanggal
+          ORDER BY CONVERT(date, h.ValidFrmDate) DESC, h.IdShiftHourSet DESC
+        )
+        SELECT TOP 1
+          ls.IdShiftHourSet,
+          ls.ValidFrmDate,
+          d.NoShift,
+          CONVERT(varchar(8), d.HourStart, 108) AS HourStart,
+          CONVERT(varchar(8), d.HourEnd, 108) AS HourEnd
+        FROM LatestShiftSet ls
+        INNER JOIN dbo.MstShiftHourSet_d d WITH (NOLOCK)
+          ON d.IdShiftHourSet = ls.IdShiftHourSet
+        WHERE d.NoShift = @NoShift;
+      `);
+
+    const shiftRef = shiftRefRes.recordset?.[0];
+    if (!shiftRef) {
+      throw notFound(
+        `Master shift tidak ditemukan untuk tanggal ${tanggal} dan shift ${srcShift}.`,
+      );
+    }
+
+    const shiftStartSec = toSeconds(shiftRef.HourStart);
+    const hourEnd = String(shiftRef.HourEnd || "").trim();
+    const shiftEndSec = toSeconds(hourEnd);
+    if (shiftStartSec == null || shiftEndSec == null) {
+      throw conflict("Master shift memiliki HourStart/HourEnd tidak valid.");
+    }
+
+    const reqStartInWindow = normalizeIntoShiftWindow(
+      reqStartSec,
+      shiftStartSec,
+      shiftEndSec,
+    );
+    const reqEndInWindow = normalizeIntoShiftWindow(
+      shiftEndSec,
+      shiftStartSec,
+      shiftEndSec,
+    );
+    const shiftEndBound =
+      shiftStartSec > shiftEndSec ? shiftEndSec + 86400 : shiftEndSec;
+
+    if (
+      reqStartInWindow < shiftStartSec ||
+      reqStartInWindow > shiftEndBound ||
+      reqEndInWindow < shiftStartSec ||
+      reqEndInWindow > shiftEndBound
+    ) {
+      throw badReq(
+        `Range jam harus berada dalam batas shift ${srcShift} (${shiftRef.HourStart}-${shiftRef.HourEnd}) untuk tanggal ${tanggal}.`,
+      );
+    }
+    if (reqEndInWindow <= reqStartInWindow) {
+      throw badReq(
+        "hourEnd harus lebih besar dari hourStart dalam rentang shift yang sama",
+      );
+    }
+
+    const srcHourStartStr = normalizeTimeValue(src.HourStart);
+    const srcStartSec = toSeconds(srcHourStartStr);
+    const srcHourEndStr = normalizeTimeValue(src.HourEnd);
+    const srcEndSec = toSeconds(srcHourEndStr);
+    if (srcStartSec == null || srcEndSec == null) {
+      throw conflict(
+        `Data jam produksi sumber tidak valid pada ${sourceNo} (HourStart/HourEnd).`,
+      );
+    }
+    const reqStartInSource = normalizeIntoShiftWindow(
+      reqStartSec,
+      srcStartSec,
+      srcEndSec,
+    );
+    if (reqStartInSource <= srcStartSec) {
+      throw badReq(`Jam Mulai harus lebih besar dari ${srcHourStartStr}.`);
+    }
+
+    const duplicateRes = await new sql.Request(tx)
+      .input("IdMesin", sql.Int, idMesin)
+      .input("Tanggal", sql.Date, tanggal)
+      .input("HourStart", sql.VarChar(20), hourStart)
+      .input("HourEnd", sql.VarChar(20), hourEnd).query(`
+        SELECT TOP 1 NoPacking
+        FROM dbo.PackingProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE IdMesin = @IdMesin
+          AND CONVERT(date, Tanggal) = @Tanggal
+          AND HourStart = CAST(@HourStart AS time(7))
+          AND HourEnd = CAST(@HourEnd AS time(7))
+        ORDER BY NoPacking DESC
+      `);
+    if (duplicateRes.recordset?.length) {
+      const existingNo = duplicateRes.recordset[0].NoPacking;
+      throw conflict(
+        `Rentang waktu ${hourStart}-${hourEnd} sudah ada pada produksi ${existingNo}.`,
+      );
+    }
+
+    const docDateOnly = toDateOnly(src.Tanggal);
+    await assertNotLocked({
+      date: docDateOnly,
+      runner: tx,
+      action: `split time Packing ${sourceNo}`,
+      useLock: true,
+    });
+
+    const gen = async () =>
+      generateNextCode(tx, {
+        tableName: "dbo.PackingProduksi_h",
+        columnName: "NoPacking",
+        prefix: "BD.",
+        width: 10,
+      });
+
+    let newNoPacking = await gen();
+    const exists = await new sql.Request(tx)
+      .input("NoPacking", sql.VarChar(50), newNoPacking)
+      .query(`
+        SELECT 1 FROM dbo.PackingProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoPacking = @NoPacking
+      `);
+    if (exists.recordset.length > 0) {
+      const retry = await gen();
+      const exists2 = await new sql.Request(tx)
+        .input("NoPacking", sql.VarChar(50), retry)
+        .query(`
+          SELECT 1 FROM dbo.PackingProduksi_h WITH (UPDLOCK, HOLDLOCK)
+          WHERE NoPacking = @NoPacking
+        `);
+      if (exists2.recordset.length > 0) {
+        throw conflict("Gagal generate NoPacking unik, coba lagi.");
+      }
+      newNoPacking = retry;
+    }
+
+    const insReq = new sql.Request(tx);
+    insReq
+      .input("NewNoPacking", sql.VarChar(50), newNoPacking)
+      .input("SourceNoPacking", sql.VarChar(50), sourceNo)
+      .input("NewHourStart", sql.VarChar(20), hourStart)
+      .input("NewHourEnd", sql.VarChar(20), hourEnd)
+      .input("OutputJenisId", sql.Int, outputJenisId);
+
+    const insertRes = await insReq.query(`
+      DECLARE @out TABLE (
+        NoPacking varchar(50),
+        Tanggal date,
+        IdMesin int,
+        IdOperator int,
+        OutputJenisId int,
+        IdRegu int,
+        Shift int,
+        JamKerja int,
+        CreateBy varchar(100),
+        CheckBy1 varchar(100),
+        CheckBy2 varchar(100),
+        ApproveBy varchar(100),
+        HourMeter decimal(18,2),
+        HourStart time(7),
+        HourEnd time(7)
+      );
+
+      INSERT INTO dbo.PackingProduksi_h (
+        NoPacking, Tanggal, IdMesin, IdOperator, OutputJenisId, IdRegu,
+        Shift, JamKerja, CreateBy, CheckBy1, CheckBy2, ApproveBy,
+        HourMeter, HourStart, HourEnd
+      )
+      OUTPUT
+        INSERTED.NoPacking, INSERTED.Tanggal, INSERTED.IdMesin, INSERTED.IdOperator,
+        INSERTED.OutputJenisId, INSERTED.IdRegu, INSERTED.Shift, INSERTED.JamKerja,
+        INSERTED.CreateBy, INSERTED.CheckBy1, INSERTED.CheckBy2, INSERTED.ApproveBy,
+        INSERTED.HourMeter, INSERTED.HourStart, INSERTED.HourEnd
+      INTO @out
+      SELECT
+        @NewNoPacking,
+        h.Tanggal,
+        h.IdMesin,
+        h.IdOperator,
+        @OutputJenisId,
+        h.IdRegu,
+        h.Shift,
+        h.JamKerja,
+        h.CreateBy,
+        h.CheckBy1,
+        h.CheckBy2,
+        h.ApproveBy,
+        h.HourMeter,
+        CAST(@NewHourStart AS time(7)),
+        CAST(@NewHourEnd AS time(7))
+      FROM dbo.PackingProduksi_h h WITH (UPDLOCK, HOLDLOCK)
+      WHERE h.NoPacking = @SourceNoPacking;
+
+      SELECT
+        o.*,
+        bj.NamaBJ AS OutputJenisNama
+      FROM @out o
+      LEFT JOIN dbo.MstBarangJadi bj WITH (NOLOCK)
+        ON bj.IdBJ = o.OutputJenisId;
+    `);
+
+    await new sql.Request(tx)
+      .input("SourceNoPacking", sql.VarChar(50), sourceNo)
+      .input("NewHourStart", sql.VarChar(20), hourStart)
+      .query(`
+        UPDATE dbo.PackingProduksi_h
+        SET HourEnd = CAST(@NewHourStart AS time(7))
+        WHERE NoPacking = @SourceNoPacking
+      `);
+
+    await new sql.Request(tx)
+      .input("SourceNoPacking", sql.VarChar(50), sourceNo)
+      .input("NewNoPacking", sql.VarChar(50), newNoPacking)
+      .query(`
+        INSERT INTO dbo.PackingProduksiOperator_d (NoPacking, IdOperator)
+        SELECT @NewNoPacking, od.IdOperator
+        FROM dbo.PackingProduksiOperator_d od
+        WHERE od.NoPacking = @SourceNoPacking;
+      `);
+
+    const opRes = await new sql.Request(tx)
+      .input("NoPacking", sql.VarChar(50), newNoPacking)
+      .query(`
+        SELECT IdOperator
+        FROM dbo.PackingProduksiOperator_d
+        WHERE NoPacking = @NoPacking
+        ORDER BY IdOperator;
+      `);
+    const idOperators = (opRes.recordset || [])
+      .map((row) => Number(row.IdOperator))
+      .filter((value) => Number.isFinite(value))
+      .map((value) => Math.trunc(value));
+
+    await tx.commit();
+    return {
+      idMesin,
+      tanggal,
+      sourceNoPacking: sourceNo,
+      newNoPacking,
+      sourceHourEndUpdatedTo: hourStart,
+      newHourStart: hourStart,
+      newHourEnd: hourEnd,
+      header: {
+        ...(insertRes.recordset?.[0] || {}),
+        IdOperators: [...new Set(idOperators)],
+      },
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
+}
+
 module.exports = {
   getAllProduksi,
   getProduksiByDate,
@@ -999,4 +1352,5 @@ module.exports = {
   fetchOutputs,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
+  splitProduksiTime,
 };

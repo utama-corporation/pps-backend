@@ -672,6 +672,112 @@ async function deleteInputsAndPartials(req, res) {
   }
 }
 
+async function splitProduksiTime(req, res) {
+  const normalizeSqlTimeToHms = (value) => {
+    if (value == null) return value;
+    if (value instanceof Date) {
+      const hh = String(value.getUTCHours()).padStart(2, "0");
+      const mm = String(value.getUTCMinutes()).padStart(2, "0");
+      const ss = String(value.getUTCSeconds()).padStart(2, "0");
+      return `${hh}:${mm}:${ss}`;
+    }
+    const raw = String(value).trim();
+    const match = /(\d{2}):(\d{2}):(\d{2})/.exec(raw);
+    return match ? `${match[1]}:${match[2]}:${match[3]}` : raw;
+  };
+
+  const idMesinRaw = String(req.params.idMesin || "").trim();
+  const tanggal = String(req.params.tanggal || "").trim();
+
+  const idMesin = Number(idMesinRaw);
+  if (!Number.isInteger(idMesin) || idMesin <= 0) {
+    return res
+      .status(400)
+      .json({ success: false, message: "idMesin harus integer positif" });
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(tanggal)) {
+    return res.status(400).json({
+      success: false,
+      message: "tanggal harus format YYYY-MM-DD",
+    });
+  }
+
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const hourStart = String(body.hourStart || "").trim();
+  const outputJenisId = Number(body.outputJenisId);
+
+  if (!hourStart) {
+    return res.status(400).json({
+      success: false,
+      message: "hourStart wajib diisi",
+    });
+  }
+  const timeRegex = /^\d{2}:\d{2}(:\d{2})?$/;
+  if (!timeRegex.test(hourStart)) {
+    return res.status(400).json({
+      success: false,
+      message: "Format hourStart harus HH:mm atau HH:mm:ss",
+    });
+  }
+  if (!Number.isInteger(outputJenisId) || outputJenisId <= 0) {
+    return res.status(400).json({
+      success: false,
+      message: "outputJenisId wajib integer positif",
+    });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res
+      .status(401)
+      .json({ success: false, message: "Unauthorized (idUsername missing)" });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const ctx = { actorId, actorUsername, requestId };
+    const result = await packingService.splitProduksiTime(
+      { idMesin, tanggal },
+      { hourStart, outputJenisId },
+      ctx,
+    );
+
+    const header = result?.header
+      ? {
+          ...result.header,
+          HourStart: normalizeSqlTimeToHms(result.header.HourStart),
+          HourEnd: normalizeSqlTimeToHms(result.header.HourEnd),
+        }
+      : result?.header;
+
+    return res.status(201).json({
+      success: true,
+      message: "Produksi berhasil di-split",
+      data: {
+        ...result,
+        header,
+      },
+      meta: { audit: { actorId, actorUsername, requestId } },
+    });
+  } catch (err) {
+    console.error("[packing.splitProduksiTime]", err);
+    const status = err.statusCode || err.status || 500;
+    return res.status(status).json({
+      success: false,
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      },
+    });
+  }
+}
+
 module.exports = {
   getAllProduksi,
   getProduksiByDate,
@@ -682,4 +788,5 @@ module.exports = {
   getOutputsByNoPacking,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
+  splitProduksiTime,
 };

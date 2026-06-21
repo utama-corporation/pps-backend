@@ -65,6 +65,8 @@ const auditRoutes = require("./modules/audit/audit-route");
 const updateRoutes = require("./modules/update/update-routes");
 const printLockRoutes = require("./modules/label/print-lock/print-lock-routes");
 const mappingRoutes = require("./modules/mapping/mapping-routes");
+const masterJenisRoutes = require("./modules/master-jenis/master-jenis-routes");
+const masterKategoriRoutes = require("./modules/master-kategori/master-kategori-routes");
 
 const app = express();
 
@@ -96,6 +98,8 @@ app.use("/api/", labelWashingRoutes);
 app.use("/api/plastic-type", plasticTypeRoutes);
 app.use("/api/blok", blokRoutes);
 app.use("/api/mapping", mappingRoutes);
+app.use("/api", masterJenisRoutes);
+app.use("/api", masterKategoriRoutes);
 app.use("/api/", labelRoutes);
 app.use("/api/production", productionRoutes);
 app.use("/api/bongkar-susun", bongkarSusunRoutes);

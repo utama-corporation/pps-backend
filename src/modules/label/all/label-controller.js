@@ -81,7 +81,42 @@ async function updateLabelLocationHandler(req, res) {
 }
 
 
+async function getAllLabelsV2Handler(req, res) {
+  const { username } = req;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 50;
+  const kategori = req.query.kategori || null;
+  const idlokasi = req.query.idlokasi || null;
+  const blok = req.query.blok || null;
+
+  console.log("Fetching all labels v2 | Username:", username, "| Page:", page, "| Blok:", blok);
+
+  try {
+    const result = await labelService.getAllLabelsV2(page, limit, kategori, idlokasi, blok);
+
+    return res.json({
+      success: true,
+      message: result.data && result.data.length > 0
+        ? "Data label berhasil diambil"
+        : "Data label tidak ditemukan",
+      totalData: result.total,
+      currentPage: result.page,
+      totalPages: result.totalPages,
+      perPage: result.limit,
+      data: result.data || [],
+    });
+  } catch (err) {
+    console.error("Error fetching labels v2:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Terjadi kesalahan server",
+      error: err.message,
+    });
+  }
+}
+
 module.exports = {
   getAllLabelsHandler,
+  getAllLabelsV2Handler,
   updateLabelLocationHandler
 };

@@ -22,6 +22,18 @@ router.get(
 );
 
 router.get(
+  "/inject/pcs-per-label/:noProduksi",
+  verifyToken,
+  injectProduksiController.getPcsPerLabelByNoProduksi,
+);
+
+router.get(
+  "/inject/batch/:noProduksi",
+  verifyToken,
+  injectProduksiController.getBatchByNoProduksi,
+);
+
+router.get(
   "/inject/:noProduksi/formula-inputs",
   verifyToken,
   injectProduksiController.getFormulaInputsByNoProduksi,
@@ -42,6 +54,8 @@ router.get(
 );
 
 router.post("/inject", verifyToken, injectProduksiController.createProduksi);
+
+router.post("/inject/batch", verifyToken, injectProduksiController.submitBatch);
 
 router.post(
   "/inject/split-time/:idMesin/:tanggal",
@@ -82,7 +96,7 @@ router.get(
 router.get(
   "/inject/:noProduksi/outputs/furniture-wip",
   verifyToken,
-  injectProduksiController.getOutputsByNoProduksi,
+  injectProduksiController.getOutputsFurnitureWipByNoProduksi,
 );
 
 router.get(

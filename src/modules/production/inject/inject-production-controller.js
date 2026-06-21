@@ -25,23 +25,49 @@ async function getAllProduksi(req, res) {
   const pageSizeRaw = parseInt(req.query.pageSize, 10) || 20;
   const pageSize = Math.min(Math.max(pageSizeRaw, 1), 100);
 
-  const idMesin =
-    req.query.idMesin != null && req.query.idMesin !== ""
-      ? parseInt(req.query.idMesin, 10) || null
-      : null;
-  const tanggal =
-    typeof req.query.tanggal === "string" && req.query.tanggal
-      ? req.query.tanggal
-      : null;
-  const shift =
-    req.query.shift != null && req.query.shift !== ""
-      ? parseInt(req.query.shift, 10) || null
-      : null;
-
   const search =
     (typeof req.query.noProduksi === "string" && req.query.noProduksi) ||
     (typeof req.query.search === "string" && req.query.search) ||
     "";
+
+  const idMesinRaw =
+    typeof req.query.idMesin === "string" ? req.query.idMesin.trim() : "";
+  const tanggalRaw =
+    typeof req.query.tanggal === "string" ? req.query.tanggal.trim() : "";
+  const shiftRaw =
+    typeof req.query.shift === "string" ? req.query.shift.trim() : "";
+
+  let idMesin = null;
+  if (idMesinRaw) {
+    const parsedIdMesin = Number(idMesinRaw);
+    if (!Number.isInteger(parsedIdMesin) || parsedIdMesin <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Query param idMesin harus integer positif",
+      });
+    }
+    idMesin = parsedIdMesin;
+  }
+
+  const tanggalRegex = /^\d{4}-\d{2}-\d{2}$/;
+  if (tanggalRaw && !tanggalRegex.test(tanggalRaw)) {
+    return res.status(400).json({
+      success: false,
+      message: "Query param tanggal harus format YYYY-MM-DD",
+    });
+  }
+
+  let shift = null;
+  if (shiftRaw) {
+    const parsedShift = Number(shiftRaw);
+    if (!Number.isInteger(parsedShift) || parsedShift <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Query param shift harus integer positif",
+      });
+    }
+    shift = parsedShift;
+  }
 
   try {
     const { data, total } = await injectProduksiService.getAllProduksi(
@@ -49,7 +75,7 @@ async function getAllProduksi(req, res) {
       pageSize,
       search,
       idMesin,
-      tanggal,
+      tanggalRaw || null,
       shift,
     );
 
@@ -66,7 +92,7 @@ async function getAllProduksi(req, res) {
         hasPrevPage: page > 1,
         search,
         idMesin,
-        tanggal,
+        tanggal: tanggalRaw || null,
         shift,
       },
     });
@@ -222,6 +248,131 @@ async function getPackingByNoProduksi(req, res) {
       success: false,
       message: "Internal Server Error",
       error: error.message,
+    });
+  }
+}
+
+async function getPcsPerLabelByNoProduksi(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+
+  try {
+    const info =
+      await injectProduksiService.getInjectPcsPerLabelByNoProduksi(noProduksi);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        idFurnitureWIP: info.idFurnitureWIP,
+        namaBarang: info.namaBarang,
+        pcsPerLabel: info.pcsPerLabel,
+      },
+    });
+  } catch (error) {
+    console.error("[inject.getPcsPerLabelByNoProduksi]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function getBatchByNoProduksi(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+
+  try {
+    const data = await injectProduksiService.getInjectBatchByNoProduksi(noProduksi);
+
+    return res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error("[inject.getBatchByNoProduksi]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function submitBatch(req, res) {
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const {
+    actorId: _clientActorId,
+    actorUsername: _clientActorUsername,
+    actor: _clientActor,
+    requestId: _clientRequestId,
+    ...payload
+  } = body;
+
+  payload.noProduksi = String(payload.noProduksi || "").trim();
+  payload.hourStart = normalizeTime(payload.hourStart);
+  payload.carryOverIn = toInt(payload.carryOverIn);
+  payload.pcsInput = toInt(payload.pcsInput);
+  payload.carryOverOut = toInt(payload.carryOverOut);
+  payload.berat = toFloat(payload.berat);
+  payload.cycleTime = toFloat(payload.cycleTime);
+  payload.counter = toInt(payload.counter);
+  payload.idJenis =
+    payload.idJenis === null || payload.idJenis === undefined || payload.idJenis === ""
+      ? null
+      : toInt(payload.idJenis);
+
+  if (payload.bonggolan && typeof payload.bonggolan === "object") {
+    payload.bonggolan = {
+      idBonggolan: toInt(payload.bonggolan.idBonggolan),
+      berat: toFloat(payload.bonggolan.berat),
+    };
+  }
+
+  if (payload.reject && typeof payload.reject === "object") {
+    payload.reject = {
+      idReject: toInt(payload.reject.idReject),
+      berat: toFloat(payload.reject.berat),
+    };
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res
+      .status(401)
+      .json({ success: false, message: "Unauthorized (idUsername missing)" });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await injectProduksiService.submitInjectBatch(payload, {
+      actorId,
+      actorUsername,
+      requestId,
+    });
+
+    return res.status(201).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error("[inject.submitBatch]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
     });
   }
 }
@@ -1204,6 +1355,8 @@ module.exports = {
   getProduksiByDate,
   getFurnitureWipByNoProduksi,
   getPackingByNoProduksi,
+  getPcsPerLabelByNoProduksi,
+  getBatchByNoProduksi,
   getFormulaInputsByNoProduksi,
   createProduksi,
   updateProduksi,
@@ -1216,6 +1369,7 @@ module.exports = {
   getOutputsRejectByNoProduksi,
   validateLabel,
   validateInputLabelForNoProduksi,
+  submitBatch,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
   splitProduksiTime,

@@ -1,0 +1,125 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        width: 80mm;
+        font-family: Arial, sans-serif;
+        font-size: 9pt;
+        background: white;
+      }
+
+      .label {
+        width: 80mm;
+        padding: 3mm 4mm;
+      }
+
+      .label-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        border-bottom: 1.5px solid #000;
+        padding-bottom: 1.5mm;
+        margin-bottom: 2mm;
+      }
+
+      .label-header .title,
+      .label-header .no-label {
+        font-size: 12pt;
+        font-weight: bold;
+      }
+
+      .jenis {
+        font-size: 9pt;
+        font-weight: bold;
+        padding-bottom: 1.5mm;
+        margin-bottom: 1.5mm;
+        display: block;
+        width: 100%;
+        position: relative;
+        text-align: center;
+        border-bottom: 1px solid #000;
+      }
+
+      .watermark {
+        position: absolute;
+        top: 50%;
+        right: 0;
+        transform: translateY(-50%);
+        font-size: 16pt;
+        font-weight: 900;
+        color: rgba(0, 0, 0, 0.3);
+        letter-spacing: 2px;
+        white-space: nowrap;
+        z-index: 0;
+      }
+
+      .jenis-text {
+        position: relative;
+        z-index: 1;
+      }
+
+      .label-body {
+        display: flex;
+        gap: 2mm;
+      }
+
+      .metric {
+        flex: 1;
+        padding: 2mm 1.5mm;
+        text-align: center;
+      }
+
+      .metric + .metric {
+        border-left: 1px solid #000;
+      }
+
+      .metric-label {
+        font-size: 8pt;
+        font-weight: bold;
+        margin-bottom: 1mm;
+      }
+
+      .metric-value {
+        font-size: 11pt;
+        font-weight: bold;
+        color: #222;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="label">
+      <div class="label-header">
+        <span class="title">BROKER QC</span>
+        <span class="no-label">({{noLabel}})</span>
+      </div>
+
+      <div class="jenis">
+        <span class="jenis-text">{{jenisPlastik}}</span>
+        <span class="watermark">{{watermarkText}}</span>
+      </div>
+
+      <div class="label-body">
+        <div class="metric">
+          <div class="metric-label">Density</div>
+          <div class="metric-value">{{density}}</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Moisture</div>
+          <div class="metric-value">{{moisture}}</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">MFI</div>
+          <div class="metric-value">{{mfi}}</div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

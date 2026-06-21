@@ -168,7 +168,7 @@ exports.getByNoBroker = async (NoBroker) => {
         SELECT
           A.NoBroker                                        AS NoBroker_Pallet,
           A.DateCreate                                      AS DateCreate_Pallet,
-          B.Jenis                                           AS JenisPlastik_Pallet,
+          COALESCE(B.Nama, '-')                             AS JenisPlastik_Pallet,
           C.NamaWarehouse,
           CASE
             WHEN E.NoProduksi IS NULL
@@ -181,8 +181,8 @@ exports.getByNoBroker = async (NoBroker) => {
           F.Shift,
           A.HasBeenPrinted
         FROM Broker_h A
-        INNER JOIN MstJenisPlastik          B ON B.IdJenisPlastik = A.IdJenisPlastik
-        INNER JOIN MstWarehouse             C ON C.IdWarehouse    = A.IdWarehouse
+        LEFT  JOIN MstBroker                B ON B.IdBroker       = A.IdJenisPlastik
+        LEFT  JOIN MstWarehouse             C ON C.IdWarehouse    = A.IdWarehouse
         INNER JOIN Broker_d                 D ON D.NoBroker       = A.NoBroker
         LEFT  JOIN BrokerProduksiOutput     E ON E.NoBroker       = A.NoBroker
                                              AND E.NoSak          = D.NoSak
@@ -193,7 +193,7 @@ exports.getByNoBroker = async (NoBroker) => {
         WHERE A.NoBroker = @NoBroker
           AND D.DateUsage IS NULL
         GROUP BY
-          A.NoBroker, A.DateCreate, B.Jenis, C.NamaWarehouse,
+          A.NoBroker, A.DateCreate, B.Nama, C.NamaWarehouse,
           E.NoProduksi, G.NamaMesin, H.NoBongkarSusun,
           A.CreateBy, F.Shift, A.HasBeenPrinted
       ),
@@ -240,6 +240,59 @@ exports.getByNoBroker = async (NoBroker) => {
     TotalBerat: row.JmllhBerat_Pallet,
     CreateBy: row.CreateBy,
     Shift: row.Shift,
+    HasBeenPrinted: row.HasBeenPrinted,
+  };
+};
+
+exports.getQcPdfByNoBroker = async (NoBroker) => {
+  const pool = await poolPromise;
+  const result = await pool
+    .request()
+    .input("NoBroker", sql.VarChar(30), NoBroker).query(`
+      SELECT TOP 1
+        h.NoBroker,
+        h.DateCreate,
+        COALESCE(jp.Jenis, mb.Nama, '-') AS JenisPlastik,
+        CAST(
+          (
+            ISNULL(CAST(h.Density AS decimal(18, 6)), 0) +
+            ISNULL(CAST(h.Density2 AS decimal(18, 6)), 0) +
+            ISNULL(CAST(h.Density3 AS decimal(18, 6)), 0)
+          ) / 3.0
+          AS decimal(10, 3)
+        ) AS AvgDensity,
+        CAST(
+          (
+            ISNULL(CAST(h.Moisture AS decimal(18, 6)), 0) +
+            ISNULL(CAST(h.Moisture2 AS decimal(18, 6)), 0) +
+            ISNULL(CAST(h.Moisture3 AS decimal(18, 6)), 0)
+          ) / 3.0
+          AS decimal(10, 3)
+        ) AS AvgMoisture,
+        h.MFI,
+        h.CreateBy,
+        h.HasBeenPrinted
+      FROM dbo.Broker_h h
+      LEFT JOIN dbo.MstJenisPlastik jp ON jp.IdJenisPlastik = h.IdJenisPlastik
+      LEFT JOIN dbo.MstBroker mb ON mb.IdBroker = h.IdJenisPlastik
+      WHERE h.NoBroker = @NoBroker
+    `);
+
+  const row = result.recordset?.[0] || null;
+  if (!row) {
+    const e = new Error(`NoBroker ${NoBroker} tidak ditemukan`);
+    e.statusCode = 404;
+    throw e;
+  }
+
+  return {
+    NoBroker: row.NoBroker,
+    DateCreate: row.DateCreate,
+    JenisPlastik: row.JenisPlastik,
+    AvgDensity: row.AvgDensity,
+    AvgMoisture: row.AvgMoisture,
+    MFI: row.MFI,
+    CreateBy: row.CreateBy,
     HasBeenPrinted: row.HasBeenPrinted,
   };
 };

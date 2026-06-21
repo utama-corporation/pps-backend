@@ -85,4 +85,10 @@ router.get(
   ctrl.generatePdf,
 );
 
+router.get(
+  "/labels/broker/:nobroker/qc/pdf",
+  requirePermission("label_broker:read"),
+  ctrl.generateQcPdf,
+);
+
 module.exports = router;

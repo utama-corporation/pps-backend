@@ -493,6 +493,7 @@ ${lokasiWhere};
 function getLabelColumn(prefix) {
   switch (prefix) {
     case "A": // handled khusus (gabungan NoBahanBaku-NoPallet)
+    case "AB":
       return null;
     case "B":
       return "NoWashing";
@@ -525,6 +526,7 @@ function getAvailabilityCheckSQL(prefix, tableName) {
   switch (prefix) {
     // DETAIL-BASED: valid bila MASIH ADA detail DateUsage IS NULL
     case "A": // BahanBakuPallet_h + BahanBaku_d
+    case "AB":
       return `
         SELECT TOP 1 
           p.Blok, p.IdLokasi,
@@ -680,6 +682,7 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   let tableName = "";
   switch (prefix) {
     case "A":
+    case "AB":
       tableName = "dbo.BahanBakuPallet_h";
       break;
     case "B":
@@ -717,7 +720,7 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   }
 
   const labelCol =
-    prefix === "A"
+    prefix === "A" || prefix === "AB"
       ? "(CAST(NoBahanBaku AS NVARCHAR(50)) + '-' + CAST(NoPallet AS NVARCHAR(10)))"
       : getLabelColumn(prefix); // pastikan helper ini ada
 
@@ -802,4 +805,222 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   };
 }
 
-module.exports = { getAllLabels, updateLabelLocation };
+async function getAllLabelsV2(page = 1, limit = 50, kategori = null, idlokasi = null, blok = null) {
+  const pool = await poolPromise;
+  const offset = (page - 1) * limit;
+
+  const katResult = await pool.request().query(`
+    SELECT k.KodeKategori, k.NamaKategori, k.PrefixLabel,
+           k.NamaTableJenis, k.NamaKolomIdJenis, k.NamaKolomNamaJenis,
+           k.NamaTableLabel, k.NamaKolomNoLabel, k.NamaKolomIdJenisDiLabel,
+           u.NamaUOM
+    FROM [dbo].[MstKategori] k
+    LEFT JOIN [dbo].[MstUOM] u ON u.IdUOM = k.IdUOM
+    WHERE ISNULL(k.Enable, 1) = 1
+  `);
+  const kategoriList = katResult.recordset || [];
+
+  const isSafe = (v) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(v || "").trim());
+
+  function escapeId(v) {
+    const s = String(v || "").trim();
+    return isSafe(s) ? s : null;
+  }
+
+  const allSubqueries = [];
+
+  for (const kat of kategoriList) {
+    if (kategori && kat.KodeKategori !== kategori) continue;
+
+    const tbl = escapeId(kat.NamaTableLabel);
+    const colNo = escapeId(kat.NamaKolomNoLabel);
+    const prefix = (kat.PrefixLabel || "").replace(".", "").trim();
+    if (!tbl || !colNo) continue;
+
+    const kode = kat.KodeKategori;
+    const q = (s) => String(s ?? "").replace(/'/g, "''");
+
+    const jenisTbl = escapeId(kat.NamaTableJenis);
+    const jenisIdCol = escapeId(kat.NamaKolomIdJenis);
+    const jenisNameCol = escapeId(kat.NamaKolomNamaJenis);
+    const jenisIdDiLabel = escapeId(kat.NamaKolomIdJenisDiLabel);
+    const hasJenis = Boolean(jenisTbl && jenisIdCol && jenisNameCol && jenisIdDiLabel);
+
+    function jenisJoin(alias) {
+      if (!hasJenis) return { join: "", select: ", NULL AS IdJenis, NULL AS NamaJenis" };
+      return {
+        join: ` LEFT JOIN [dbo].[${jenisTbl}] j ON j.${jenisIdCol} = ${alias}.${jenisIdDiLabel}`,
+        select: `, ${alias}.${jenisIdDiLabel} AS IdJenis, j.${jenisNameCol} AS NamaJenis`,
+      };
+    }
+
+    let sub;
+
+    if (kode === "bahanbaku") {
+      const j = jenisJoin("p");
+      sub = `
+        SELECT
+          CAST(p.${colNo} AS NVARCHAR(50)) + '-' + CAST(p.NoPallet AS NVARCHAR(10)) AS LabelCode,
+          h.DateCreate, p.Blok AS Blok, p.IdLokasi AS IdLokasi,
+          CAST(N'${q(prefix)}' AS NVARCHAR(10)) AS Prefix,
+          CAST(N'${q(kat.NamaKategori)}' AS NVARCHAR(100)) AS Kategori,
+          CAST(N'${q(kat.NamaUOM)}' AS NVARCHAR(10)) AS NamaUOM,
+          ISNULL(bbAgg.TotalPcs, 0) AS Qty,
+          ISNULL(bbAgg.TotalBerat, 0) AS Berat${j.select}
+        FROM [dbo].[${tbl}] p
+        JOIN [dbo].[BahanBaku_h] h ON h.NoBahanBaku = p.NoBahanBaku
+        LEFT JOIN (
+          SELECT NoBahanBaku, NoPallet, COUNT(*) AS TotalPcs, SUM(ISNULL(Berat, 0)) AS TotalBerat
+          FROM [dbo].[BahanBaku_d] WHERE DateUsage IS NULL
+          GROUP BY NoBahanBaku, NoPallet
+        ) bbAgg ON bbAgg.NoBahanBaku = p.NoBahanBaku AND bbAgg.NoPallet = p.NoPallet${j.join}
+        WHERE EXISTS (SELECT 1 FROM [dbo].[BahanBaku_d] d WHERE d.NoBahanBaku = p.NoBahanBaku AND d.NoPallet = p.NoPallet AND d.DateUsage IS NULL)`;
+    } else if (["washing", "broker", "mixer"].includes(kode)) {
+      const detailTbl = tbl.replace(/_h$/, "_d");
+      const detailTblSafe = escapeId(detailTbl);
+      if (!detailTblSafe) continue;
+      const j = jenisJoin("h");
+      sub = `
+        SELECT
+          h.${colNo} AS LabelCode,
+          h.DateCreate, h.Blok AS Blok, h.IdLokasi AS IdLokasi,
+          CAST(N'${q(prefix)}' AS NVARCHAR(10)) AS Prefix,
+          CAST(N'${q(kat.NamaKategori)}' AS NVARCHAR(100)) AS Kategori,
+          CAST(N'${q(kat.NamaUOM)}' AS NVARCHAR(10)) AS NamaUOM,
+          ISNULL(agg.TotalPcs, 0) AS Qty,
+          ISNULL(agg.TotalBerat, 0) AS Berat${j.select}
+        FROM [dbo].[${tbl}] h
+        LEFT JOIN (
+          SELECT ${colNo}, COUNT(*) AS TotalPcs, SUM(ISNULL(Berat, 0)) AS TotalBerat
+          FROM [dbo].[${detailTblSafe}] WHERE DateUsage IS NULL
+          GROUP BY ${colNo}
+        ) agg ON agg.${colNo} = h.${colNo}${j.join}
+        WHERE EXISTS (SELECT 1 FROM [dbo].[${detailTblSafe}] d WHERE d.${colNo} = h.${colNo} AND d.DateUsage IS NULL)`;
+    } else if (kode === "gilingan") {
+      const j = jenisJoin("h");
+      sub = `
+        SELECT
+          h.${colNo} AS LabelCode,
+          h.DateCreate, h.Blok AS Blok, h.IdLokasi AS IdLokasi,
+          CAST(N'${q(prefix)}' AS NVARCHAR(10)) AS Prefix,
+          CAST(N'${q(kat.NamaKategori)}' AS NVARCHAR(100)) AS Kategori,
+          CAST(N'${q(kat.NamaUOM)}' AS NVARCHAR(10)) AS NamaUOM,
+          ISNULL(agg.TotalPcs, 0) AS Qty,
+          ISNULL(agg.TotalBerat, 0) AS Berat${j.select}
+        FROM [dbo].[${tbl}] h
+        LEFT JOIN (
+          SELECT ${colNo}, COUNT(*) AS TotalPcs, SUM(ISNULL(Berat, 0)) AS TotalBerat
+          FROM [dbo].[${tbl}] WHERE DateUsage IS NULL
+          GROUP BY ${colNo}
+        ) agg ON agg.${colNo} = h.${colNo}${j.join}
+        WHERE h.DateUsage IS NULL`;
+    } else if (["furniturewip", "barangjadi"].includes(kode)) {
+      const j = jenisJoin("h");
+      sub = `
+        SELECT
+          h.${colNo} AS LabelCode,
+          h.DateCreate, h.Blok AS Blok, h.IdLokasi AS IdLokasi,
+          CAST(N'${q(prefix)}' AS NVARCHAR(10)) AS Prefix,
+          CAST(N'${q(kat.NamaKategori)}' AS NVARCHAR(100)) AS Kategori,
+          CAST(N'${q(kat.NamaUOM)}' AS NVARCHAR(10)) AS NamaUOM,
+          ISNULL(agg.TotalPcs, 0) AS Qty,
+          0 AS Berat${j.select}
+        FROM [dbo].[${tbl}] h
+        LEFT JOIN (
+          SELECT ${colNo}, SUM(ISNULL(Pcs, 0)) AS TotalPcs
+          FROM [dbo].[${tbl}] WHERE DateUsage IS NULL
+          GROUP BY ${colNo}
+        ) agg ON agg.${colNo} = h.${colNo}${j.join}
+        WHERE h.DateUsage IS NULL`;
+    } else {
+      const j = jenisJoin("t");
+      sub = `
+        SELECT
+          t.${colNo} AS LabelCode,
+          t.DateCreate, t.Blok AS Blok, t.IdLokasi AS IdLokasi,
+          CAST(N'${q(prefix)}' AS NVARCHAR(10)) AS Prefix,
+          CAST(N'${q(kat.NamaKategori)}' AS NVARCHAR(100)) AS Kategori,
+          CAST(N'${q(kat.NamaUOM)}' AS NVARCHAR(10)) AS NamaUOM,
+          0 AS Qty,
+          ISNULL(t.Berat, 0) AS Berat${j.select}
+        FROM [dbo].[${tbl}] t${j.join}
+        WHERE t.DateUsage IS NULL`;
+    }
+
+    if (blok) {
+      sub += ` AND Blok = @Blok`;
+    }
+    if (idlokasi) {
+      sub += ` AND IdLokasi = @IdLokasi`;
+    }
+
+    allSubqueries.push(sub);
+  }
+
+  if (allSubqueries.length === 0) {
+    return { data: [], total: 0, page, limit, totalPages: 0 };
+  }
+
+  const union = allSubqueries.join("\nUNION ALL\n");
+
+  const countQuery = `
+    SELECT COUNT(*) AS TotalCount
+    FROM (${union}) AS AllLabels
+  `;
+
+  const dataQuery = `
+    SELECT LabelCode, DateCreate, Blok, IdLokasi, Prefix, Kategori, NamaUOM, Qty, Berat, IdJenis, NamaJenis
+    FROM (${union}) AS AllLabels
+    ORDER BY DateCreate ASC, LabelCode ASC
+    OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY;
+  `;
+
+  const dataReq = pool.request();
+  const countReq = pool.request();
+
+  if (blok) {
+    dataReq.input("Blok", sql.NVarChar(100), blok);
+    countReq.input("Blok", sql.NVarChar(100), blok);
+  }
+  if (idlokasi) {
+    dataReq.input("IdLokasi", sql.Int, parseInt(idlokasi));
+    countReq.input("IdLokasi", sql.Int, parseInt(idlokasi));
+  }
+
+  const [dataResult, countResult] = await Promise.all([
+    dataReq.query(dataQuery),
+    countReq.query(countQuery),
+  ]);
+
+  const raw = dataResult.recordset || [];
+
+  let totalQty = 0;
+  let totalBerat = 0;
+  const data = raw.map((r) => {
+    if (r.NamaUOM === "kg") {
+      r.Qty = 0;
+      totalBerat += Number(r.Berat ?? 0);
+    } else if (r.NamaUOM === "pcs") {
+      r.Berat = 0;
+      totalQty += Number(r.Qty ?? 0);
+    } else {
+      totalQty += Number(r.Qty ?? 0);
+      totalBerat += Number(r.Berat ?? 0);
+    }
+    return r;
+  });
+
+  const total = countResult.recordset[0]?.TotalCount || 0;
+
+  return {
+    data,
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit),
+    totalQty,
+    totalBerat,
+  };
+}
+
+module.exports = { getAllLabels, getAllLabelsV2, updateLabelLocation };

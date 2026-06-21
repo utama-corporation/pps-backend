@@ -19,6 +19,12 @@ router.get(
 
 router.post("/packing", verifyToken, packingController.createProduksi);
 
+router.post(
+  "/packing/split-time/:idMesin/:tanggal",
+  verifyToken,
+  packingController.splitProduksiTime,
+);
+
 router.put(
   "/packing/:noPacking",
   verifyToken,
