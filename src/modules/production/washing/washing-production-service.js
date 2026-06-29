@@ -13,6 +13,9 @@ const sharedInputService = require("../../../core/shared/produksi-input.service"
 
 const { badReq, conflict, notFound } = require("../../../core/utils/http-error");
 const { applyAuditContext } = require("../../../core/utils/db-audit-context");
+const {
+  getFormulaInputsByCategory,
+} = require("../../../core/shared/production-formula.service");
 
 const {
   generateNextCode,
@@ -1348,6 +1351,50 @@ async function fetchOutputs(noProduksi) {
   return Array.from(byWashing.values());
 }
 
+async function getFormulaInputsByNoProduksi(noProduksi) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const pool = await poolPromise;
+  const request = pool.request();
+  request.input("NoProduksi", sql.VarChar(50), no);
+
+  const headerRes = await request.query(`
+    SELECT TOP 1
+      h.NoProduksi,
+      h.OutputJenisId AS OutputId,
+      jp.Jenis AS OutputNama
+    FROM dbo.WashingProduksi_h h WITH (NOLOCK)
+    LEFT JOIN dbo.MstJenisPlastik jp WITH (NOLOCK)
+      ON jp.IdJenisPlastik = h.OutputJenisId
+    WHERE h.NoProduksi = @NoProduksi;
+  `);
+
+  const header = headerRes.recordset?.[0];
+  if (!header) {
+    throw notFound(`WashingProduksi ${no} tidak ditemukan`);
+  }
+
+  const outputId = Number(header.OutputId);
+  const normalizedOutputs = Number.isFinite(outputId) && outputId > 0
+    ? [
+        {
+          idJenis: outputId,
+          namaJenis: header.OutputNama ?? null,
+        },
+      ]
+    : [];
+
+  return {
+    noProduksi: no,
+    ...(await getFormulaInputsByCategory({
+      pool,
+      outputCategory: "washing",
+      outputs: normalizedOutputs,
+    })),
+  };
+}
+
 /**
  * Validate label untuk Washing Production
  * Support prefix: A. (Bahan Baku), B. (Washing), V. (Gilingan)
@@ -1965,6 +2012,7 @@ module.exports = {
   deleteWashingProduksi,
   fetchInputs,
   fetchOutputs,
+  getFormulaInputsByNoProduksi,
   validateLabel,
   upsertInputsAndPartials,
   deleteInputsAndPartials,

@@ -20,6 +20,9 @@ const {
   conflict,
   notFound,
 } = require("../../../core/utils/http-error");
+const {
+  getFormulaInputsByCategory,
+} = require("../../../core/shared/production-formula.service");
 
 const { applyAuditContext } = require("../../../core/utils/db-audit-context");
 const {
@@ -1101,6 +1104,50 @@ async function fetchOutputs(noCrusherProduksi) {
   }));
 }
 
+async function getFormulaInputsByNoCrusherProduksi(noCrusherProduksi) {
+  const no = String(noCrusherProduksi || "").trim();
+  if (!no) throw badReq("noCrusherProduksi wajib");
+
+  const pool = await poolPromise;
+  const request = pool.request();
+  request.input("NoCrusherProduksi", sql.VarChar(50), no);
+
+  const headerRes = await request.query(`
+    SELECT TOP 1
+      h.NoCrusherProduksi,
+      h.OutputJenisId AS OutputId,
+      mc.NamaCrusher AS OutputNama
+    FROM dbo.CrusherProduksi_h h WITH (NOLOCK)
+    LEFT JOIN dbo.MstCrusher mc WITH (NOLOCK)
+      ON mc.IdCrusher = h.OutputJenisId
+    WHERE h.NoCrusherProduksi = @NoCrusherProduksi;
+  `);
+
+  const header = headerRes.recordset?.[0];
+  if (!header) {
+    throw notFound(`CrusherProduksi ${no} tidak ditemukan`);
+  }
+
+  const outputId = Number(header.OutputId);
+  const normalizedOutputs = Number.isFinite(outputId) && outputId > 0
+    ? [
+        {
+          idJenis: outputId,
+          namaJenis: header.OutputNama ?? null,
+        },
+      ]
+    : [];
+
+  return {
+    noProduksi: no,
+    ...(await getFormulaInputsByCategory({
+      pool,
+      outputCategory: "crusher",
+      outputs: normalizedOutputs,
+    })),
+  };
+}
+
 /**
  * VALIDATE LABEL for Crusher Production
  * Only supports: A. (BahanBaku_d) and M. (Bonggolan)
@@ -1699,6 +1746,7 @@ module.exports = {
   updateCrusherProduksi,
   deleteCrusherProduksi,
   fetchInputs,
+  getFormulaInputsByNoCrusherProduksi,
   fetchOutputs,
   validateLabel,
   upsertInputsAndPartials,

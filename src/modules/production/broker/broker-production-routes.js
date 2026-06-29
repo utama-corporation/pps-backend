@@ -53,6 +53,12 @@ router.get(
 );
 
 router.get(
+  "/broker/:noProduksi/formula-inputs",
+  verifyToken,
+  brokerProduksiController.getFormulaInputsByNoProduksi,
+);
+
+router.get(
   "/broker/:noProduksi/outputs",
   verifyToken,
   brokerProduksiController.getOutputsByNoProduksi,

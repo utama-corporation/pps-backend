@@ -34,6 +34,12 @@ router.get(
 );
 
 router.get(
+  "/inject/qc/:noProduksi",
+  verifyToken,
+  injectProduksiController.getQcByNoProduksi,
+);
+
+router.get(
   "/inject/:noProduksi/formula-inputs",
   verifyToken,
   injectProduksiController.getFormulaInputsByNoProduksi,
@@ -56,6 +62,16 @@ router.get(
 router.post("/inject", verifyToken, injectProduksiController.createProduksi);
 
 router.post("/inject/batch", verifyToken, injectProduksiController.submitBatch);
+
+router.post(
+  "/inject/:noProduksi/terminate",
+  verifyToken,
+  injectProduksiController.terminateInjectProduksi,
+);
+
+router.post("/inject/qc", verifyToken, injectProduksiController.createQc);
+
+router.put("/inject/qc/:id", verifyToken, injectProduksiController.updateQc);
 
 router.post(
   "/inject/split-time/:idMesin/:tanggal",

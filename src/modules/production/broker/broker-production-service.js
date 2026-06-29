@@ -15,6 +15,9 @@ const {
 } = require("../../../core/utils/jam-kerja-helper");
 
 const sharedInputService = require("../../../core/shared/produksi-input.service");
+const {
+  getFormulaInputsByCategory,
+} = require("../../../core/shared/production-formula.service");
 
 const {
   badReq,
@@ -542,6 +545,50 @@ async function fetchInputs(noProduksi) {
   for (const k of Object.keys(out.summary)) out.summary[k] = out[k].length;
 
   return out;
+}
+
+async function getFormulaInputsByNoProduksi(noProduksi) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const pool = await poolPromise;
+  const request = pool.request();
+  request.input("NoProduksi", sql.VarChar(50), no);
+
+  const headerRes = await request.query(`
+    SELECT TOP 1
+      h.NoProduksi,
+      h.OutputJenisId AS OutputId,
+      mb.Nama AS OutputNama
+    FROM dbo.BrokerProduksi_h h WITH (NOLOCK)
+    LEFT JOIN dbo.MstBroker mb WITH (NOLOCK)
+      ON mb.IdBroker = h.OutputJenisId
+    WHERE h.NoProduksi = @NoProduksi;
+  `);
+
+  const header = headerRes.recordset?.[0];
+  if (!header) {
+    throw notFound(`BrokerProduksi ${no} tidak ditemukan`);
+  }
+
+  const outputId = Number(header.OutputId);
+  const normalizedOutputs = Number.isFinite(outputId) && outputId > 0
+    ? [
+        {
+          idJenis: outputId,
+          namaJenis: header.OutputNama ?? null,
+        },
+      ]
+    : [];
+
+  return {
+    noProduksi: no,
+    ...(await getFormulaInputsByCategory({
+      pool,
+      outputCategory: "broker",
+      outputs: normalizedOutputs,
+    })),
+  };
 }
 
 async function fetchOutputs(noProduksi) {
@@ -2744,6 +2791,7 @@ module.exports = {
   getAllProduksi,
   getProduksiByDate,
   fetchInputs,
+  getFormulaInputsByNoProduksi,
   fetchOutputs,
   fetchOutputsBonggolan,
   createBrokerProduksi,

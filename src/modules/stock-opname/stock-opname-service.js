@@ -3488,7 +3488,7 @@ async function fetchQtyUsage(itemId, tglSO, widsCsv) {
                 FROM [AS_GSU].[dbo].[IC_MutationDetails] D
                 JOIN [AS_GSU].[dbo].[IC_Mutations] P ON P.MutationID = D.MutationID
                 INNER JOIN [AS_GSU].[dbo].[IC_Items] I ON I.ItemID = D.ItemID
-                WHERE P.MutationDate >= @StartDate AND P.Void = 0
+                WHERE P.MutationDate >= @StartDate AND P.Void = 0 AND VERIFIED = 1
                   AND DestinationWarehouseID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
                 GROUP BY D.ItemID
             ) II ON II.ItemID = AA.ItemID

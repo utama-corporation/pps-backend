@@ -562,6 +562,15 @@ async function getInject(req, res) {
       Shift: r.Shift ?? null,
       HourStart: r.HourStart ?? null,
       HourEnd: r.HourEnd ?? null,
+      machineStatus: r.MachineStatus ?? null,
+      standarBerat: r.standarBerat ?? r.StandarBerat ?? null,
+      standarCycleTime: r.standarCycleTime ?? r.StandarCycleTime ?? null,
+      counterCurrent: r.counterCurrent ?? r.CounterCurrent ?? null,
+      counterAtReset: r.counterAtReset ?? r.CounterAtReset ?? null,
+      lastResetAt: r.lastResetAt ?? r.LastResetAt ?? null,
+      lastResetBy: r.lastResetBy ?? r.LastResetBy ?? null,
+      counterUpdatedAt: r.counterUpdatedAt ?? r.CounterUpdatedAt ?? null,
+      isRealtime: r.IsRealtime ?? null,
     }));
 
     return res.status(200).json({

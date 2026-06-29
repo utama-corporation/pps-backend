@@ -53,6 +53,12 @@ router.get(
 );
 
 router.get(
+  "/washing/:noProduksi/formula-inputs",
+  verifyToken,
+  washingProduksiController.getFormulaInputsByNoProduksi,
+);
+
+router.get(
   "/washing/validate-label/:labelCode",
   verifyToken,
   washingProduksiController.validateLabel,

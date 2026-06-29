@@ -116,6 +116,70 @@ async function getInputsByNoProduksi(req, res) {
   }
 }
 
+async function getFormulaInputsByNoProduksi(req, res) {
+  const { noProduksi } = req.params;
+
+  try {
+    const result =
+      await brokerProduksiService.getFormulaInputsByNoProduksi(noProduksi);
+
+    const formulasByOutputId = new Map();
+    for (const item of Array.isArray(result.formulas) ? result.formulas : []) {
+      const mainOutputId = Number(item.MainOutputId);
+      if (!Number.isFinite(mainOutputId)) continue;
+      if (!formulasByOutputId.has(mainOutputId)) {
+        formulasByOutputId.set(mainOutputId, []);
+      }
+      formulasByOutputId.get(mainOutputId).push({
+        IdFormula: item.IdFormula ?? null,
+        InputKategoriId: item.InputKategoriId ?? null,
+        InputKategoriKode: item.InputKategoriKode ?? null,
+        InputKategoriNama: item.InputKategoriNama ?? null,
+        InputPrefixLabel: item.InputPrefixLabel ?? null,
+        InputId: item.InputId ?? null,
+        InputNama: item.InputNama ?? null,
+      });
+    }
+
+    const data = {
+      noProduksi: result.noProduksi,
+      outputCategory: result.outputCategory ?? null,
+      outputCategoryId: result.outputCategoryId ?? null,
+      outputPrefixLabel: result.outputPrefixLabel ?? null,
+      outputs: Array.isArray(result.outputs)
+        ? result.outputs.map((item) => ({
+            idJenis: item.idJenis ?? null,
+            namaJenis: item.namaJenis ?? null,
+            formulas: formulasByOutputId.get(Number(item.idJenis)) || [],
+          }))
+        : [],
+    };
+
+    return res.status(200).json({
+      success: true,
+      message: `Formula input for NoProduksi ${noProduksi} retrieved successfully`,
+      data,
+      meta: { noProduksi },
+    });
+  } catch (error) {
+    console.error(
+      "Error fetching formula input from BrokerProduksi_h:",
+      error,
+    );
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message:
+        error.statusCode && error.statusCode !== 500
+          ? error.message
+          : "Internal Server Error",
+      error:
+        error.statusCode && error.statusCode !== 500
+          ? undefined
+          : error.message,
+    });
+  }
+}
+
 async function getOutputsByNoProduksi(req, res) {
   const noProduksi = (req.params.noProduksi || "").trim();
   if (!noProduksi) {
@@ -1029,6 +1093,7 @@ async function splitProduksiTime(req, res) {
 module.exports = {
   getProduksiByDate,
   getInputsByNoProduksi,
+  getFormulaInputsByNoProduksi,
   getOutputsByNoProduksi,
   getOutputsBonggolanByNoProduksi,
   getAllProduksi,

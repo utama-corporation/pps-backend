@@ -1204,8 +1204,9 @@ async function validateLabel(labelCode) {
   if (!raw) throw new Error("Label code is required");
 
   let prefix = "";
-  if (raw.substring(0, 3).toUpperCase() === "BF.") {
-    prefix = "BF.";
+  const prefix3 = raw.substring(0, 3).toUpperCase();
+  if (prefix3 === "BF." || prefix3 === "AB.") {
+    prefix = prefix3;
   } else {
     prefix = raw.substring(0, 2).toUpperCase();
   }
@@ -1232,13 +1233,14 @@ async function validateLabel(labelCode) {
     // =========================
     // A. BahanBaku_d (A.xxxxx-<pallet>)
     // =========================
-    case "A.": {
+    case "A.":
+    case "AB.": {
       tableName = "BahanBaku_d";
-      // Format: A.0000000001-1
+      // Format: A.0000000001-1 / AB.0000000001-1
       const parts = raw.split("-");
       if (parts.length !== 2) {
         throw new Error(
-          "Invalid format for A. prefix. Expected: A.0000000001-1",
+          "Invalid format for A./AB. prefix. Expected: A.0000000001-1 or AB.0000000001-1",
         );
       }
       const noBahanBaku = parts[0].trim();
@@ -1541,7 +1543,7 @@ async function validateLabel(labelCode) {
 
     default:
       throw new Error(
-        `Invalid prefix: ${prefix}. Valid prefixes: A., B., D., M., F., V., H., BF.`,
+        `Invalid prefix: ${prefix}. Valid prefixes: A., AB., B., D., M., F., V., H., BF.`,
       );
   }
 }

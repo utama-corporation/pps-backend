@@ -17,6 +17,10 @@ const {
   conflict,
   notFound,
 } = require("../../../core/utils/http-error");
+const {
+  getFormulaInputsByCategory,
+  normalizeOutputs,
+} = require("../../../core/shared/production-formula.service");
 const { applyAuditContext } = require("../../../core/utils/db-audit-context");
 const {
   generateNextCode,
@@ -130,7 +134,10 @@ async function getAllProduksi(
          AND CONVERT(date, h.TglProduksi) <= lc.LastClosedDate
         THEN CAST(1 AS bit)
         ELSE CAST(0 AS bit)
-      END AS IsLocked
+      END AS IsLocked,
+
+      h.IsComplete,
+      h.IsRealtime
 
     FROM dbo.InjectProduksi_h h WITH (NOLOCK)
     LEFT JOIN dbo.MstMesin    ms WITH (NOLOCK) ON ms.IdMesin    = h.IdMesin
@@ -577,57 +584,321 @@ function formatHourStartForResponse(value) {
   return normalized ? normalized.slice(0, 5) : null;
 }
 
-async function getInjectPcsPerLabelByNoProduksi(noProduksi, idFurnitureWip = null) {
+async function getInjectPcsPerLabelByNoProduksi(
+  noProduksi,
+  idJenisFilter = null,
+  outputCategoryFilter = null,
+) {
   const no = String(noProduksi || "").trim();
   if (!no) throw badReq("noProduksi wajib");
 
   const idJenis =
-    idFurnitureWip === null || idFurnitureWip === undefined || idFurnitureWip === ""
+    idJenisFilter === null || idJenisFilter === undefined || idJenisFilter === ""
       ? null
-      : Number(idFurnitureWip);
+      : Number(idJenisFilter);
   if (idJenis != null && (!Number.isInteger(idJenis) || idJenis <= 0)) {
     throw badReq("idJenis harus integer positif bila diisi");
   }
 
+  const normalizedOutputCategory =
+    outputCategoryFilter == null || String(outputCategoryFilter).trim() === ""
+      ? null
+      : String(outputCategoryFilter).trim().toLowerCase();
+  if (
+    normalizedOutputCategory &&
+    normalizedOutputCategory !== "furniturewip" &&
+    normalizedOutputCategory !== "barangjadi"
+  ) {
+    throw badReq("outputCategory harus furnitureWip atau barangjadi");
+  }
+
   const pool = await poolPromise;
+  const headerReq = pool.request();
+  headerReq.input("NoProduksi", sql.VarChar(50), no);
+  const headerRes = await headerReq.query(`
+    SELECT TOP 1
+      h.NoProduksi,
+      h.IdWarna,
+      h.TglProduksi,
+      CASE
+        WHEN fwCount.TotalCount > 0 THEN 'furnitureWip'
+        WHEN bjCount.TotalCount > 0 THEN 'barangjadi'
+        ELSE NULL
+      END AS OutputCategory
+    FROM dbo.InjectProduksi_h h WITH (NOLOCK)
+    OUTER APPLY (
+      SELECT COUNT(1) AS TotalCount
+      FROM (
+        SELECT DISTINCT dFw.IdFurnitureWIP
+        FROM dbo.CetakanWarnaToFurnitureWIP_d dFw WITH (NOLOCK)
+        WHERE dFw.IdCetakan = h.IdCetakan
+          AND dFw.IdWarna = h.IdWarna
+          AND (
+            (dFw.IdFurnitureMaterial IS NULL
+              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+            OR dFw.IdFurnitureMaterial = h.IdFurnitureMaterial
+          )
+      ) x
+    ) fwCount
+    OUTER APPLY (
+      SELECT COUNT(1) AS TotalCount
+      FROM (
+        SELECT DISTINCT dBj.IdBarangJadi
+        FROM dbo.CetakanWarnaToProduk_d dBj WITH (NOLOCK)
+        WHERE dBj.IdCetakan = h.IdCetakan
+          AND dBj.IdWarna = h.IdWarna
+          AND (
+            (dBj.IdFurnitureMaterial IS NULL
+              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+            OR dBj.IdFurnitureMaterial = h.IdFurnitureMaterial
+          )
+      ) x
+    ) bjCount
+    WHERE h.NoProduksi = @NoProduksi;
+  `);
+
+  const header = headerRes.recordset?.[0];
+  if (!header) {
+    throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+  }
+
+  const outputCategory = header.OutputCategory ?? null;
+  if (!outputCategory) {
+    throw notFound(`Output mapping tidak ditemukan untuk NoProduksi ${no}`);
+  }
+  if (
+    normalizedOutputCategory &&
+    String(outputCategory).toLowerCase() !== normalizedOutputCategory
+  ) {
+    throw badReq(
+      `OutputCategory ${normalizedOutputCategory} tidak valid untuk NoProduksi ${no}`,
+    );
+  }
+
   const request = pool.request();
   request.input("NoProduksi", sql.VarChar(50), no);
-  request.input("IdFurnitureWIP", sql.Int, idJenis);
+  request.input("IdJenis", sql.Int, idJenis);
 
-  const result = await request.query(`
-    SELECT TOP 1
-      m.PcsPerLabel,
-      m.Nama,
-      cw.IdFurnitureWIP,
-      h.IdWarna,
-      h.TglProduksi
-    FROM dbo.InjectProduksi_h h WITH (NOLOCK)
-    INNER JOIN dbo.CetakanWarnaToFurnitureWIP_d cw WITH (NOLOCK)
-      ON cw.IdCetakan = h.IdCetakan
-     AND cw.IdWarna = h.IdWarna
-     AND (
-          (cw.IdFurnitureMaterial IS NULL
-            AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
-          OR cw.IdFurnitureMaterial = h.IdFurnitureMaterial
-         )
-    INNER JOIN dbo.MstCabinetWIP m WITH (NOLOCK)
-      ON m.IdCabinetWIP = cw.IdFurnitureWIP
-    WHERE h.NoProduksi = @NoProduksi
-      AND (@IdFurnitureWIP IS NULL OR cw.IdFurnitureWIP = @IdFurnitureWIP)
-    ORDER BY cw.IdFurnitureWIP ASC;
-  `);
+  const queryBarangJadi = async () =>
+    request.query(`
+      SELECT TOP 1
+        mbj.PcsPerLabel,
+        mbj.NamaBJ AS NamaBarang,
+        d.IdBarangJadi AS IdJenis,
+        h.IdWarna,
+        h.TglProduksi,
+        CAST('barangjadi' AS varchar(20)) AS OutputCategory
+      FROM dbo.InjectProduksi_h h WITH (NOLOCK)
+      INNER JOIN dbo.CetakanWarnaToProduk_d d WITH (NOLOCK)
+        ON d.IdCetakan = h.IdCetakan
+       AND d.IdWarna = h.IdWarna
+       AND (
+            (d.IdFurnitureMaterial IS NULL
+              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+            OR d.IdFurnitureMaterial = h.IdFurnitureMaterial
+           )
+      INNER JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
+        ON mbj.IdBJ = d.IdBarangJadi
+      WHERE h.NoProduksi = @NoProduksi
+        AND (@IdJenis IS NULL OR d.IdBarangJadi = @IdJenis)
+      ORDER BY d.IdBarangJadi ASC;
+    `);
+
+  const queryFurnitureWip = async () =>
+    request.query(`
+      SELECT TOP 1
+        m.PcsPerLabel,
+        m.Nama AS NamaBarang,
+        cw.IdFurnitureWIP AS IdJenis,
+        h.IdWarna,
+        h.TglProduksi,
+        CAST('furnitureWip' AS varchar(20)) AS OutputCategory
+      FROM dbo.InjectProduksi_h h WITH (NOLOCK)
+      INNER JOIN dbo.CetakanWarnaToFurnitureWIP_d cw WITH (NOLOCK)
+        ON cw.IdCetakan = h.IdCetakan
+       AND cw.IdWarna = h.IdWarna
+       AND (
+            (cw.IdFurnitureMaterial IS NULL
+              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+            OR cw.IdFurnitureMaterial = h.IdFurnitureMaterial
+           )
+      INNER JOIN dbo.MstCabinetWIP m WITH (NOLOCK)
+        ON m.IdCabinetWIP = cw.IdFurnitureWIP
+      WHERE h.NoProduksi = @NoProduksi
+        AND (@IdJenis IS NULL OR cw.IdFurnitureWIP = @IdJenis)
+      ORDER BY cw.IdFurnitureWIP ASC;
+    `);
+
+  let result = null;
+  if (normalizedOutputCategory === "barangjadi") {
+    result = await queryBarangJadi();
+  } else if (normalizedOutputCategory === "furniturewip") {
+    result = await queryFurnitureWip();
+  } else if (idJenis != null) {
+    result = await queryBarangJadi();
+    if (!result.recordset?.[0]) {
+      result = await queryFurnitureWip();
+    }
+  } else if (String(outputCategory).toLowerCase() === "barangjadi") {
+    result = await queryBarangJadi();
+  } else {
+    result = await queryFurnitureWip();
+  }
 
   const row = result.recordset?.[0];
   if (!row) {
     throw notFound(`Pcs per label tidak ditemukan untuk NoProduksi ${no}`);
   }
 
+  const resolvedCategory = row.OutputCategory ?? outputCategory;
   return {
-    idFurnitureWIP: row.IdFurnitureWIP ?? null,
-    namaBarang: row.Nama ?? null,
+    outputCategory: resolvedCategory,
+    idJenis: row.IdJenis ?? null,
+    idFurnitureWIP:
+      String(resolvedCategory).toLowerCase() === "furniturewip"
+        ? row.IdJenis ?? null
+        : null,
+    idBarangJadi:
+      String(resolvedCategory).toLowerCase() === "barangjadi"
+        ? row.IdJenis ?? null
+        : null,
+    namaBarang: row.NamaBarang ?? null,
     pcsPerLabel: row.PcsPerLabel == null ? null : Number(row.PcsPerLabel),
     idWarna: row.IdWarna ?? null,
     tglProduksi: row.TglProduksi ?? null,
+  };
+}
+
+async function getInjectPcsPerLabelListByNoProduksi(noProduksi) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const pool = await poolPromise;
+  const headerReq = pool.request();
+  headerReq.input("NoProduksi", sql.VarChar(50), no);
+  const headerRes = await headerReq.query(`
+    SELECT TOP 1
+      h.NoProduksi,
+      h.IdWarna,
+      h.IdMesin,
+      h.TglProduksi,
+      ms.CounterCurrent,
+      ms.StandarBerat,
+      ms.StandarCycleTime,
+      CASE
+        WHEN fwCount.TotalCount > 0 THEN 'furnitureWip'
+        WHEN bjCount.TotalCount > 0 THEN 'barangjadi'
+        ELSE NULL
+      END AS OutputCategory
+    FROM dbo.InjectProduksi_h h WITH (NOLOCK)
+    LEFT JOIN dbo.MstMesinInject ms WITH (NOLOCK)
+      ON ms.IdMesin = h.IdMesin
+    OUTER APPLY (
+      SELECT COUNT(1) AS TotalCount
+      FROM (
+        SELECT DISTINCT dFw.IdFurnitureWIP
+        FROM dbo.CetakanWarnaToFurnitureWIP_d dFw WITH (NOLOCK)
+        WHERE dFw.IdCetakan = h.IdCetakan
+          AND dFw.IdWarna = h.IdWarna
+          AND (
+            (dFw.IdFurnitureMaterial IS NULL
+              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+            OR dFw.IdFurnitureMaterial = h.IdFurnitureMaterial
+          )
+      ) x
+    ) fwCount
+    OUTER APPLY (
+      SELECT COUNT(1) AS TotalCount
+      FROM (
+        SELECT DISTINCT dBj.IdBarangJadi
+        FROM dbo.CetakanWarnaToProduk_d dBj WITH (NOLOCK)
+        WHERE dBj.IdCetakan = h.IdCetakan
+          AND dBj.IdWarna = h.IdWarna
+          AND (
+            (dBj.IdFurnitureMaterial IS NULL
+              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+            OR dBj.IdFurnitureMaterial = h.IdFurnitureMaterial
+          )
+      ) x
+    ) bjCount
+    WHERE h.NoProduksi = @NoProduksi;
+  `);
+
+  const header = headerRes.recordset?.[0];
+  if (!header) throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+
+  const outputCategory = header.OutputCategory ?? null;
+  if (!outputCategory) throw notFound(`Output mapping tidak ditemukan untuk NoProduksi ${no}`);
+
+  const listReq = pool.request();
+  listReq.input("NoProduksi", sql.VarChar(50), no);
+
+  let rows = [];
+  if (String(outputCategory).toLowerCase() === "barangjadi") {
+    const res = await listReq.query(`
+      SELECT
+        mbj.PcsPerLabel,
+        mbj.NamaBJ AS NamaBarang,
+        d.IdBarangJadi AS IdJenis,
+        h.IdWarna,
+        h.TglProduksi,
+        CAST('barangjadi' AS varchar(20)) AS OutputCategory
+      FROM dbo.InjectProduksi_h h WITH (NOLOCK)
+      INNER JOIN dbo.CetakanWarnaToProduk_d d WITH (NOLOCK)
+        ON d.IdCetakan = h.IdCetakan
+       AND d.IdWarna = h.IdWarna
+       AND (
+            (d.IdFurnitureMaterial IS NULL
+              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+            OR d.IdFurnitureMaterial = h.IdFurnitureMaterial
+           )
+      INNER JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
+        ON mbj.IdBJ = d.IdBarangJadi
+      WHERE h.NoProduksi = @NoProduksi
+      ORDER BY d.IdBarangJadi ASC;
+    `);
+    rows = res.recordset ?? [];
+  } else {
+    const res = await listReq.query(`
+      SELECT
+        m.PcsPerLabel,
+        m.Nama AS NamaBarang,
+        cw.IdFurnitureWIP AS IdJenis,
+        h.IdWarna,
+        h.TglProduksi,
+        CAST('furnitureWip' AS varchar(20)) AS OutputCategory
+      FROM dbo.InjectProduksi_h h WITH (NOLOCK)
+      INNER JOIN dbo.CetakanWarnaToFurnitureWIP_d cw WITH (NOLOCK)
+        ON cw.IdCetakan = h.IdCetakan
+       AND cw.IdWarna = h.IdWarna
+       AND (
+            (cw.IdFurnitureMaterial IS NULL
+              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+            OR cw.IdFurnitureMaterial = h.IdFurnitureMaterial
+           )
+      INNER JOIN dbo.MstCabinetWIP m WITH (NOLOCK)
+        ON m.IdCabinetWIP = cw.IdFurnitureWIP
+      WHERE h.NoProduksi = @NoProduksi
+      ORDER BY cw.IdFurnitureWIP ASC;
+    `);
+    rows = res.recordset ?? [];
+  }
+
+  if (rows.length === 0) throw notFound(`Pcs per label tidak ditemukan untuk NoProduksi ${no}`);
+
+  return {
+    outputCategory,
+    idWarna: header.IdWarna ?? null,
+    idMesin: header.IdMesin ?? null,
+    tglProduksi: header.TglProduksi ?? null,
+    counterCurrent: header.CounterCurrent == null ? null : Number(header.CounterCurrent),
+    standarBerat: header.StandarBerat == null ? null : Number(header.StandarBerat),
+    standarCycleTime: header.StandarCycleTime == null ? null : Number(header.StandarCycleTime),
+    items: rows.map((row) => ({
+      idJenis: row.IdJenis ?? null,
+      namaBarang: row.NamaBarang ?? null,
+      pcsPerLabel: row.PcsPerLabel == null ? null : Number(row.PcsPerLabel),
+    })),
   };
 }
 
@@ -641,23 +912,56 @@ async function getInjectBatchByNoProduksi(noProduksi) {
 
   const result = await request.query(`
     SELECT
-      Id,
-      NoProduksi,
-      CONVERT(varchar(8), HourStart, 108) AS HourStart,
-      CarryOverIn,
-      PcsInput,
-      CarryOverOut,
-      Berat,
-      CycleTime,
-      Counter,
-      DateTimeCreate
-    FROM dbo.InjectProduksiBatch WITH (NOLOCK)
-    WHERE NoProduksi = @NoProduksi
-    ORDER BY HourStart ASC, Id ASC;
+      b.Id,
+      b.NoProduksi,
+      CONVERT(varchar(8), b.HourStart, 108) AS HourStart,
+      b.Berat,
+      b.CycleTime,
+      b.Counter,
+      b.DateTimeCreate,
+      d.Id           AS DetailId,
+      d.IdJenis,
+      d.OutputCategory,
+      d.CarryOverIn,
+      d.PcsInput,
+      d.CarryOverOut
+    FROM dbo.InjectProduksiBatch b WITH (NOLOCK)
+    LEFT JOIN dbo.InjectProduksiBatch_d d WITH (NOLOCK)
+      ON d.IdBatch = b.Id
+    WHERE b.NoProduksi = @NoProduksi
+    ORDER BY b.HourStart ASC, b.Id ASC, d.Id ASC;
   `);
 
   const rows = result.recordset || [];
   if (rows.length === 0) return [];
+
+  // Group detail rows by batch Id, deduplicate batches
+  const batchMap = new Map();
+  for (const row of rows) {
+    if (!batchMap.has(row.Id)) {
+      batchMap.set(row.Id, {
+        id: row.Id,
+        noProduksi: row.NoProduksi,
+        hourStart: row.HourStart,
+        berat: row.Berat,
+        cycleTime: row.CycleTime,
+        counter: row.Counter,
+        dateTimeCreate: row.DateTimeCreate,
+        items: [],
+      });
+    }
+    if (row.DetailId != null) {
+      batchMap.get(row.Id).items.push({
+        idJenis: row.IdJenis ?? null,
+        outputCategory: row.OutputCategory ?? null,
+        carryOverIn: row.CarryOverIn ?? 0,
+        pcsInput: row.PcsInput ?? 0,
+        carryOverOut: row.CarryOverOut ?? 0,
+      });
+    }
+  }
+
+  const batches = [...batchMap.values()];
 
   const labelResult = await pool
     .request()
@@ -665,10 +969,35 @@ async function getInjectBatchByNoProduksi(noProduksi) {
       SELECT
         'furnitureWip' AS LabelType,
         fw.DateTimeCreate,
-        map.NoFurnitureWIP AS LabelNo
+        map.NoFurnitureWIP AS LabelNo,
+        fw.IDFurnitureWIP AS LabelIdJenis,
+        cab.Nama AS LabelNamaJenis,
+        ISNULL(CAST(fw.HasBeenPrinted AS int), 0) AS LabelHasBeenPrinted,
+        fw.Pcs AS LabelPcs,
+        CAST(NULL AS decimal(18,3)) AS LabelBerat
       FROM dbo.InjectProduksiOutputFurnitureWIP map WITH (NOLOCK)
       INNER JOIN dbo.FurnitureWIP fw WITH (NOLOCK)
         ON fw.NoFurnitureWIP = map.NoFurnitureWIP
+      LEFT JOIN dbo.MstCabinetWIP cab WITH (NOLOCK)
+        ON cab.IdCabinetWIP = fw.IDFurnitureWIP
+      WHERE map.NoProduksi = @NoProduksi
+
+      UNION ALL
+
+      SELECT
+        'barangJadi' AS LabelType,
+        bj.DateTimeCreate,
+        map.NoBJ AS LabelNo,
+        bj.IdBJ AS LabelIdJenis,
+        mbj.NamaBJ AS LabelNamaJenis,
+        ISNULL(CAST(bj.HasBeenPrinted AS int), 0) AS LabelHasBeenPrinted,
+        bj.Pcs AS LabelPcs,
+        CAST(NULL AS decimal(18,3)) AS LabelBerat
+      FROM dbo.InjectProduksiOutputBarangJadi map WITH (NOLOCK)
+      INNER JOIN dbo.BarangJadi bj WITH (NOLOCK)
+        ON bj.NoBJ = map.NoBJ
+      LEFT JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
+        ON mbj.IdBJ = bj.IdBJ
       WHERE map.NoProduksi = @NoProduksi
 
       UNION ALL
@@ -676,10 +1005,17 @@ async function getInjectBatchByNoProduksi(noProduksi) {
       SELECT
         'bonggolan' AS LabelType,
         bg.DateTimeCreate,
-        map.NoBonggolan AS LabelNo
+        map.NoBonggolan AS LabelNo,
+        bg.IdBonggolan AS LabelIdJenis,
+        mb.NamaBonggolan AS LabelNamaJenis,
+        ISNULL(CAST(bg.HasBeenPrinted AS int), 0) AS LabelHasBeenPrinted,
+        CAST(NULL AS decimal(18,3)) AS LabelPcs,
+        bg.Berat AS LabelBerat
       FROM dbo.InjectProduksiOutputBonggolan map WITH (NOLOCK)
       INNER JOIN dbo.Bonggolan bg WITH (NOLOCK)
         ON bg.NoBonggolan = map.NoBonggolan
+      LEFT JOIN dbo.MstBonggolan mb WITH (NOLOCK)
+        ON mb.IdBonggolan = bg.IdBonggolan
       WHERE map.NoProduksi = @NoProduksi
 
       UNION ALL
@@ -687,20 +1023,28 @@ async function getInjectBatchByNoProduksi(noProduksi) {
       SELECT
         'reject' AS LabelType,
         rj.DateTimeCreate,
-        map.NoReject AS LabelNo
+        map.NoReject AS LabelNo,
+        rj.IdReject AS LabelIdJenis,
+        mr.NamaReject AS LabelNamaJenis,
+        ISNULL(CAST(rj.HasBeenPrinted AS int), 0) AS LabelHasBeenPrinted,
+        CAST(NULL AS decimal(18,3)) AS LabelPcs,
+        rj.Berat AS LabelBerat
       FROM dbo.InjectProduksiOutputRejectV2 map WITH (NOLOCK)
       INNER JOIN dbo.RejectV2 rj WITH (NOLOCK)
         ON rj.NoReject = map.NoReject
+      LEFT JOIN dbo.MstReject mr WITH (NOLOCK)
+        ON mr.IdReject = rj.IdReject
       WHERE map.NoProduksi = @NoProduksi;
     `);
 
   const batchKeyMap = new Map();
-  for (const row of rows) {
-    const key = row.DateTimeCreate instanceof Date
-      ? row.DateTimeCreate.toISOString()
-      : new Date(row.DateTimeCreate).toISOString();
+  for (const batch of batches) {
+    const key = batch.dateTimeCreate instanceof Date
+      ? batch.dateTimeCreate.toISOString()
+      : new Date(batch.dateTimeCreate).toISOString();
     batchKeyMap.set(key, {
       furnitureWip: [],
+      barangJadi: [],
       bonggolan: [],
       reject: [],
     });
@@ -715,43 +1059,407 @@ async function getInjectBatchByNoProduksi(noProduksi) {
     const bucket = batchKeyMap.get(key);
     if (!bucket) continue;
 
+    const labelItem =
+      labelRow.LabelType === "furnitureWip"
+        ? {
+            noFurnitureWIP: labelRow.LabelNo,
+            idJenis: labelRow.LabelIdJenis ?? null,
+            namaJenis: labelRow.LabelNamaJenis ?? null,
+            hasBeenPrinted: labelRow.LabelHasBeenPrinted ?? 0,
+            pcs: labelRow.LabelPcs == null ? null : Number(labelRow.LabelPcs),
+          }
+        : labelRow.LabelType === "barangJadi"
+          ? {
+              noBJ: labelRow.LabelNo,
+              idJenis: labelRow.LabelIdJenis ?? null,
+              namaJenis: labelRow.LabelNamaJenis ?? null,
+              hasBeenPrinted: labelRow.LabelHasBeenPrinted ?? 0,
+              pcs: labelRow.LabelPcs == null ? null : Number(labelRow.LabelPcs),
+            }
+          : labelRow.LabelType === "bonggolan"
+            ? {
+                noBonggolan: labelRow.LabelNo,
+                idJenis: labelRow.LabelIdJenis ?? null,
+                namaJenis: labelRow.LabelNamaJenis ?? null,
+                hasBeenPrinted: labelRow.LabelHasBeenPrinted ?? 0,
+                berat:
+                  labelRow.LabelBerat == null
+                    ? null
+                    : Number(labelRow.LabelBerat),
+              }
+            : {
+                noReject: labelRow.LabelNo,
+                idJenis: labelRow.LabelIdJenis ?? null,
+                namaJenis: labelRow.LabelNamaJenis ?? null,
+                hasBeenPrinted: labelRow.LabelHasBeenPrinted ?? 0,
+                berat:
+                  labelRow.LabelBerat == null
+                    ? null
+                    : Number(labelRow.LabelBerat),
+              };
+
     if (labelRow.LabelType === "furnitureWip") {
-      bucket.furnitureWip.push(labelRow.LabelNo);
+      bucket.furnitureWip.push(labelItem);
+    } else if (labelRow.LabelType === "barangJadi") {
+      bucket.barangJadi.push(labelItem);
     } else if (labelRow.LabelType === "bonggolan") {
-      bucket.bonggolan.push(labelRow.LabelNo);
+      bucket.bonggolan.push(labelItem);
     } else if (labelRow.LabelType === "reject") {
-      bucket.reject.push(labelRow.LabelNo);
+      bucket.reject.push(labelItem);
     }
   }
 
-  return rows.map((row) => {
-    const key = row.DateTimeCreate instanceof Date
-      ? row.DateTimeCreate.toISOString()
-      : new Date(row.DateTimeCreate).toISOString();
+  return batches.map((batch) => {
+    const key = batch.dateTimeCreate instanceof Date
+      ? batch.dateTimeCreate.toISOString()
+      : new Date(batch.dateTimeCreate).toISOString();
     const labels = batchKeyMap.get(key) || {
       furnitureWip: [],
+      barangJadi: [],
       bonggolan: [],
       reject: [],
     };
 
     return {
-      id: row.Id ?? null,
-      noProduksi: row.NoProduksi ?? null,
-      hourStart: formatHourStartForResponse(row.HourStart),
-      carryOverIn: row.CarryOverIn ?? 0,
-      pcsInput: row.PcsInput ?? 0,
-      carryOverOut: row.CarryOverOut ?? 0,
-      berat: row.Berat == null ? null : Number(row.Berat),
-      cycleTime: row.CycleTime == null ? null : Number(row.CycleTime),
-      counter: row.Counter ?? 0,
-      dateTimeCreate: row.DateTimeCreate ?? null,
+      id: batch.id ?? null,
+      noProduksi: batch.noProduksi ?? null,
+      hourStart: formatHourStartForResponse(batch.hourStart),
+      berat: batch.berat == null ? null : Number(batch.berat),
+      cycleTime: batch.cycleTime == null ? null : Number(batch.cycleTime),
+      counter: batch.counter ?? 0,
+      dateTimeCreate: batch.dateTimeCreate ?? null,
+      items: batch.items,
       labels: {
         furnitureWip: labels.furnitureWip,
+        barangJadi: labels.barangJadi,
         bonggolan: labels.bonggolan,
         reject: labels.reject,
       },
     };
   });
+}
+
+async function getInjectQcByNoProduksi(noProduksi) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const pool = await poolPromise;
+  const request = pool.request();
+  request.input("NoProduksi", sql.VarChar(50), no);
+
+  const result = await request.query(`
+    SELECT
+      Id,
+      NoProduksi,
+      HourStart,
+      JumlahBS,
+      CycleTime,
+      Counter,
+      Berat,
+      DateTimeCreate
+    FROM dbo.InjectProduksi_QC WITH (NOLOCK)
+    WHERE NoProduksi = @NoProduksi
+    ORDER BY HourStart ASC, Id ASC;
+  `);
+
+  return (result.recordset || []).map((row) => ({
+    id: row.Id ?? null,
+    noProduksi: row.NoProduksi ?? null,
+    hourStart: formatHourStartForResponse(row.HourStart),
+    jumlahBS: row.JumlahBS == null ? null : Number(row.JumlahBS),
+    cycleTime: row.CycleTime == null ? null : Number(row.CycleTime),
+    counter: row.Counter ?? null,
+    berat: row.Berat == null ? null : Number(row.Berat),
+    dateTimeCreate: row.DateTimeCreate ?? null,
+  }));
+}
+
+async function createInjectQc(payload, ctx) {
+  const noProduksi = String(payload?.noProduksi || "").trim();
+  if (!noProduksi) throw badReq("noProduksi wajib");
+
+  const hourStart = normalizeBatchHourStart(payload?.hourStart);
+  if (!hourStart) throw badReq("hourStart harus format HH:mm atau HH:mm:ss");
+
+  const jumlahBS =
+    payload?.jumlahBS === null || payload?.jumlahBS === undefined
+      ? null
+      : Number(payload.jumlahBS);
+  if (jumlahBS == null || !Number.isFinite(jumlahBS) || jumlahBS < 0) {
+    throw badReq("jumlahBS harus angka >= 0");
+  }
+
+  const cycleTime =
+    payload?.cycleTime === null || payload?.cycleTime === undefined
+      ? null
+      : Number(payload.cycleTime);
+  if (cycleTime != null && (!Number.isFinite(cycleTime) || cycleTime < 0)) {
+    throw badReq("cycleTime harus angka >= 0");
+  }
+
+  const counter =
+    payload?.counter === null || payload?.counter === undefined
+      ? null
+      : Number(payload.counter);
+  if (counter != null && (!Number.isInteger(counter) || counter < 0)) {
+    throw badReq("counter harus integer >= 0");
+  }
+
+  const berat =
+    payload?.berat === null || payload?.berat === undefined
+      ? null
+      : Number(payload.berat);
+  if (berat != null && (!Number.isFinite(berat) || berat < 0)) {
+    throw badReq("berat harus angka >= 0");
+  }
+
+  const actorId = Number(ctx?.actorId);
+  if (!Number.isInteger(actorId) || actorId <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.READ_COMMITTED);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId,
+      actorUsername,
+      requestId,
+    });
+
+    const nowDateTime = new Date();
+    const insertRes = await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), noProduksi)
+      .input("HourStart", sql.VarChar(5), hourStart.slice(0, 5))
+      .input("JumlahBS", sql.Decimal(18, 3), jumlahBS)
+      .input(
+        "CycleTime",
+        sql.Decimal(10, 2),
+        cycleTime == null ? null : cycleTime,
+      )
+      .input("Counter", sql.Int, counter)
+      .input(
+        "Berat",
+        sql.Decimal(18, 3),
+        berat == null ? null : berat,
+      )
+      .input("DateTimeCreate", sql.DateTime, nowDateTime).query(`
+        DECLARE @out TABLE (
+          Id int,
+          NoProduksi varchar(50),
+          HourStart varchar(5),
+          JumlahBS decimal(18,3),
+          CycleTime decimal(10,2),
+          Counter int,
+          Berat decimal(18,3),
+          DateTimeCreate datetime
+        );
+
+        INSERT INTO dbo.InjectProduksi_QC (
+          NoProduksi, HourStart, JumlahBS, CycleTime, Counter, Berat, DateTimeCreate
+        )
+        OUTPUT
+          INSERTED.Id,
+          INSERTED.NoProduksi,
+          INSERTED.HourStart,
+          INSERTED.JumlahBS,
+          INSERTED.CycleTime,
+          INSERTED.Counter,
+          INSERTED.Berat,
+          INSERTED.DateTimeCreate
+        INTO @out
+        VALUES (
+          @NoProduksi, @HourStart, @JumlahBS, @CycleTime, @Counter, @Berat, @DateTimeCreate
+        );
+
+        SELECT * FROM @out;
+      `);
+
+    await tx.commit();
+
+    const row = insertRes.recordset?.[0] || {};
+    return {
+      id: row.Id ?? null,
+      noProduksi: row.NoProduksi ?? null,
+      hourStart: formatHourStartForResponse(row.HourStart),
+      jumlahBS: row.JumlahBS == null ? null : Number(row.JumlahBS),
+      cycleTime: row.CycleTime == null ? null : Number(row.CycleTime),
+      counter: row.Counter ?? null,
+      berat: row.Berat == null ? null : Number(row.Berat),
+      dateTimeCreate: row.DateTimeCreate ?? null,
+    };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
+  }
+}
+
+async function updateInjectQc(id, payload, ctx) {
+  const qcId = Number(id);
+  if (!Number.isInteger(qcId) || qcId <= 0) {
+    throw badReq("id QC harus integer positif");
+  }
+
+  const updates = {};
+
+  if (Object.prototype.hasOwnProperty.call(payload, "noProduksi")) {
+    const noProduksi = String(payload?.noProduksi || "").trim();
+    if (!noProduksi) throw badReq("noProduksi tidak boleh kosong");
+    updates.noProduksi = noProduksi;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, "hourStart")) {
+    const hourStart = normalizeBatchHourStart(payload?.hourStart);
+    if (!hourStart) throw badReq("hourStart harus format HH:mm atau HH:mm:ss");
+    updates.hourStart = hourStart.slice(0, 5);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, "jumlahBS")) {
+    const jumlahBS =
+      payload?.jumlahBS === null || payload?.jumlahBS === undefined
+        ? null
+        : Number(payload.jumlahBS);
+    if (jumlahBS == null || !Number.isFinite(jumlahBS) || jumlahBS < 0) {
+      throw badReq("jumlahBS harus angka >= 0");
+    }
+    updates.jumlahBS = jumlahBS;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, "cycleTime")) {
+    const cycleTime =
+      payload?.cycleTime === null || payload?.cycleTime === undefined
+        ? null
+        : Number(payload.cycleTime);
+    if (cycleTime != null && (!Number.isFinite(cycleTime) || cycleTime < 0)) {
+      throw badReq("cycleTime harus angka >= 0");
+    }
+    updates.cycleTime = cycleTime;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, "counter")) {
+    const counter =
+      payload?.counter === null || payload?.counter === undefined
+        ? null
+        : Number(payload.counter);
+    if (counter != null && (!Number.isInteger(counter) || counter < 0)) {
+      throw badReq("counter harus integer >= 0");
+    }
+    updates.counter = counter;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, "berat")) {
+    const berat =
+      payload?.berat === null || payload?.berat === undefined
+        ? null
+        : Number(payload.berat);
+    if (berat != null && (!Number.isFinite(berat) || berat < 0)) {
+      throw badReq("berat harus angka >= 0");
+    }
+    updates.berat = berat;
+  }
+
+  if (Object.keys(updates).length === 0) {
+    throw badReq("Minimal satu field harus diisi untuk update QC");
+  }
+
+  const actorId = Number(ctx?.actorId);
+  if (!Number.isInteger(actorId) || actorId <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.READ_COMMITTED);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId,
+      actorUsername,
+      requestId,
+    });
+
+    const existsRes = await new sql.Request(tx)
+      .input("Id", sql.Int, qcId)
+      .query(`
+        SELECT TOP 1 Id
+        FROM dbo.InjectProduksi_QC WITH (UPDLOCK, HOLDLOCK)
+        WHERE Id = @Id;
+      `);
+    if (!existsRes.recordset?.length) {
+      throw notFound(`Data QC tidak ditemukan untuk id ${qcId}`);
+    }
+
+    const setClauses = [];
+    const request = new sql.Request(tx);
+    request.input("Id", sql.Int, qcId);
+
+    if (Object.prototype.hasOwnProperty.call(updates, "noProduksi")) {
+      setClauses.push("NoProduksi = @NoProduksi");
+      request.input("NoProduksi", sql.VarChar(50), updates.noProduksi);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, "hourStart")) {
+      setClauses.push("HourStart = @HourStart");
+      request.input("HourStart", sql.VarChar(5), updates.hourStart);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, "jumlahBS")) {
+      setClauses.push("JumlahBS = @JumlahBS");
+      request.input("JumlahBS", sql.Decimal(18, 3), updates.jumlahBS);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, "cycleTime")) {
+      setClauses.push("CycleTime = @CycleTime");
+      request.input("CycleTime", sql.Decimal(10, 2), updates.cycleTime);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, "counter")) {
+      setClauses.push("Counter = @Counter");
+      request.input("Counter", sql.Int, updates.counter);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, "berat")) {
+      setClauses.push("Berat = @Berat");
+      request.input("Berat", sql.Decimal(18, 3), updates.berat);
+    }
+
+    const updateRes = await request.query(`
+      UPDATE dbo.InjectProduksi_QC
+      SET ${setClauses.join(", ")}
+      OUTPUT
+        INSERTED.Id,
+        INSERTED.NoProduksi,
+        INSERTED.HourStart,
+        INSERTED.JumlahBS,
+        INSERTED.CycleTime,
+        INSERTED.Counter,
+        INSERTED.Berat,
+        INSERTED.DateTimeCreate
+      WHERE Id = @Id;
+    `);
+
+    await tx.commit();
+
+    const row = updateRes.recordset?.[0] || {};
+    return {
+      id: row.Id ?? null,
+      noProduksi: row.NoProduksi ?? null,
+      hourStart: formatHourStartForResponse(row.HourStart),
+      jumlahBS: row.JumlahBS == null ? null : Number(row.JumlahBS),
+      cycleTime: row.CycleTime == null ? null : Number(row.CycleTime),
+      counter: row.Counter ?? null,
+      berat: row.Berat == null ? null : Number(row.Berat),
+      dateTimeCreate: row.DateTimeCreate ?? null,
+    };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
+  }
 }
 
 async function generateUniqueCode(tx, { tableName, columnName, prefix, width }) {
@@ -785,7 +1493,6 @@ async function createInjectFurnitureWipLabel(
     noProduksi,
     idFurnitureWIP,
     pcs,
-    isPartial,
     hourStart,
     idWarna,
     dateCreate,
@@ -811,7 +1518,7 @@ async function createInjectFurnitureWipLabel(
     .input("Pcs", sql.Decimal(18, 3), pcs)
     .input("IDFurnitureWIP", sql.Int, idFurnitureWIP)
     .input("Berat", sql.Decimal(18, 3), null)
-    .input("IsPartial", sql.Bit, isPartial ? 1 : 0)
+    .input("IsPartial", sql.Bit, 0)
     .input("IdWarehouse", sql.Int, idWarehouse ?? null)
     .input("IdWarna", sql.Int, idWarna ?? null)
     .input("CreateBy", sql.VarChar(50), createBy)
@@ -832,6 +1539,58 @@ async function createInjectFurnitureWipLabel(
     `);
 
   return noFurnitureWIP;
+}
+
+async function createInjectBarangJadiLabel(
+  tx,
+  {
+    noProduksi,
+    idBJ,
+    pcs,
+    hourStart,
+    dateCreate,
+    nowDateTime,
+    createBy,
+    blok,
+    idLokasi,
+    idWarehouse,
+  },
+) {
+  const noBJ = await generateUniqueCode(tx, {
+    tableName: "dbo.BarangJadi",
+    columnName: "NoBJ",
+    prefix: "BA.",
+    width: 10,
+  });
+
+  await new sql.Request(tx)
+    .input("NoProduksi", sql.VarChar(50), noProduksi)
+    .input("NoBJ", sql.VarChar(50), noBJ)
+    .input("IdBJ", sql.Int, idBJ)
+    .input("DateCreate", sql.Date, dateCreate)
+    .input("Jam", sql.VarChar(20), hourStart)
+    .input("Pcs", sql.Decimal(18, 3), pcs)
+    .input("Berat", sql.Decimal(18, 3), null)
+    .input("IsPartial", sql.Bit, 0)
+    .input("IdWarehouse", sql.Int, idWarehouse ?? null)
+    .input("CreateBy", sql.VarChar(50), createBy)
+    .input("DateTimeCreate", sql.DateTime, nowDateTime)
+    .input("Blok", sql.VarChar(50), blok ?? null)
+    .input("IdLokasi", sql.Int, idLokasi ?? null).query(`
+      INSERT INTO dbo.BarangJadi (
+        NoBJ, IdBJ, DateCreate, DateUsage, Jam, Pcs, Berat,
+        IdWarehouse, CreateBy, DateTimeCreate, IsPartial, Blok, IdLokasi
+      )
+      VALUES (
+        @NoBJ, @IdBJ, @DateCreate, NULL, @Jam, @Pcs, @Berat,
+        @IdWarehouse, @CreateBy, @DateTimeCreate, @IsPartial, @Blok, @IdLokasi
+      );
+
+      INSERT INTO dbo.InjectProduksiOutputBarangJadi (NoProduksi, NoBJ)
+      VALUES (@NoProduksi, @NoBJ);
+    `);
+
+  return noBJ;
 }
 
 async function createInjectBonggolanLabel(
@@ -934,7 +1693,7 @@ async function createInjectRejectLabel(
   return noReject;
 }
 
-async function submitInjectBatch(payload, ctx) {
+async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
   const noProduksi = String(payload?.noProduksi || "").trim();
   if (!noProduksi) throw badReq("noProduksi wajib");
 
@@ -956,25 +1715,39 @@ async function submitInjectBatch(payload, ctx) {
     return parsed;
   };
 
-  const carryOverIn = toNonNegativeInt(payload?.carryOverIn, "carryOverIn");
-  const pcsInput = toNonNegativeInt(payload?.pcsInput, "pcsInput");
-  const carryOverOut = toNonNegativeInt(payload?.carryOverOut, "carryOverOut");
   const berat = toNonNegativeFloat(payload?.berat, "berat");
   const cycleTime = toNonNegativeFloat(payload?.cycleTime, "cycleTime");
   const counter = toNonNegativeInt(payload?.counter, "counter");
 
-  const idJenisRaw = payload?.idJenis;
-  const idJenis =
-    idJenisRaw === null || idJenisRaw === undefined || idJenisRaw === ""
-      ? null
-      : Number(idJenisRaw);
-  if (idJenis != null && (!Number.isInteger(idJenis) || idJenis <= 0)) {
-    throw badReq("idJenis harus integer positif bila diisi");
+  if (!Array.isArray(payload?.items) || payload.items.length === 0) {
+    throw badReq("items wajib berupa array minimal 1 elemen");
+  }
+  const items = payload.items.map((item, idx) => {
+    const label = `items[${idx}]`;
+    const idJenisRaw = item?.idJenis;
+    const idJenis =
+      idJenisRaw === null || idJenisRaw === undefined || idJenisRaw === ""
+        ? null
+        : Number(idJenisRaw);
+    if (idJenis != null && (!Number.isInteger(idJenis) || idJenis <= 0)) {
+      throw badReq(`${label}.idJenis harus integer positif bila diisi`);
+    }
+    return {
+      idJenis,
+      carryOverIn: toNonNegativeInt(item?.carryOverIn, `${label}.carryOverIn`),
+      pcsInput: toNonNegativeInt(item?.pcsInput, `${label}.pcsInput`),
+      carryOverOut: toNonNegativeInt(item?.carryOverOut, `${label}.carryOverOut`),
+    };
+  });
+
+  const idJenisSet = new Set(items.map((it) => it.idJenis));
+  if (idJenisSet.size !== items.length) {
+    throw badReq("items tidak boleh memiliki idJenis yang duplikat");
   }
 
   const bonggolan = payload?.bonggolan ?? null;
   const reject = payload?.reject ?? null;
-  const isLastBatch = Boolean(bonggolan || reject);
+  const isLastBatch = Boolean(bonggolan || reject || forceClose);
 
   if (bonggolan) {
     const idBonggolan = Number(bonggolan.idBonggolan);
@@ -1019,13 +1792,53 @@ async function submitInjectBatch(payload, ctx) {
     const headerRes = await new sql.Request(tx)
       .input("NoProduksi", sql.VarChar(50), noProduksi).query(`
         SELECT TOP 1
-          NoProduksi,
-          TglProduksi,
-          IdWarna,
-          HourStart,
-          HourEnd
-        FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK)
-        WHERE NoProduksi = @NoProduksi;
+          h.NoProduksi,
+          h.TglProduksi,
+          h.IdWarna,
+          h.IdMesin,
+          CASE
+            WHEN fwCount.TotalCount > 0 THEN 'furnitureWip'
+            WHEN bjCount.TotalCount > 0 THEN 'barangjadi'
+            ELSE NULL
+          END AS OutputCategory,
+          CONVERT(VARCHAR(8), h.HourStart, 108) AS HourStart,
+          CONVERT(VARCHAR(8), h.HourEnd,   108) AS HourEnd
+        FROM dbo.InjectProduksi_h h WITH (UPDLOCK, HOLDLOCK)
+        OUTER APPLY (
+          SELECT COUNT(1) AS TotalCount
+          FROM (
+            SELECT DISTINCT dFw.IdFurnitureWIP
+            FROM dbo.CetakanWarnaToFurnitureWIP_d dFw WITH (NOLOCK)
+            WHERE dFw.IdCetakan = h.IdCetakan
+              AND dFw.IdWarna = h.IdWarna
+              AND (
+                (dFw.IdFurnitureMaterial IS NULL
+                  AND (
+                    h.IdFurnitureMaterial = 0
+                    OR h.IdFurnitureMaterial IS NULL
+                  ))
+                OR dFw.IdFurnitureMaterial = h.IdFurnitureMaterial
+              )
+          ) x
+        ) fwCount
+        OUTER APPLY (
+          SELECT COUNT(1) AS TotalCount
+          FROM (
+            SELECT DISTINCT dBj.IdBarangJadi
+            FROM dbo.CetakanWarnaToProduk_d dBj WITH (NOLOCK)
+            WHERE dBj.IdCetakan = h.IdCetakan
+              AND dBj.IdWarna = h.IdWarna
+              AND (
+                (dBj.IdFurnitureMaterial IS NULL
+                  AND (
+                    h.IdFurnitureMaterial = 0
+                    OR h.IdFurnitureMaterial IS NULL
+                  ))
+                OR dBj.IdFurnitureMaterial = h.IdFurnitureMaterial
+              )
+          ) x
+        ) bjCount
+        WHERE h.NoProduksi = @NoProduksi;
       `);
 
     const header = headerRes.recordset?.[0];
@@ -1055,28 +1868,20 @@ async function submitInjectBatch(payload, ctx) {
       );
     }
 
-    const pcsInfo = await getInjectPcsPerLabelByNoProduksi(
-      noProduksi,
-      idJenis ?? null,
-    );
-    if (idJenis != null && Number(pcsInfo.idFurnitureWIP) !== idJenis) {
-      throw badReq(`idJenis ${idJenis} tidak valid untuk NoProduksi ${noProduksi}`);
-    }
-
-    const totalPcs = carryOverIn + pcsInput;
-    const pcsPerLabel = Number(pcsInfo.pcsPerLabel);
-    if (!Number.isFinite(pcsPerLabel) || pcsPerLabel <= 0) {
-      throw conflict(`PcsPerLabel tidak valid untuk NoProduksi ${noProduksi}`);
-    }
-
-    const jumlahLabel = Math.floor(totalPcs / pcsPerLabel);
-    const sisaPcs = totalPcs % pcsPerLabel;
-
-    if (jumlahLabel > 0 && idJenis == null) {
-      throw badReq("idJenis wajib diisi jika totalPcs sudah cukup minimal 1 label");
-    }
-    if (isLastBatch && sisaPcs > 0 && idJenis == null) {
-      throw badReq("idJenis wajib diisi pada batch terakhir jika masih ada sisa pcs");
+    const idMesin = header.IdMesin ?? null;
+    if (idMesin) {
+      const mesinRes = await new sql.Request(tx)
+        .input("IdMesin", sql.Int, idMesin).query(`
+          SELECT TOP 1 CounterCurrent
+          FROM dbo.MstMesinInject WITH (UPDLOCK)
+          WHERE IdMesin = @IdMesin;
+        `);
+      const counterCurrent = Number(mesinRes.recordset?.[0]?.CounterCurrent ?? 0);
+      if (counter < counterCurrent) {
+        throw badReq(
+          `Counter harus >= ${counterCurrent} (counter terakhir mesin). Input: ${counter}.`,
+        );
+      }
     }
 
     const nowDateTime = new Date();
@@ -1088,9 +1893,6 @@ async function submitInjectBatch(payload, ctx) {
     const batchInsertRes = await new sql.Request(tx)
       .input("NoProduksi", sql.VarChar(50), noProduksi)
       .input("HourStart", sql.VarChar(20), hourStart)
-      .input("CarryOverIn", sql.Int, carryOverIn)
-      .input("PcsInput", sql.Int, pcsInput)
-      .input("CarryOverOut", sql.Int, carryOverOut)
       .input("Berat", sql.Decimal(18, 3), berat)
       .input("CycleTime", sql.Decimal(18, 3), cycleTime)
       .input("Counter", sql.Int, counter)
@@ -1098,13 +1900,11 @@ async function submitInjectBatch(payload, ctx) {
         DECLARE @out TABLE (Id int, HourStart time(7));
 
         INSERT INTO dbo.InjectProduksiBatch (
-          NoProduksi, HourStart, CarryOverIn, PcsInput,
-          CarryOverOut, Berat, CycleTime, Counter, DateTimeCreate
+          NoProduksi, HourStart, Berat, CycleTime, Counter, DateTimeCreate
         )
         OUTPUT INSERTED.Id, INSERTED.HourStart INTO @out
         VALUES (
-          @NoProduksi, CAST(@HourStart AS time(7)), @CarryOverIn, @PcsInput,
-          @CarryOverOut, @Berat, @CycleTime, @Counter, @DateTimeCreate
+          @NoProduksi, CAST(@HourStart AS time(7)), @Berat, @CycleTime, @Counter, @DateTimeCreate
         );
 
         SELECT Id, CONVERT(varchar(8), HourStart, 108) AS HourStart
@@ -1112,42 +1912,158 @@ async function submitInjectBatch(payload, ctx) {
       `);
 
     const batchRow = batchInsertRes.recordset?.[0] || {};
-    const furnitureWIP = [];
+    const idBatch = batchRow.Id;
 
-    for (let index = 0; index < jumlahLabel; index += 1) {
-      const code = await createInjectFurnitureWipLabel(tx, {
+    const furnitureWIP = [];
+    const barangJadi = [];
+
+    for (const item of items) {
+      const pcsInfo = await getInjectPcsPerLabelByNoProduksi(
         noProduksi,
-        idFurnitureWIP: idJenis,
-        pcs: pcsPerLabel,
-        isPartial: false,
-        hourStart,
-        idWarna: pcsInfo.idWarna,
-        dateCreate: docDateOnly,
-        nowDateTime,
-        createBy: actorUsername,
-        blok: lokasi?.Blok ?? null,
-        idLokasi: lokasi?.IdLokasi ?? null,
-        idWarehouse: null,
-      });
-      furnitureWIP.push(code);
+        item.idJenis ?? null,
+        payload?.outputCategory ?? header.OutputCategory ?? null,
+      );
+      if (item.idJenis != null && Number(pcsInfo.idJenis) !== item.idJenis) {
+        throw badReq(`idJenis ${item.idJenis} tidak valid untuk NoProduksi ${noProduksi}`);
+      }
+
+      const outputCategory = String(
+        pcsInfo.outputCategory || header.OutputCategory || "",
+      ).toLowerCase();
+
+      const pcsPerLabel = Number(pcsInfo.pcsPerLabel);
+      if (!Number.isFinite(pcsPerLabel) || pcsPerLabel <= 0) {
+        throw conflict(`PcsPerLabel tidak valid untuk NoProduksi ${noProduksi}`);
+      }
+
+      const totalPcs = item.carryOverIn + item.pcsInput;
+      const jumlahLabel = Math.floor(totalPcs / pcsPerLabel);
+      const sisaPcs = totalPcs % pcsPerLabel;
+
+      if (jumlahLabel > 0 && item.idJenis == null) {
+        throw badReq("idJenis wajib diisi jika totalPcs sudah cukup minimal 1 label");
+      }
+      if (isLastBatch && sisaPcs > 0 && item.idJenis == null) {
+        throw badReq("idJenis wajib diisi pada batch terakhir jika masih ada sisa pcs");
+      }
+
+      await new sql.Request(tx)
+        .input("IdBatch", sql.Int, idBatch)
+        .input("IdJenis", sql.Int, item.idJenis)
+        .input("OutputCategory", sql.VarChar(20), outputCategory === "barangjadi" ? "barangjadi" : "furnitureWip")
+        .input("CarryOverIn", sql.Int, item.carryOverIn)
+        .input("PcsInput", sql.Int, item.pcsInput)
+        .input("CarryOverOut", sql.Int, item.carryOverOut)
+        .query(`
+          INSERT INTO dbo.InjectProduksiBatch_d (IdBatch, IdJenis, OutputCategory, CarryOverIn, PcsInput, CarryOverOut)
+          VALUES (@IdBatch, @IdJenis, @OutputCategory, @CarryOverIn, @PcsInput, @CarryOverOut);
+        `);
+
+      for (let index = 0; index < jumlahLabel; index += 1) {
+        if (outputCategory === "barangjadi") {
+          const code = await createInjectBarangJadiLabel(tx, {
+            noProduksi,
+            idBJ: item.idJenis,
+            pcs: pcsPerLabel,
+            hourStart,
+            dateCreate: docDateOnly,
+            nowDateTime,
+            createBy: actorUsername,
+            blok: lokasi?.Blok ?? null,
+            idLokasi: lokasi?.IdLokasi ?? null,
+            idWarehouse: null,
+          });
+          barangJadi.push(code);
+        } else {
+          const code = await createInjectFurnitureWipLabel(tx, {
+            noProduksi,
+            idFurnitureWIP: item.idJenis,
+            pcs: pcsPerLabel,
+            hourStart,
+            idWarna: pcsInfo.idWarna,
+            dateCreate: docDateOnly,
+            nowDateTime,
+            createBy: actorUsername,
+            blok: lokasi?.Blok ?? null,
+            idLokasi: lokasi?.IdLokasi ?? null,
+            idWarehouse: null,
+          });
+          furnitureWIP.push(code);
+        }
+      }
+
+      // Pada forceClose (terminate): pakai carryOverOut sebagai pcs sisa label
+      // Pada batch biasa (isLastBatch via bonggolan/reject): pakai sisaPcs
+      const partialPcs = forceClose ? item.carryOverOut : sisaPcs;
+      if (isLastBatch && partialPcs > 0) {
+        if (outputCategory === "barangjadi") {
+          const partialCode = await createInjectBarangJadiLabel(tx, {
+            noProduksi,
+            idBJ: item.idJenis,
+            pcs: partialPcs,
+            hourStart,
+            dateCreate: docDateOnly,
+            nowDateTime,
+            createBy: actorUsername,
+            blok: lokasi?.Blok ?? null,
+            idLokasi: lokasi?.IdLokasi ?? null,
+            idWarehouse: null,
+          });
+          barangJadi.push(partialCode);
+        } else {
+          const partialCode = await createInjectFurnitureWipLabel(tx, {
+            noProduksi,
+            idFurnitureWIP: item.idJenis,
+            pcs: partialPcs,
+            hourStart,
+            idWarna: pcsInfo.idWarna,
+            dateCreate: docDateOnly,
+            nowDateTime,
+            createBy: actorUsername,
+            blok: lokasi?.Blok ?? null,
+            idLokasi: lokasi?.IdLokasi ?? null,
+            idWarehouse: null,
+          });
+          furnitureWIP.push(partialCode);
+        }
+      }
     }
 
-    if (isLastBatch && sisaPcs > 0) {
-      const partialCode = await createInjectFurnitureWipLabel(tx, {
-        noProduksi,
-        idFurnitureWIP: idJenis,
-        pcs: sisaPcs,
-        isPartial: true,
-        hourStart,
-        idWarna: pcsInfo.idWarna,
-        dateCreate: docDateOnly,
-        nowDateTime,
-        createBy: actorUsername,
-        blok: lokasi?.Blok ?? null,
-        idLokasi: lokasi?.IdLokasi ?? null,
-        idWarehouse: null,
-      });
-      furnitureWIP.push(partialCode);
+    if (idMesin) {
+      await new sql.Request(tx)
+        .input("IdMesin", sql.Int, idMesin)
+        .input("Counter", sql.BigInt, counter)
+        .input("Now", sql.DateTime, nowDateTime).query(`
+          UPDATE dbo.MstMesinInject
+          SET CounterCurrent   = @Counter,
+              CounterUpdatedAt = @Now
+          WHERE IdMesin = @IdMesin;
+        `);
+    }
+
+    // Batch terakhir = hourStart batch + 1 jam == HourEnd produksi → set IsComplete
+    const batchHourStart = hourStart.substring(0, 8);
+    const prodHourEnd = header.HourEnd
+      ? (typeof header.HourEnd === "string"
+          ? header.HourEnd.substring(0, 8)
+          : new Date(header.HourEnd).toTimeString().substring(0, 8))
+      : null;
+
+    const shouldComplete = forceClose || (() => {
+      if (!prodHourEnd) return false;
+      const toSec = (t) => {
+        const [h, m, s] = t.split(":").map(Number);
+        return h * 3600 + (m || 0) * 60 + (s || 0);
+      };
+      return toSec(batchHourStart) >= toSec(prodHourEnd) - 3600;
+    })();
+    if (shouldComplete) {
+      await new sql.Request(tx)
+        .input("NoProduksi", sql.VarChar(50), noProduksi).query(`
+          UPDATE dbo.InjectProduksi_h
+          SET IsComplete = 1
+          WHERE NoProduksi = @NoProduksi;
+        `);
     }
 
     const createdBonggolan = bonggolan
@@ -1186,7 +2102,9 @@ async function submitInjectBatch(payload, ctx) {
         id: batchRow.Id ?? null,
         hourStart: formatHourStartForResponse(batchRow.HourStart || hourStart),
       },
+      outputCategory: header.OutputCategory ?? null,
       furnitureWIP,
+      barangJadi,
       bonggolan: createdBonggolan,
       reject: createdReject,
     };
@@ -1198,126 +2116,54 @@ async function submitInjectBatch(payload, ctx) {
   }
 }
 
-function isSafeSqlIdentifier(value) {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(value || "").trim());
-}
+async function terminateInjectProduksi(payload, hourEnd, ctx) {
+  // 1. Update HourEnd produksi
+  // 2. Insert batch dengan HourStart = hourEnd
+  // 3. IsComplete = 1 (forceClose)
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-async function getKategoriByKode(pool, kodeKategori) {
-  const req = pool.request();
-  req.input("KodeKategori", sql.VarChar(50), String(kodeKategori || "").trim());
-  const res = await req.query(`
-    SELECT TOP 1
-      IdKategori,
-      KodeKategori,
-      NamaKategori,
-      PrefixLabel,
-      NamaTableJenis,
-      NamaKolomIdJenis,
-      NamaKolomNamaJenis,
-      NamaTableLabel,
-      NamaKolomNoLabel,
-      NamaKolomIdJenisDiLabel
-    FROM dbo.MstKategori WITH (NOLOCK)
-    WHERE LOWER(KodeKategori) = LOWER(@KodeKategori)
-      AND ISNULL(Enable, 1) = 1;
-  `);
-  return res.recordset?.[0] || null;
-}
-
-async function getKategoriByIds(pool, idKategoriList = []) {
-  const ids = [...new Set(idKategoriList.map(Number).filter(Number.isFinite))];
-  if (ids.length === 0) return new Map();
-
-  const req = pool.request();
-  ids.forEach((id, index) => {
-    req.input(`KategoriId${index}`, sql.Int, id);
-  });
-  const inClause = ids.map((_, index) => `@KategoriId${index}`).join(", ");
-  const res = await req.query(`
-    SELECT
-      IdKategori,
-      KodeKategori,
-      NamaKategori,
-      PrefixLabel,
-      NamaTableJenis,
-      NamaKolomIdJenis,
-      NamaKolomNamaJenis,
-      NamaTableLabel,
-      NamaKolomNoLabel,
-      NamaKolomIdJenisDiLabel
-    FROM dbo.MstKategori WITH (NOLOCK)
-    WHERE IdKategori IN (${inClause})
-      AND ISNULL(Enable, 1) = 1;
-  `);
-
-  return new Map(
-    (res.recordset || []).map((row) => [Number(row.IdKategori), row]),
-  );
-}
-
-async function loadJenisNamesForFormulaRows(pool, formulaRows = []) {
-  const rows = Array.isArray(formulaRows) ? formulaRows : [];
-  if (rows.length === 0) return new Map();
-
-  const kategoriMap = await getKategoriByIds(
-    pool,
-    rows.map((row) => row.InputKategoriId),
-  );
-  const nameMap = new Map();
-
-  const groups = new Map();
-  for (const row of rows) {
-    const kategoriId = Number(row.InputKategoriId);
-    const inputId = Number(row.InputId);
-    if (!Number.isFinite(kategoriId) || !Number.isFinite(inputId)) continue;
-    if (!groups.has(kategoriId)) groups.set(kategoriId, new Set());
-    groups.get(kategoriId).add(inputId);
-  }
-
-  for (const [kategoriId, idSet] of groups.entries()) {
-    const meta = kategoriMap.get(kategoriId);
-    if (!meta) continue;
-
-    const tableName = String(meta.NamaTableJenis || "").trim();
-    const idColumn = String(meta.NamaKolomIdJenis || "").trim();
-    const nameColumn = String(meta.NamaKolomNamaJenis || "").trim();
-
-    if (
-      !isSafeSqlIdentifier(tableName) ||
-      !isSafeSqlIdentifier(idColumn) ||
-      !isSafeSqlIdentifier(nameColumn)
-    ) {
-      continue;
-    }
-
-    const ids = [...idSet];
-    if (ids.length === 0) continue;
-
-    const req = pool.request();
-    ids.forEach((id, index) => {
-      req.input(`JenisId${kategoriId}_${index}`, sql.Int, id);
+  try {
+    const actorIdNum = Number(ctx?.actorId);
+    const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+    const requestId = String(ctx?.requestId || "").trim();
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
     });
-    const inClause = ids
-      .map((_, index) => `@JenisId${kategoriId}_${index}`)
-      .join(", ");
 
-    const res = await req.query(`
-      SELECT
-        CAST(${idColumn} AS int) AS IdJenis,
-        CAST(${nameColumn} AS nvarchar(4000)) AS NamaJenis
-      FROM dbo.${tableName} WITH (NOLOCK)
-      WHERE ${idColumn} IN (${inClause});
-    `);
+    const noProduksi = String(payload?.noProduksi || "").trim();
+    if (!noProduksi) throw badReq("noProduksi wajib");
 
-    for (const item of res.recordset || []) {
-      nameMap.set(
-        `${kategoriId}:${Number(item.IdJenis)}`,
-        item.NamaJenis ?? null,
-      );
-    }
+    // Cek produksi ada dan lock
+    const checkRes = await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), noProduksi).query(`
+        SELECT TOP 1 NoProduksi, IsComplete
+        FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi;
+      `);
+    if (!checkRes.recordset?.length) throw notFound(`NoProduksi tidak ditemukan: ${noProduksi}`);
+    if (checkRes.recordset[0].IsComplete) throw conflict(`Produksi ${noProduksi} sudah complete.`);
+
+    // Update HourEnd
+    await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), noProduksi)
+      .input("HourEnd", sql.VarChar(20), hourEnd).query(`
+        UPDATE dbo.InjectProduksi_h
+        SET HourEnd = CASE WHEN @HourEnd IS NULL OR LTRIM(RTRIM(@HourEnd)) = '' THEN NULL ELSE CAST(@HourEnd AS time(7)) END
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    await tx.commit();
+  } catch (e) {
+    try { await tx.rollback(); } catch (_) {}
+    throw e;
   }
 
-  return nameMap;
+  // Submit batch + forceClose dalam transaksi terpisah via submitInjectBatch
+  return submitInjectBatch(payload, ctx, { forceClose: true });
 }
 
 async function getFormulaInputsByNoProduksi(noProduksi) {
@@ -1454,108 +2300,15 @@ async function getFormulaInputsByNoProduksi(noProduksi) {
     }
   }
 
-  const normalizedOutputs = outputs
-    .map((item) => ({
-      idJenis: Number(item?.idJenis),
-      namaJenis: item?.namaJenis ?? null,
-    }))
-    .filter((item) => Number.isFinite(item.idJenis) && item.idJenis > 0);
-
-  if (!header.OutputCategory || normalizedOutputs.length === 0) {
-    return {
-      noProduksi: no,
-      outputCategory: header.OutputCategory ?? null,
-      outputCategoryId: null,
-      outputs: normalizedOutputs,
-      formulas: [],
-    };
-  }
-
-  const outputKategori = await getKategoriByKode(
-    pool,
-    String(header.OutputCategory).toLowerCase(),
-  );
-
-  if (!outputKategori) {
-    return {
-      noProduksi: no,
-      outputCategory: header.OutputCategory,
-      outputCategoryId: null,
-      outputs: normalizedOutputs,
-      formulas: [],
-    };
-  }
-
-  const formulaReq = pool.request();
-  formulaReq.input("MainOutputKategoriId", sql.Int, outputKategori.IdKategori);
-  normalizedOutputs.forEach((item, index) => {
-    formulaReq.input(`MainOutputId${index}`, sql.Int, item.idJenis);
-  });
-
-  const inClause = normalizedOutputs
-    .map((_, index) => `@MainOutputId${index}`)
-    .join(", ");
-
-  const formulaRes = await formulaReq.query(`
-    SELECT
-      f.IdFormula,
-      f.MainOutputKategoriId,
-      mk.KodeKategori AS MainOutputKategoriKode,
-      mk.NamaKategori AS MainOutputKategoriNama,
-      f.MainOutputId,
-      f.InputKategoriId,
-      ik.KodeKategori AS InputKategoriKode,
-      ik.NamaKategori AS InputKategoriNama,
-      ik.PrefixLabel AS InputPrefixLabel,
-      ik.NamaTableJenis AS InputNamaTableJenis,
-      ik.NamaKolomIdJenis AS InputNamaKolomIdJenis,
-      ik.NamaKolomNamaJenis AS InputNamaKolomNamaJenis,
-      ik.NamaTableLabel AS InputNamaTableLabel,
-      ik.NamaKolomNoLabel AS InputNamaKolomNoLabel,
-      ik.NamaKolomIdJenisDiLabel AS InputNamaKolomIdJenisDiLabel,
-      f.InputId
-    FROM dbo.MstFormulaInput f WITH (NOLOCK)
-    LEFT JOIN dbo.MstKategori mk WITH (NOLOCK)
-      ON mk.IdKategori = f.MainOutputKategoriId
-    LEFT JOIN dbo.MstKategori ik WITH (NOLOCK)
-      ON ik.IdKategori = f.InputKategoriId
-    WHERE f.MainOutputKategoriId = @MainOutputKategoriId
-      AND f.MainOutputId IN (${inClause})
-    ORDER BY f.MainOutputId ASC, f.InputKategoriId ASC, f.InputId ASC;
-  `);
-
-  const outputNameMap = new Map(
-    normalizedOutputs.map((item) => [item.idJenis, item.namaJenis ?? null]),
-  );
-  const inputNameMap = await loadJenisNamesForFormulaRows(
-    pool,
-    formulaRes.recordset || [],
-  );
-  const formulas = (formulaRes.recordset || []).map((row) => ({
-    ...row,
-    InputNama:
-      inputNameMap.get(
-        `${Number(row.InputKategoriId)}:${Number(row.InputId)}`,
-      ) ?? null,
-    MainOutputNama: outputNameMap.get(Number(row.MainOutputId)) ?? null,
-  }));
+  const normalizedOutputs = normalizeOutputs(outputs);
 
   return {
     noProduksi: no,
-    outputCategory: header.OutputCategory,
-    outputCategoryId: outputKategori.IdKategori,
-    outputCategoryKode: outputKategori.KodeKategori,
-    outputCategoryNama: outputKategori.NamaKategori,
-    outputPrefixLabel: outputKategori.PrefixLabel ?? null,
-    outputNamaTableJenis: outputKategori.NamaTableJenis ?? null,
-    outputNamaKolomIdJenis: outputKategori.NamaKolomIdJenis ?? null,
-    outputNamaKolomNamaJenis: outputKategori.NamaKolomNamaJenis ?? null,
-    outputNamaTableLabel: outputKategori.NamaTableLabel ?? null,
-    outputNamaKolomNoLabel: outputKategori.NamaKolomNoLabel ?? null,
-    outputNamaKolomIdJenisDiLabel:
-      outputKategori.NamaKolomIdJenisDiLabel ?? null,
-    outputs: normalizedOutputs,
-    formulas,
+    ...(await getFormulaInputsByCategory({
+      pool,
+      outputCategory: header.OutputCategory,
+      outputs: normalizedOutputs,
+    })),
   };
 }
 
@@ -1664,6 +2417,29 @@ async function createInjectProduksi(payload, ctx) {
     }
 
     // ===============================
+    // Hitung IsRealtime (semua pakai local time)
+    // ===============================
+    const nowForRealtime = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const todayStr = `${nowForRealtime.getFullYear()}-${pad(nowForRealtime.getMonth() + 1)}-${pad(nowForRealtime.getDate())}`;
+    // effectiveDate bisa string "YYYY-MM-DD" atau Date object
+    const tglProduksiStr = typeof effectiveDate === "string"
+      ? effectiveDate.slice(0, 10)
+      : effectiveDate instanceof Date
+        ? `${effectiveDate.getFullYear()}-${pad(effectiveDate.getMonth() + 1)}-${pad(effectiveDate.getDate())}`
+        : "";
+    let isRealtime = 0;
+    if (tglProduksiStr === todayStr && body.hourStart && body.hourEnd) {
+      const currentTime = `${pad(nowForRealtime.getHours())}:${pad(nowForRealtime.getMinutes())}:${pad(nowForRealtime.getSeconds())}`;
+      const hs = String(body.hourStart).slice(0, 8);
+      const he = String(body.hourEnd).slice(0, 8);
+      const inRange = hs <= he
+        ? currentTime >= hs && currentTime <= he          // normal
+        : currentTime >= hs || currentTime <= he;          // overnight
+      if (inRange) isRealtime = 1;
+    }
+
+    // ===============================
     // Generate NoProduksi unik
     // ===============================
     const gen = async () =>
@@ -1715,7 +2491,8 @@ async function createInjectProduksi(payload, ctx) {
         body.beratProdukHasilTimbang ?? null,
       )
       .input("HourStart", sql.VarChar(20), body.hourStart)
-      .input("HourEnd", sql.VarChar(20), body.hourEnd);
+      .input("HourEnd", sql.VarChar(20), body.hourEnd)
+      .input("IsRealtime", sql.Bit, isRealtime);
 
     const insertSql = `
       DECLARE @tmp TABLE (
@@ -1725,7 +2502,7 @@ async function createInjectProduksi(payload, ctx) {
         Hadir int, IdCetakan int, IdWarna int, EnableOffset bit,
         OffsetCurrent int, OffsetNext int, IdFurnitureMaterial int,
         HourMeter decimal(18,2), BeratProdukHasilTimbang decimal(18,2),
-        HourStart time(7), HourEnd time(7)
+        HourStart time(7), HourEnd time(7), IsRealtime bit
       );
 
       INSERT INTO dbo.InjectProduksi_h (
@@ -1737,7 +2514,7 @@ async function createInjectProduksi(payload, ctx) {
         EnableOffset, OffsetCurrent, OffsetNext,
         IdFurnitureMaterial,
         HourMeter, BeratProdukHasilTimbang,
-        HourStart, HourEnd
+        HourStart, HourEnd, IsRealtime
       )
       OUTPUT
         INSERTED.NoProduksi,
@@ -1761,7 +2538,8 @@ async function createInjectProduksi(payload, ctx) {
         INSERTED.HourMeter,
         INSERTED.BeratProdukHasilTimbang,
         INSERTED.HourStart,
-        INSERTED.HourEnd
+        INSERTED.HourEnd,
+        INSERTED.IsRealtime
       INTO @tmp
       VALUES (
         @NoProduksi, @IdMesin, @TglProduksi,
@@ -1773,7 +2551,8 @@ async function createInjectProduksi(payload, ctx) {
         @IdFurnitureMaterial,
         @HourMeter, @BeratProdukHasilTimbang,
         CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL ELSE CAST(@HourStart AS time(7)) END,
-        CASE WHEN @HourEnd   IS NULL OR LTRIM(RTRIM(@HourEnd))   = '' THEN NULL ELSE CAST(@HourEnd   AS time(7)) END
+        CASE WHEN @HourEnd   IS NULL OR LTRIM(RTRIM(@HourEnd))   = '' THEN NULL ELSE CAST(@HourEnd   AS time(7)) END,
+        @IsRealtime
       );
 
       SELECT * FROM @tmp;
@@ -3511,6 +4290,7 @@ async function splitProduksiTime(selector, payload, ctx) {
     idFurnitureMaterialRaw === ""
       ? null
       : Number(idFurnitureMaterialRaw);
+  const batchPayload = payload?.batch && typeof payload.batch === "object" ? payload.batch : null;
 
   if (!hourStart) throw badReq("hourStart wajib diisi");
   if (!Number.isInteger(idCetakan) || idCetakan <= 0) {
@@ -3767,6 +4547,21 @@ async function splitProduksiTime(selector, payload, ctx) {
       newNoProduksi = retry;
     }
 
+    // Hitung IsRealtime untuk produksi baru (pakai local time)
+    const nowSplit = new Date();
+    const padS = (n) => String(n).padStart(2, "0");
+    const todaySplitStr = `${nowSplit.getFullYear()}-${padS(nowSplit.getMonth() + 1)}-${padS(nowSplit.getDate())}`;
+    let isRealtimeSplit = 0;
+    if (tanggal === todaySplitStr && hourStart && hourEnd) {
+      const currentTimeSplit = `${padS(nowSplit.getHours())}:${padS(nowSplit.getMinutes())}:${padS(nowSplit.getSeconds())}`;
+      const hs = hourStart.slice(0, 8);
+      const he = hourEnd.slice(0, 8);
+      const inRangeSplit = hs <= he
+        ? currentTimeSplit >= hs && currentTimeSplit <= he
+        : currentTimeSplit >= hs || currentTimeSplit <= he;
+      if (inRangeSplit) isRealtimeSplit = 1;
+    }
+
     const insReq = new sql.Request(tx);
     insReq
       .input("NewNoProduksi", sql.VarChar(50), newNoProduksi)
@@ -3775,7 +4570,8 @@ async function splitProduksiTime(selector, payload, ctx) {
       .input("NewHourEnd", sql.VarChar(20), hourEnd)
       .input("IdCetakan", sql.Int, idCetakan)
       .input("IdWarna", sql.Int, idWarna)
-      .input("IdFurnitureMaterial", sql.Int, idFurnitureMaterial);
+      .input("IdFurnitureMaterial", sql.Int, idFurnitureMaterial)
+      .input("IsRealtime", sql.Bit, isRealtimeSplit);
 
     const insertRes = await insReq.query(`
       DECLARE @out TABLE (
@@ -3800,7 +4596,8 @@ async function splitProduksiTime(selector, payload, ctx) {
         BeratProdukHasilTimbang decimal(18,2),
         HourStart time(7),
         HourEnd time(7),
-        IdRegu int
+        IdRegu int,
+        IsRealtime bit
       );
 
       INSERT INTO dbo.InjectProduksi_h (
@@ -3808,7 +4605,7 @@ async function splitProduksiTime(selector, payload, ctx) {
         CheckBy1, CheckBy2, ApproveBy, JmlhAnggota, Hadir,
         IdCetakan, IdWarna, EnableOffset, OffsetCurrent, OffsetNext,
         IdFurnitureMaterial, HourMeter, BeratProdukHasilTimbang,
-        HourStart, HourEnd, IdRegu
+        HourStart, HourEnd, IdRegu, IsRealtime
       )
       OUTPUT
         INSERTED.NoProduksi, INSERTED.IdMesin, INSERTED.TglProduksi, INSERTED.Jam,
@@ -3816,7 +4613,7 @@ async function splitProduksiTime(selector, payload, ctx) {
         INSERTED.ApproveBy, INSERTED.JmlhAnggota, INSERTED.Hadir, INSERTED.IdCetakan,
         INSERTED.IdWarna, INSERTED.EnableOffset, INSERTED.OffsetCurrent, INSERTED.OffsetNext,
         INSERTED.IdFurnitureMaterial, INSERTED.HourMeter, INSERTED.BeratProdukHasilTimbang,
-        INSERTED.HourStart, INSERTED.HourEnd, INSERTED.IdRegu
+        INSERTED.HourStart, INSERTED.HourEnd, INSERTED.IdRegu, INSERTED.IsRealtime
       INTO @out
       SELECT
         @NewNoProduksi,
@@ -3840,7 +4637,8 @@ async function splitProduksiTime(selector, payload, ctx) {
         h.BeratProdukHasilTimbang,
         CAST(@NewHourStart AS time(7)),
         CAST(@NewHourEnd AS time(7)),
-        h.IdRegu
+        h.IdRegu,
+        @IsRealtime
       FROM dbo.InjectProduksi_h h WITH (UPDLOCK, HOLDLOCK)
       WHERE h.NoProduksi = @SourceNoProduksi;
 
@@ -3865,6 +4663,165 @@ async function splitProduksiTime(selector, payload, ctx) {
         SET HourEnd = CAST(@NewHourStart AS time(7))
         WHERE NoProduksi = @SourceNoProduksi
       `);
+
+    // Source produksi selesai saat di-split — set IsComplete = 1 langsung
+    await new sql.Request(tx)
+      .input("SourceNoProduksi", sql.VarChar(50), sourceNo).query(`
+        UPDATE dbo.InjectProduksi_h
+        SET IsComplete = 1
+        WHERE NoProduksi = @SourceNoProduksi;
+      `);
+
+    // Insert batch untuk source jika frontend kirim data batch
+    const splitNowDateTime = new Date();
+    const splitFurnitureWIP = [];
+    const splitBarangJadi = [];
+
+    if (batchPayload) {
+      const batchHourStart = normalizeBatchHourStart(batchPayload.hourStart ?? hourStart);
+      if (!batchHourStart) throw badReq("batch.hourStart format tidak valid");
+
+      const toNN = (v, f) => {
+        const n = Number(v);
+        if (!Number.isInteger(n) || n < 0) throw badReq(`batch.${f} harus integer >= 0`);
+        return n;
+      };
+      const toNNF = (v, f) => {
+        const n = Number(v);
+        if (!Number.isFinite(n) || n < 0) throw badReq(`batch.${f} harus angka >= 0`);
+        return n;
+      };
+
+      const batchBerat = toNNF(batchPayload.berat ?? 0, "berat");
+      const batchCycleTime = toNNF(batchPayload.cycleTime ?? 0, "cycleTime");
+      const batchCounter = toNN(batchPayload.counter ?? 0, "counter");
+
+      const batchItems = Array.isArray(batchPayload.items) ? batchPayload.items.map((item, idx) => ({
+        idJenis: item?.idJenis != null ? Number(item.idJenis) : null,
+        carryOverIn: toNN(item?.carryOverIn ?? 0, `items[${idx}].carryOverIn`),
+        pcsInput: toNN(item?.pcsInput ?? 0, `items[${idx}].pcsInput`),
+        carryOverOut: toNN(item?.carryOverOut ?? 0, `items[${idx}].carryOverOut`),
+      })) : [];
+
+      const dupBatch = await new sql.Request(tx)
+        .input("NoProduksi", sql.VarChar(50), sourceNo)
+        .input("HourStart", sql.VarChar(20), batchHourStart).query(`
+          SELECT TOP 1 Id FROM dbo.InjectProduksiBatch WITH (UPDLOCK, HOLDLOCK)
+          WHERE NoProduksi = @NoProduksi AND HourStart = CAST(@HourStart AS time(7));
+        `);
+
+      if (!dupBatch.recordset?.length) {
+        const batchInsReq = new sql.Request(tx);
+        batchInsReq
+          .input("NoProduksi", sql.VarChar(50), sourceNo)
+          .input("HourStart", sql.VarChar(20), batchHourStart)
+          .input("CycleTime", sql.Decimal(18, 2), batchCycleTime)
+          .input("Counter", sql.BigInt, batchCounter)
+          .input("Berat", sql.Decimal(18, 3), batchBerat)
+          .input("Now", sql.DateTime, splitNowDateTime);
+        const batchInsRes = await batchInsReq.query(`
+          INSERT INTO dbo.InjectProduksiBatch (NoProduksi, HourStart, CycleTime, Counter, Berat, DateTimeCreate)
+          OUTPUT INSERTED.Id
+          VALUES (@NoProduksi, CAST(@HourStart AS time(7)), @CycleTime, @Counter, @Berat, @Now);
+        `);
+        const batchId = batchInsRes.recordset?.[0]?.Id;
+
+        if (batchId && batchItems.length > 0) {
+          // Ambil pcsPerLabel untuk source produksi
+          const pcsInfoList = await getInjectPcsPerLabelListByNoProduksi(sourceNo);
+
+          for (const item of batchItems) {
+            const outputCategory = String(batchPayload.outputCategory || "furnitureWip").toLowerCase();
+
+            await new sql.Request(tx)
+              .input("IdBatch", sql.Int, batchId)
+              .input("IdJenis", sql.Int, item.idJenis)
+              .input("OutputCategory", sql.VarChar(50), outputCategory === "barangjadi" ? "barangjadi" : "furnitureWip")
+              .input("CarryOverIn", sql.Int, item.carryOverIn)
+              .input("PcsInput", sql.Int, item.pcsInput)
+              .input("CarryOverOut", sql.Int, item.carryOverOut).query(`
+                INSERT INTO dbo.InjectProduksiBatch_d (IdBatch, IdJenis, OutputCategory, CarryOverIn, PcsInput, CarryOverOut)
+                VALUES (@IdBatch, @IdJenis, @OutputCategory, @CarryOverIn, @PcsInput, @CarryOverOut);
+              `);
+
+            // Generate label
+            const pcsInfo = pcsInfoList.find((p) => p.idJenis === item.idJenis) ?? pcsInfoList[0];
+            const pcsPerLabel = pcsInfo ? Number(pcsInfo.pcsPerLabel) : 0;
+            if (pcsPerLabel > 0 && item.idJenis != null) {
+              const totalPcs = item.carryOverIn + item.pcsInput;
+              const jumlahLabel = Math.floor(totalPcs / pcsPerLabel);
+
+              for (let i = 0; i < jumlahLabel; i++) {
+                if (outputCategory === "barangjadi") {
+                  const code = await createInjectBarangJadiLabel(tx, {
+                    noProduksi: sourceNo,
+                    idBJ: item.idJenis,
+                    pcs: pcsPerLabel,
+                    hourStart: batchHourStart,
+                    dateCreate: docDateOnly,
+                    nowDateTime: splitNowDateTime,
+                    createBy: actorUsername,
+                    blok: null,
+                    idLokasi: null,
+                    idWarehouse: null,
+                  });
+                  splitBarangJadi.push(code);
+                } else {
+                  const code = await createInjectFurnitureWipLabel(tx, {
+                    noProduksi: sourceNo,
+                    idFurnitureWIP: item.idJenis,
+                    pcs: pcsPerLabel,
+                    hourStart: batchHourStart,
+                    idWarna: pcsInfo?.idWarna ?? null,
+                    dateCreate: docDateOnly,
+                    nowDateTime: splitNowDateTime,
+                    createBy: actorUsername,
+                    blok: null,
+                    idLokasi: null,
+                    idWarehouse: null,
+                  });
+                  splitFurnitureWIP.push(code);
+                }
+              }
+
+              // carryOverOut → label sisa (sama seperti terminate)
+              if (item.carryOverOut > 0) {
+                if (outputCategory === "barangjadi") {
+                  const code = await createInjectBarangJadiLabel(tx, {
+                    noProduksi: sourceNo,
+                    idBJ: item.idJenis,
+                    pcs: item.carryOverOut,
+                    hourStart: batchHourStart,
+                    dateCreate: docDateOnly,
+                    nowDateTime: splitNowDateTime,
+                    createBy: actorUsername,
+                    blok: null,
+                    idLokasi: null,
+                    idWarehouse: null,
+                  });
+                  splitBarangJadi.push(code);
+                } else {
+                  const code = await createInjectFurnitureWipLabel(tx, {
+                    noProduksi: sourceNo,
+                    idFurnitureWIP: item.idJenis,
+                    pcs: item.carryOverOut,
+                    hourStart: batchHourStart,
+                    idWarna: pcsInfo?.idWarna ?? null,
+                    dateCreate: docDateOnly,
+                    nowDateTime: splitNowDateTime,
+                    createBy: actorUsername,
+                    blok: null,
+                    idLokasi: null,
+                    idWarehouse: null,
+                  });
+                  splitFurnitureWIP.push(code);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
 
     await new sql.Request(tx)
       .input("SourceNoProduksi", sql.VarChar(50), sourceNo)
@@ -3904,6 +4861,10 @@ async function splitProduksiTime(selector, payload, ctx) {
         IdOperator: idOperators[0] ?? null,
         IdOperators: [...new Set(idOperators)],
       },
+      sourceBatch: batchPayload ? {
+        furnitureWIP: splitFurnitureWIP,
+        barangJadi: splitBarangJadi,
+      } : null,
     };
   } catch (e) {
     try {
@@ -3919,7 +4880,11 @@ module.exports = {
   getFurnitureWipListByNoProduksi,
   getPackingListByNoProduksi,
   getInjectPcsPerLabelByNoProduksi,
+  getInjectPcsPerLabelListByNoProduksi,
   getInjectBatchByNoProduksi,
+  getInjectQcByNoProduksi,
+  createInjectQc,
+  updateInjectQc,
   getFormulaInputsByNoProduksi,
   createInjectProduksi,
   updateInjectProduksi,
@@ -3933,6 +4898,7 @@ module.exports = {
   validateLabel,
   validateInputLabelForNoProduksi,
   submitInjectBatch,
+  terminateInjectProduksi,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
   splitProduksiTime,

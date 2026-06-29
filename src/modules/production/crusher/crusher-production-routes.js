@@ -36,6 +36,12 @@ router.get(
 );
 
 router.get(
+  "/crusher/:noCrusherProduksi/formula-inputs",
+  verifyToken,
+  ctrl.getFormulaInputsByNoCrusherProduksi,
+);
+
+router.get(
   "/crusher/:noCrusherProduksi/outputs",
   verifyToken,
   ctrl.getOutputsByNoCrusherProduksi,
