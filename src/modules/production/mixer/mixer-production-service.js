@@ -198,9 +198,10 @@ async function getAllProduksi(
 
   const rows = (dataRes.recordset || []).map((r) => ({
     ...r,
-    IdOperators: typeof r.IdOperators === "string"
-      ? JSON.parse(r.IdOperators).map((x) => x.value)
-      : (r.IdOperators ?? []),
+    IdOperators:
+      typeof r.IdOperators === "string"
+        ? JSON.parse(r.IdOperators).map((x) => x.value)
+        : (r.IdOperators ?? []),
   }));
 
   return { data: rows, total };
@@ -293,10 +294,14 @@ async function createMixerProduksi(payload, ctx) {
     // 5) Parse jam -> int (atau hitung dari hourStart-hourEnd)
     let jamKerja = payload.jam ?? null;
     if (jamKerja == null) {
-      const calc = calcJamKerjaFromStartEnd(payload?.hourStart, payload?.hourEnd);
+      const calc = calcJamKerjaFromStartEnd(
+        payload?.hourStart,
+        payload?.hourEnd,
+      );
       if (calc != null) jamKerja = calc;
     }
-    if (jamKerja == null) throw badReq("Field wajib: jam (atau isi hourStart-hourEnd)");
+    if (jamKerja == null)
+      throw badReq("Field wajib: jam (atau isi hourStart-hourEnd)");
     const jamInt = parseJamToInt(jamKerja);
 
     // 6) Insert header
@@ -1206,6 +1211,8 @@ async function validateLabel(labelCode) {
   let prefix = "";
   if (raw.substring(0, 3).toUpperCase() === "BF.") {
     prefix = "BF.";
+  } else if (raw.substring(0, 3).toUpperCase() === "AB.") {
+    prefix = "AB.";
   } else {
     prefix = raw.substring(0, 2).toUpperCase();
   }
@@ -1232,13 +1239,14 @@ async function validateLabel(labelCode) {
     // =========================
     // A. BahanBaku_d (A.xxxxx-<pallet>)
     // =========================
-    case "A.": {
+    case "A.":
+    case "AB.": {
       tableName = "BahanBaku_d";
-      // Format: A.0000000001-1
+      // Format: A.0000000001-1 atau AB.0000000001-1
       const parts = raw.split("-");
       if (parts.length !== 2) {
         throw new Error(
-          "Invalid format for A. prefix. Expected: A.0000000001-1",
+          "Invalid format for A./AB. prefix. Expected: A.0000000001-1 or AB.0000000001-1",
         );
       }
       const noBahanBaku = parts[0].trim();
@@ -1541,7 +1549,7 @@ async function validateLabel(labelCode) {
 
     default:
       throw new Error(
-        `Invalid prefix: ${prefix}. Valid prefixes: A., B., D., M., F., V., H., BF.`,
+        `Invalid prefix: ${prefix}. Valid prefixes: A., AB., B., D., M., F., V., H., BF.`,
       );
   }
 }
@@ -1685,7 +1693,9 @@ async function splitProduksiTime(selector, payload, ctx) {
     if (!sourceNo) throw conflict("Data produksi terakhir tidak valid");
     const srcShift = Number(src.Shift);
     if (!Number.isInteger(srcShift) || srcShift <= 0) {
-      throw conflict(`Data shift produksi sumber tidak valid pada ${sourceNo}.`);
+      throw conflict(
+        `Data shift produksi sumber tidak valid pada ${sourceNo}.`,
+      );
     }
 
     const shiftRefRes = await new sql.Request(tx)
@@ -1725,9 +1735,18 @@ async function splitProduksiTime(selector, payload, ctx) {
       throw conflict("Master shift memiliki HourStart/HourEnd tidak valid.");
     }
 
-    const reqStartInWindow = normalizeIntoShiftWindow(reqStartSec, shiftStartSec, shiftEndSec);
-    const reqEndInWindow = normalizeIntoShiftWindow(shiftEndSec, shiftStartSec, shiftEndSec);
-    const shiftEndBound = shiftStartSec > shiftEndSec ? shiftEndSec + 86400 : shiftEndSec;
+    const reqStartInWindow = normalizeIntoShiftWindow(
+      reqStartSec,
+      shiftStartSec,
+      shiftEndSec,
+    );
+    const reqEndInWindow = normalizeIntoShiftWindow(
+      shiftEndSec,
+      shiftStartSec,
+      shiftEndSec,
+    );
+    const shiftEndBound =
+      shiftStartSec > shiftEndSec ? shiftEndSec + 86400 : shiftEndSec;
 
     if (
       reqStartInWindow < shiftStartSec ||
@@ -1740,7 +1759,9 @@ async function splitProduksiTime(selector, payload, ctx) {
       );
     }
     if (reqEndInWindow <= reqStartInWindow) {
-      throw badReq("hourEnd harus lebih besar dari hourStart dalam rentang shift yang sama");
+      throw badReq(
+        "hourEnd harus lebih besar dari hourStart dalam rentang shift yang sama",
+      );
     }
 
     const srcHourStartStr = normalizeTimeValue(src.HourStart);
@@ -1748,9 +1769,15 @@ async function splitProduksiTime(selector, payload, ctx) {
     const srcHourEndStr = normalizeTimeValue(src.HourEnd);
     const srcEndSec = toSeconds(srcHourEndStr);
     if (srcStartSec == null || srcEndSec == null) {
-      throw conflict(`Data jam produksi sumber tidak valid pada ${sourceNo} (HourStart/HourEnd).`);
+      throw conflict(
+        `Data jam produksi sumber tidak valid pada ${sourceNo} (HourStart/HourEnd).`,
+      );
     }
-    const reqStartInSource = normalizeIntoShiftWindow(reqStartSec, srcStartSec, srcEndSec);
+    const reqStartInSource = normalizeIntoShiftWindow(
+      reqStartSec,
+      srcStartSec,
+      srcEndSec,
+    );
     if (reqStartInSource <= srcStartSec) {
       throw badReq(`Jam Mulai harus lebih besar dari ${srcHourStartStr}.`);
     }
@@ -1770,7 +1797,9 @@ async function splitProduksiTime(selector, payload, ctx) {
       `);
     if (duplicateRes.recordset?.length) {
       const existingNo = duplicateRes.recordset[0].NoProduksi;
-      throw conflict(`Rentang waktu ${hourStart}-${hourEnd} sudah ada pada produksi ${existingNo}.`);
+      throw conflict(
+        `Rentang waktu ${hourStart}-${hourEnd} sudah ada pada produksi ${existingNo}.`,
+      );
     }
 
     const docDateOnly = toDateOnly(src.TglProduksi);
@@ -1791,7 +1820,9 @@ async function splitProduksiTime(selector, payload, ctx) {
 
     let newNoProduksi = await gen();
     const exists = await new sql.Request(tx).input(
-      "NoProduksi", sql.VarChar(50), newNoProduksi,
+      "NoProduksi",
+      sql.VarChar(50),
+      newNoProduksi,
     ).query(`
         SELECT 1 FROM dbo.MixerProduksi_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoProduksi = @NoProduksi
@@ -1799,7 +1830,9 @@ async function splitProduksiTime(selector, payload, ctx) {
     if (exists.recordset.length > 0) {
       const retry = await gen();
       const exists2 = await new sql.Request(tx).input(
-        "NoProduksi", sql.VarChar(50), retry,
+        "NoProduksi",
+        sql.VarChar(50),
+        retry,
       ).query(`
           SELECT 1 FROM dbo.MixerProduksi_h WITH (UPDLOCK, HOLDLOCK)
           WHERE NoProduksi = @NoProduksi
@@ -1897,8 +1930,11 @@ async function splitProduksiTime(selector, payload, ctx) {
         WHERE od.NoProduksi = @SourceNoProduksi;
       `);
 
-    const opRes = await new sql.Request(tx)
-      .input("NoProduksi", sql.VarChar(50), newNoProduksi).query(`
+    const opRes = await new sql.Request(tx).input(
+      "NoProduksi",
+      sql.VarChar(50),
+      newNoProduksi,
+    ).query(`
         SELECT IdOperator
         FROM dbo.MixerProduksiOperator_d
         WHERE NoProduksi = @NoProduksi
