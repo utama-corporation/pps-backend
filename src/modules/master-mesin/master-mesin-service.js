@@ -848,8 +848,7 @@ async function getInjectByNoProduksi({
         WHEN pendingProd.NoProduksi IS NOT NULL THEN 'pending'
         WHEN h.NoProduksi IS NULL THEN 'idle'
         ELSE 'aktif'
-      END AS MachineStatus,
-      h.IsRealtime
+      END AS MachineStatus
     FROM dbo.MstMesin m WITH (NOLOCK)
     LEFT JOIN dbo.MstMesinInject mi WITH (NOLOCK)
       ON mi.IdMesin = m.IdMesin
@@ -863,8 +862,7 @@ async function getInjectByNoProduksi({
         ih.IdFurnitureMaterial,
         ih.Shift,
         ih.HourStart,
-        ih.HourEnd,
-        ih.IsRealtime
+        ih.HourEnd
       FROM dbo.InjectProduksi_h ih WITH (NOLOCK)
       CROSS JOIN CurrentCtx c
       WHERE ih.IdMesin = m.IdMesin
@@ -888,7 +886,7 @@ async function getInjectByNoProduksi({
       ORDER BY ih.HourStart DESC, ih.NoProduksi DESC
     ) h
     OUTER APPLY (
-      -- Produksi terakhir mesin: jika IsComplete=0 dan HourEnd sudah lewat → pending
+      -- Ambil produksi incomplete terbaru untuk kandidat pending
       SELECT TOP 1
         ph.NoProduksi,
         ph.TglProduksi,
@@ -898,36 +896,29 @@ async function getInjectByNoProduksi({
         ph.IdFurnitureMaterial,
         ph.Shift,
         ph.HourStart,
-        ph.HourEnd,
-        ph.IsComplete
+        ph.HourEnd
       FROM dbo.InjectProduksi_h ph WITH (NOLOCK)
       CROSS JOIN CurrentCtx c
       WHERE ph.IdMesin = m.IdMesin
-      ORDER BY ph.TglProduksi DESC, ph.HourEnd DESC
-    ) latestProd
-    OUTER APPLY (
-      -- Hanya expose sebagai pendingProd jika produksi terakhir belum complete dan HourEnd sudah lewat
-      SELECT
-        latestProd.NoProduksi,
-        latestProd.TglProduksi,
-        latestProd.IdRegu,
-        latestProd.IdCetakan,
-        latestProd.IdWarna,
-        latestProd.IdFurnitureMaterial,
-        latestProd.Shift,
-        latestProd.HourStart,
-        latestProd.HourEnd
-      FROM (SELECT 1 AS dummy) _
-      CROSS JOIN CurrentCtx c
-      WHERE latestProd.NoProduksi IS NOT NULL
-        AND latestProd.IsComplete = 0
+        AND ph.IsComplete = 0
         AND (
-          CONVERT(date, latestProd.TglProduksi) < c.CurrentDate
+          CONVERT(date, ph.TglProduksi) < c.CurrentDate
           OR (
-            CONVERT(date, latestProd.TglProduksi) = c.CurrentDate
-            AND c.CurrentTime > CAST(latestProd.HourEnd AS time(0))
+            CONVERT(date, ph.TglProduksi) = c.CurrentDate
+            AND (
+              (
+                ph.HourStart <= ph.HourEnd
+                AND c.CurrentTime >= CAST(ph.HourEnd AS time(0))
+              )
+              OR (
+                ph.HourStart > ph.HourEnd
+                AND c.CurrentTime >= CAST(ph.HourEnd AS time(0))
+                AND c.CurrentTime < CAST(ph.HourStart AS time(0))
+              )
+            )
           )
         )
+      ORDER BY ph.TglProduksi DESC, ph.HourEnd DESC, ph.NoProduksi DESC
     ) pendingProd
     LEFT JOIN dbo.MstCetakan ct WITH (NOLOCK)
       ON ct.IdCetakan = COALESCE(h.IdCetakan, pendingProd.IdCetakan)

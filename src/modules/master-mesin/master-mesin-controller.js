@@ -1,5 +1,11 @@
 const service = require("./master-mesin-service");
 
+function mapInjectStatus(machineStatus) {
+  if (machineStatus === "aktif") return "current";
+  if (machineStatus === "pending") return "pending";
+  return "idle";
+}
+
 async function getByIdBagian(req, res) {
   const { username } = req;
 
@@ -562,7 +568,7 @@ async function getInject(req, res) {
       Shift: r.Shift ?? null,
       HourStart: r.HourStart ?? null,
       HourEnd: r.HourEnd ?? null,
-      machineStatus: r.MachineStatus ?? null,
+      status: mapInjectStatus(r.MachineStatus),
       standarBerat: r.standarBerat ?? r.StandarBerat ?? null,
       standarCycleTime: r.standarCycleTime ?? r.StandarCycleTime ?? null,
       counterCurrent: r.counterCurrent ?? r.CounterCurrent ?? null,
@@ -570,7 +576,6 @@ async function getInject(req, res) {
       lastResetAt: r.lastResetAt ?? r.LastResetAt ?? null,
       lastResetBy: r.lastResetBy ?? r.LastResetBy ?? null,
       counterUpdatedAt: r.counterUpdatedAt ?? r.CounterUpdatedAt ?? null,
-      isRealtime: r.IsRealtime ?? null,
     }));
 
     return res.status(200).json({

@@ -29,6 +29,55 @@ const {
   generateNextCode,
 } = require("../../../core/utils/sequence-code-helper");
 
+function formatTanggalPanjangIndonesia(value) {
+  if (!value) return null;
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return new Intl.DateTimeFormat("id-ID", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(date);
+}
+
+async function assertNoIncompleteProduksiForMesin(tx, idMesin) {
+  const mesinId = Number(idMesin);
+  if (!Number.isInteger(mesinId) || mesinId <= 0) {
+    throw badReq("idMesin wajib integer positif");
+  }
+
+  const activeRes = await new sql.Request(tx).input("IdMesin", sql.Int, mesinId)
+    .query(`
+      SELECT TOP 1
+        NoCrusherProduksi,
+        Tanggal,
+        Shift
+      FROM dbo.CrusherProduksi_h WITH (UPDLOCK, HOLDLOCK)
+      WHERE IdMesin = @IdMesin
+        AND ISNULL(IsComplete, 0) = 0
+      ORDER BY Tanggal ASC, HourStart ASC, NoCrusherProduksi ASC;
+    `);
+
+  const activeRow = activeRes.recordset?.[0] || null;
+  const activeNoProduksi = String(activeRow?.NoCrusherProduksi || "").trim();
+
+  if (activeNoProduksi) {
+    const tanggalPanjang =
+      formatTanggalPanjangIndonesia(activeRow?.Tanggal) || "-";
+    const shiftText =
+      activeRow?.Shift == null || activeRow?.Shift === ""
+        ? "-"
+        : String(activeRow.Shift).trim();
+
+    throw conflict(
+      `Terdapat produksi yang belum di selesaikan pada ${tanggalPanjang}, shift ${shiftText} dengan Nomor Produksi ${activeNoProduksi}. Selesaikan produksi tersebut terlebih dahulu.`,
+    );
+  }
+}
+
 /**
  * Paginated fetch for dbo.CrusherProduksi_h
  * Columns available:
@@ -134,6 +183,7 @@ async function getAllProduksi(
       mc.NamaCrusher AS OutputJenisNama,
       h.Jam         AS JamKerja,
       h.Shift,
+      h.IsComplete,
       h.CreateBy,
       h.CheckBy1,
       h.CheckBy2,
@@ -253,6 +303,7 @@ async function getProduksiByDate({ date, idMesin = null, shift = null }) {
       h.JmlhAnggota,
       h.Hadir,
       h.HourMeter,
+      h.IsComplete,
 
       -- outputs connected to this produksi
       (
@@ -383,7 +434,13 @@ async function createCrusherProduksi(payload, ctx) {
     });
 
     // =====================================================
-    // 4) Generate NoCrusherProduksi via generateNextCode()
+    // 4) Precondition: satu mesin tidak boleh punya produksi crusher
+    // aktif lebih dari satu pada saat create.
+    // =====================================================
+    await assertNoIncompleteProduksiForMesin(tx, body.idMesin);
+
+    // =====================================================
+    // 5) Generate NoCrusherProduksi via generateNextCode()
     //    Format: G.0000000001
     // =====================================================
     const gen = async () =>
@@ -925,6 +982,72 @@ async function deleteCrusherProduksi(noCrusherProduksi, ctx) {
       await tx.rollback();
     } catch (_) {}
     throw e;
+  }
+}
+
+async function completeCrusherProduksi(noCrusherProduksi, ctx) {
+  const no = String(noCrusherProduksi || "").trim();
+  if (!no) throw badReq("noCrusherProduksi wajib");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const checkRes = await new sql.Request(tx).input(
+      "NoCrusherProduksi",
+      sql.VarChar(50),
+      no,
+    ).query(`
+        SELECT TOP 1 NoCrusherProduksi, IsComplete
+        FROM dbo.CrusherProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoCrusherProduksi = @NoCrusherProduksi;
+      `);
+
+    if (!checkRes.recordset?.length) {
+      throw notFound(`NoCrusherProduksi tidak ditemukan: ${no}`);
+    }
+
+    if (checkRes.recordset[0].IsComplete) {
+      throw conflict(`Produksi ${no} sudah complete.`);
+    }
+
+    await new sql.Request(tx).input(
+      "NoCrusherProduksi",
+      sql.VarChar(50),
+      no,
+    ).query(`
+        UPDATE dbo.CrusherProduksi_h
+        SET IsComplete = 1
+        WHERE NoCrusherProduksi = @NoCrusherProduksi;
+      `);
+
+    await tx.commit();
+
+    return {
+      noCrusherProduksi: no,
+      isComplete: true,
+      status: "complete",
+    };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
   }
 }
 
@@ -1743,6 +1866,7 @@ module.exports = {
   getProduksiByDate,
   getCrusherMasters,
   createCrusherProduksi,
+  completeCrusherProduksi,
   updateCrusherProduksi,
   deleteCrusherProduksi,
   fetchInputs,

@@ -24,6 +24,12 @@ router.post(
   brokerProduksiController.splitProduksiTime,
 );
 
+router.patch(
+  "/broker/:noProduksi/complete",
+  verifyToken,
+  brokerProduksiController.completeProduksi,
+);
+
 // ✅ Update by NoProduksi
 router.put(
   "/broker/:noProduksi",

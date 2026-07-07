@@ -25,6 +25,12 @@ router.post(
   washingProduksiController.splitProduksiTime,
 );
 
+router.patch(
+  "/washing/:noProduksi/complete",
+  verifyToken,
+  washingProduksiController.completeProduksi,
+);
+
 // req.body support: { ..., isBlower: 1 | 0 }
 router.put(
   "/washing/:noProduksi",

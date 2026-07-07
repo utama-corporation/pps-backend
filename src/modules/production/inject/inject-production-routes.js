@@ -33,6 +33,34 @@ router.get(
   injectProduksiController.getBatchByNoProduksi,
 );
 
+// ⚠️ Daftarkan SEBELUM "/inject/qc/:noProduksi" agar "counter" tidak
+// tertangkap sebagai :noProduksi.
+router.get(
+  "/inject/qc/counter",
+  verifyToken,
+  injectProduksiController.getQcCounters,
+);
+
+// ⚠️ Daftarkan SEBELUM "/inject/qc/counter/:idMesin" agar "by-produksi"
+// tidak tertangkap sebagai :idMesin.
+router.get(
+  "/inject/qc/counter/by-produksi/:noProduksi",
+  verifyToken,
+  injectProduksiController.getQcCounterByProduksi,
+);
+
+router.get(
+  "/inject/qc/counter/:idMesin",
+  verifyToken,
+  injectProduksiController.getQcCounterByMesin,
+);
+
+router.post(
+  "/inject/qc/counter/:idMesin/reset",
+  verifyToken,
+  injectProduksiController.resetQcCounter,
+);
+
 router.get(
   "/inject/qc/:noProduksi",
   verifyToken,
@@ -67,6 +95,12 @@ router.post(
   "/inject/:noProduksi/terminate",
   verifyToken,
   injectProduksiController.terminateInjectProduksi,
+);
+
+router.patch(
+  "/inject/:noProduksi/complete",
+  verifyToken,
+  injectProduksiController.completeProduksi,
 );
 
 router.post("/inject/qc", verifyToken, injectProduksiController.createQc);
