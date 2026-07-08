@@ -1,19 +1,19 @@
-const service = require("./master-washing-service");
+const service = require("./master-bonggolan-service");
 
 async function getAllActive(req, res) {
   const { username } = req;
-  console.log("Fetching master washing (active only) | Username:", username);
+  console.log("Fetching master bonggolan (active only) | Username:", username);
 
   try {
     const data = await service.getAllActive();
     return res.status(200).json({
       success: true,
-      message: "Data master washing (active) berhasil diambil",
+      message: "Data master bonggolan (active) berhasil diambil",
       totalData: data.length,
       data,
     });
   } catch (error) {
-    console.error("Error fetching master washing (active):", error);
+    console.error("Error fetching master bonggolan (active):", error);
     return res.status(500).json({
       success: false,
       message: "Internal Server Error",
@@ -31,7 +31,7 @@ async function getStokProses(req, res) {
       data,
     });
   } catch (error) {
-    console.error("Get Stok Washing Proses Error:", error);
+    console.error("Get Stok Bonggolan Proses Error:", error);
     return res.status(500).json({
       success: false,
       message: "Terjadi kesalahan server",
@@ -39,25 +39,25 @@ async function getStokProses(req, res) {
   }
 }
 
-async function getLabelByIdWashing(req, res) {
+async function getLabelByIdBonggolan(req, res) {
   try {
-    const idWashing = parseInt(req.params.idwashing, 10);
+    const idBonggolan = parseInt(req.params.idbonggolan, 10);
 
-    if (!Number.isFinite(idWashing)) {
+    if (!Number.isFinite(idBonggolan)) {
       return res.status(400).json({
         success: false,
-        message: "idwashing wajib berupa angka",
+        message: "idbonggolan wajib berupa angka",
       });
     }
 
-    const data = await service.getLabelByIdWashing(idWashing);
+    const data = await service.getLabelByIdBonggolan(idBonggolan);
 
     return res.status(200).json({
       success: true,
       data,
     });
   } catch (error) {
-    console.error("Get Label Washing By IdWashing Error:", error);
+    console.error("Get Label Bonggolan By IdBonggolan Error:", error);
     return res.status(500).json({
       success: false,
       message: "Terjadi kesalahan server",
@@ -65,4 +65,4 @@ async function getLabelByIdWashing(req, res) {
   }
 }
 
-module.exports = { getAllActive, getStokProses, getLabelByIdWashing };
+module.exports = { getAllActive, getStokProses, getLabelByIdBonggolan };
