@@ -144,10 +144,74 @@ async function deleteBongkarSusun(req, res) {
   }
 }
 
+
+function getLaporanQuery(req) {
+  return {
+    startDate: String(req.query.startDate || req.query.StartDate || "").trim(),
+    endDate: String(req.query.endDate || req.query.EndDate || "").trim(),
+  };
+}
+
+async function getLaporan(req, res) {
+  try {
+    const params = getLaporanQuery(req);
+    const rows = await service.getLaporanBongkarSusun(params);
+
+    return res.status(200).json({
+      success: true,
+      message: "Data laporan Bongkar Susun berhasil diambil",
+      periode: {
+        startDate: params.startDate,
+        endDate: params.endDate,
+      },
+      total: rows.length,
+      data: rows,
+    });
+  } catch (e) {
+    return res
+      .status(e.statusCode || 500)
+      .json({ success: false, message: e.message });
+  }
+}
+
+async function getLaporanHtml(req, res) {
+  try {
+    const params = getLaporanQuery(req);
+    const html = await service.getLaporanBongkarSusunHtml(params);
+
+    return res.status(200).type("html").send(html);
+  } catch (e) {
+    return res
+      .status(e.statusCode || 500)
+      .json({ success: false, message: e.message });
+  }
+}
+
+async function getLaporanPdf(req, res) {
+  try {
+    const params = getLaporanQuery(req);
+    const pdfBuffer = await service.getLaporanBongkarSusunPdf(params);
+    const fileName = `Laporan-Bongkar-Susun-${params.startDate}-sd-${params.endDate}.pdf`;
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+    return res.send(Buffer.from(pdfBuffer));
+  } catch (e) {
+    return res
+      .status(e.statusCode || 500)
+      .json({ success: false, message: e.message });
+  }
+}
+
+
+
 module.exports = {
   getLabelInfo,
   getAll,
   getDetail,
   create,
   deleteBongkarSusun,
+  getLaporan,
+  getLaporanHtml,
+  getLaporanPdf,
 };

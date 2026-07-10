@@ -2,6 +2,8 @@ const { sql, poolPromise } = require("../../core/config/db");
 const { badReq, conflict } = require("../../core/utils/http-error");
 const { formatYMD } = require("../../core/shared/tutup-transaksi-guard");
 const { detectCategory } = require("./sortir-reject-v2-category-registry");
+const { buildSortirRejectReportHtml } = require("../../core/utils/pdf/templates/laporan-sortir-reject/sortir-reject-report-pdf");
+const puppeteer = require("puppeteer");
 const {
   getLabelInfoBarangJadi,
 } = require("./handlers/get-label-info-barang-jadi.handler");
@@ -826,3 +828,90 @@ exports.deleteSortirReject = async (noBJSortir, ctx) => {
     throw e;
   }
 };
+
+
+exports.getLaporanBJSortirReject = async ({ startDate, endDate } = {}) => {
+  const start = String(startDate || "").trim();
+  const end = String(endDate || "").trim();
+
+  if (!start) throw badReq("startDate wajib diisi");
+  if (!end) throw badReq("endDate wajib diisi");
+
+  const pool = await poolPromise;
+  const result = await pool
+    .request()
+    .input("StartDate", sql.Date, start)
+    .input("EndDate", sql.Date, end)
+    .execute("dbo.sp_LaporanBJSortirReject");
+
+  return (result.recordset || []).map((row) => ({
+    ...row,
+    Tanggal: row.Tanggal ? formatYMD(row.Tanggal) : null,
+  }));
+};
+
+let browserPromise;
+
+async function getBrowser() {
+  if (!browserPromise) {
+    browserPromise = puppeteer.launch({
+      headless: "shell",
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+  }
+  return browserPromise;
+}
+
+process.on("SIGINT", async () => {
+  if (browserPromise) {
+    const b = await browserPromise;
+    await b.close();
+    browserPromise = null;
+  }
+});
+process.on("SIGTERM", async () => {
+  if (browserPromise) {
+    const b = await browserPromise;
+    await b.close();
+    browserPromise = null;
+  }
+});
+
+exports.getLaporanBJSortirRejectPdf = async ({ startDate, endDate } = {}) => {
+  const data = await exports.getLaporanBJSortirReject({
+    startDate,
+    endDate,
+  });
+
+  const html = buildSortirRejectReportHtml({
+    rows: data,
+    startDate,
+    endDate,
+  });
+
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+  await page.setViewport({ width: 794, height: 1123 });
+
+  try {
+    await page.goto("about:blank", { waitUntil: "domcontentloaded" });
+    await page.evaluate((h) => { document.open(); document.write(h); document.close(); }, html);
+
+    const pdfBuffer = await page.pdf({
+      format: "A4",
+      landscape: false,
+      printBackground: true,
+      margin: {
+        top: "8mm",
+        right: "8mm",
+        bottom: "8mm",
+        left: "8mm",
+      },
+    });
+
+    return pdfBuffer;
+  } finally {
+    await page.close();
+  }
+};
+

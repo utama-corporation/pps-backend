@@ -2,6 +2,8 @@
 const { sql, poolPromise } = require("../../core/config/db");
 const { conflict } = require("../../core/utils/http-error");
 const { formatYMD } = require("../../core/shared/tutup-transaksi-guard");
+const { buildBongkarSusunReportHtml } = require("./reports/bongkar-susun-report-pdf");
+
 const {
   detectCategory,
   CREATE_METHOD_BY_CATEGORY,
@@ -2008,6 +2010,570 @@ exports.createBongkarSusunByCategory = async (category, payload, ctx) => {
   }
   return exports[method](payload, ctx);
 };
+
+
+
+function getSatuan(kategori) {
+  const key = String(kategori || "").trim().toUpperCase();
+  if (key === "FURNITUREWIP" || key === "BARANGJADI") return "Pcs";
+  return "Kg";
+}
+
+function toNumber(value) {
+  const n = Number(value || 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeRow(row) {
+  const nama = String(row.Nama || "").trim();
+  const kategori = String(row.Kategori || "").trim().toUpperCase();
+  const satuan = getSatuan(kategori);
+
+  const jmlInput = toNumber(row.JmlInput);
+  const jmlOutput = toNumber(row.JmlOutput);
+  const nilaiInput = toNumber(row.NilaiInput);
+  const nilaiOutput = toNumber(row.NilaiOutput);
+  const jumlahSakInput = toNumber(row.JumlahSakInput);
+  const jumlahSakOutput = toNumber(row.JumlahSakOutput);
+
+  return {
+    NoBongkarSusun: row.NoBongkarSusun,
+    Tanggal: row.Tanggal ? formatYMD(row.Tanggal) : null,
+    ItemID: row.ItemID,
+    Nama: nama,
+    Kategori: kategori,
+
+    JmlInput: jmlInput,
+    JmlOutput: jmlOutput,
+    NilaiInput: nilaiInput,
+    NilaiOutput: nilaiOutput,
+    JumlahSakInput: jumlahSakInput,
+    JumlahSakOutput: jumlahSakOutput,
+
+    JenisInput: jmlInput > 0 || nilaiInput > 0 ? nama : "",
+    JenisOutput: jmlOutput > 0 || nilaiOutput > 0 ? nama : "",
+    JumlahInput: nilaiInput,
+    JumlahOutput: nilaiOutput,
+    Satuan: satuan,
+  };
+}
+
+function getReportQuery() {
+  return `
+;WITH DataLabel AS
+(
+    /* =========================
+       BAHAN BAKU INPUT
+    ========================= */
+    SELECT
+        A.NoBongkarSusun,
+        'INPUT' AS Tipe,
+        'BAHANBAKU' AS Kategori,
+        ISNULL(E.IdJenisPlastik, 0) AS ItemID,
+        F.Nama,
+        CONCAT('BB|', A.NoBahanBaku, '|', A.NoPallet, '|', A.NoSak) AS LabelKey,
+        CONCAT('BB|', A.NoBahanBaku, '|', A.NoPallet, '|', A.NoSak) AS SakKey,
+        ISNULL(D.Berat, 0) AS Nilai
+    FROM BongkarSusunInputBahanBaku A
+    LEFT JOIN BahanBaku_d D 
+        ON D.NoBahanBaku = A.NoBahanBaku 
+       AND D.NoPallet = A.NoPallet 
+       AND D.NoSak = A.NoSak
+    LEFT JOIN BahanBakuPallet_h E 
+        ON E.NoBahanBaku = A.NoBahanBaku 
+       AND E.NoPallet = A.NoPallet
+    LEFT JOIN MstBahanBaku F 
+        ON F.IdBB = E.IdJenisPlastik
+
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'OUTPUT',
+        'BAHANBAKU',
+        ISNULL(E.IdJenisPlastik, 0),
+        F.Nama,
+        CONCAT('BB|', A.NoBahanBaku, '|', A.NoPallet, '|', A.NoSak),
+        CONCAT('BB|', A.NoBahanBaku, '|', A.NoPallet, '|', A.NoSak),
+        ISNULL(D.Berat, 0)
+    FROM BongkarSusunOutputBahanBaku A
+    LEFT JOIN BahanBaku_d D 
+        ON D.NoBahanBaku = A.NoBahanBaku 
+       AND D.NoPallet = A.NoPallet 
+       AND D.NoSak = A.NoSak
+    LEFT JOIN BahanBakuPallet_h E 
+        ON E.NoBahanBaku = A.NoBahanBaku 
+       AND E.NoPallet = A.NoPallet
+    LEFT JOIN MstBahanBaku F 
+        ON F.IdBB = E.IdJenisPlastik
+
+
+    /* =========================
+       WASHING
+    ========================= */
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'INPUT',
+        'WASHING',
+        ISNULL(D.IdJenisPlastik, 0),
+        E.Nama,
+        CONCAT('W|', A.NoWashing, '|', A.NoSak),
+        CONCAT('W|', A.NoWashing, '|', A.NoSak),
+        ISNULL(C.Berat, 0)
+    FROM BongkarSusunInputWashing A
+    LEFT JOIN Washing_d C 
+        ON C.NoWashing = A.NoWashing 
+       AND C.NoSak = A.NoSak
+    LEFT JOIN Washing_h D 
+        ON D.NoWashing = A.NoWashing
+    LEFT JOIN MstWashing E 
+        ON E.IdWashing = D.IdJenisPlastik
+
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'OUTPUT',
+        'WASHING',
+        ISNULL(D.IdJenisPlastik, 0),
+        E.Nama,
+        CONCAT('W|', A.NoWashing, '|', A.NoSak),
+        CONCAT('W|', A.NoWashing, '|', A.NoSak),
+        ISNULL(C.Berat, 0)
+    FROM BongkarSusunOutputWashing A
+    LEFT JOIN Washing_d C 
+        ON C.NoWashing = A.NoWashing 
+       AND C.NoSak = A.NoSak
+    LEFT JOIN Washing_h D 
+        ON D.NoWashing = A.NoWashing
+    LEFT JOIN MstWashing E 
+        ON E.IdWashing = D.IdJenisPlastik
+
+
+    /* =========================
+       BROKER
+    ========================= */
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'INPUT',
+        'BROKER',
+        ISNULL(D.IdJenisPlastik, 0),
+        E.Nama,
+        CONCAT('BR|', A.NoBroker, '|', A.NoSak),
+        CONCAT('BR|', A.NoBroker, '|', A.NoSak),
+        ISNULL(C.Berat, 0)
+    FROM BongkarSusunInputBroker A
+    LEFT JOIN Broker_d C 
+        ON C.NoBroker = A.NoBroker 
+       AND C.NoSak = A.NoSak
+    LEFT JOIN Broker_h D 
+        ON D.NoBroker = A.NoBroker
+    LEFT JOIN MstBroker E 
+        ON E.IdBroker = D.IdJenisPlastik
+
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'OUTPUT',
+        'BROKER',
+        ISNULL(D.IdJenisPlastik, 0),
+        E.Nama,
+        CONCAT('BR|', A.NoBroker, '|', A.NoSak),
+        CONCAT('BR|', A.NoBroker, '|', A.NoSak),
+        ISNULL(C.Berat, 0)
+    FROM BongkarSusunOutputBroker A
+    LEFT JOIN Broker_d C 
+        ON C.NoBroker = A.NoBroker 
+       AND C.NoSak = A.NoSak
+    LEFT JOIN Broker_h D 
+        ON D.NoBroker = A.NoBroker
+    LEFT JOIN MstBroker E 
+        ON E.IdBroker = D.IdJenisPlastik
+
+
+    /* =========================
+       MIXER INPUT NORMAL
+    ========================= */
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'INPUT',
+        'MIXER',
+        ISNULL(D.IdMixer, 0),
+        E.Jenis AS Nama,
+        CONCAT('MX|', A.NoMixer, '|', A.NoSak),
+        CONCAT('MX|', A.NoMixer, '|', A.NoSak),
+        ISNULL(C.Berat, 0)
+    FROM BongkarSusunInputMixer A
+    LEFT JOIN Mixer_d C 
+        ON C.NoMixer = A.NoMixer 
+       AND C.NoSak = A.NoSak
+    LEFT JOIN Mixer_h D 
+        ON D.NoMixer = A.NoMixer
+    LEFT JOIN MstMixer E 
+        ON E.IdMixer = D.IdMixer
+
+    UNION ALL
+
+    SELECT
+        C.NoBongkarSusun,
+        'INPUT',
+        'MIXER',
+        ISNULL(F.IdMixer, 0),
+        G.Jenis AS Nama,
+        CONCAT('MXP|', A.NoMixerPartial),
+        CONCAT('MX|', A.NoMixer, '|', A.NoSak),
+        ISNULL(A.Berat, 0)
+    FROM MixerPartial A
+    INNER JOIN BongkarSusunInputMixerPartial C 
+        ON C.NoMixerPartial = A.NoMixerPartial
+    INNER JOIN Mixer_h F 
+        ON F.NoMixer = A.NoMixer
+    INNER JOIN MstMixer G 
+        ON G.IdMixer = F.IdMixer
+
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'OUTPUT',
+        'MIXER',
+        ISNULL(D.IdMixer, 0),
+        E.Jenis AS Nama,
+        CONCAT('MX|', A.NoMixer, '|', A.NoSak),
+        CONCAT('MX|', A.NoMixer, '|', A.NoSak),
+        ISNULL(C.Berat, 0)
+    FROM BongkarSusunOutputMixer A
+    LEFT JOIN Mixer_d C 
+        ON C.NoMixer = A.NoMixer 
+       AND C.NoSak = A.NoSak
+    LEFT JOIN Mixer_h D 
+        ON D.NoMixer = A.NoMixer
+    LEFT JOIN MstMixer E 
+        ON E.IdMixer = D.IdMixer
+
+
+    /* =========================
+       BONGGOLAN
+    ========================= */
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'INPUT',
+        'BONGGOLAN',
+        ISNULL(B.IdBonggolan, 0),
+        C.NamaBonggolan AS Nama,
+        CONCAT('BGN|', A.NoBonggolan),
+        NULL,
+        ISNULL(B.Berat, 0)
+    FROM BongkarSusunInputBonggolan A
+    LEFT JOIN Bonggolan B 
+        ON B.NoBonggolan = A.NoBonggolan
+    LEFT JOIN MstBonggolan C 
+        ON C.IdBonggolan = B.IdBonggolan
+
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'OUTPUT',
+        'BONGGOLAN',
+        ISNULL(B.IdBonggolan, 0),
+        C.NamaBonggolan AS Nama,
+        CONCAT('BGN|', A.NoBonggolan),
+        NULL,
+        ISNULL(B.Berat, 0)
+    FROM BongkarSusunOutputBonggolan A
+    LEFT JOIN Bonggolan B 
+        ON B.NoBonggolan = A.NoBonggolan
+    LEFT JOIN MstBonggolan C 
+        ON C.IdBonggolan = B.IdBonggolan
+
+
+    /* =========================
+       CRUSHER
+    ========================= */
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'INPUT',
+        'CRUSHER',
+        ISNULL(B.IdCrusher, 0),
+        C.NamaCrusher AS Nama,
+        CONCAT('CR|', A.NoCrusher),
+        NULL,
+        ISNULL(B.Berat, 0)
+    FROM BongkarSusunInputCrusher A
+    LEFT JOIN Crusher B 
+        ON B.NoCrusher = A.NoCrusher
+    LEFT JOIN MstCrusher C 
+        ON C.IdCrusher = B.IdCrusher
+
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'OUTPUT',
+        'CRUSHER',
+        ISNULL(B.IdCrusher, 0),
+        C.NamaCrusher AS Nama,
+        CONCAT('CR|', A.NoCrusher),
+        NULL,
+        ISNULL(B.Berat, 0)
+    FROM BongkarSusunOutputCrusher A
+    LEFT JOIN Crusher B 
+        ON B.NoCrusher = A.NoCrusher
+    LEFT JOIN MstCrusher C 
+        ON C.IdCrusher = B.IdCrusher
+
+
+    /* =========================
+       GILINGAN
+    ========================= */
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'INPUT',
+        'GILINGAN',
+        ISNULL(B.IdGilingan, 0),
+        C.NamaGilingan AS Nama,
+        CONCAT('GL|', A.NoGilingan),
+        NULL,
+        ISNULL(B.Berat, 0)
+    FROM BongkarSusunInputGilingan A
+    LEFT JOIN Gilingan B 
+        ON B.NoGilingan = A.NoGilingan
+    LEFT JOIN MstGilingan C 
+        ON C.IdGilingan = B.IdGilingan
+
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'OUTPUT',
+        'GILINGAN',
+        ISNULL(B.IdGilingan, 0),
+        C.NamaGilingan AS Nama,
+        CONCAT('GL|', A.NoGilingan),
+        NULL,
+        ISNULL(B.Berat, 0)
+    FROM BongkarSusunOutputGilingan A
+    LEFT JOIN Gilingan B 
+        ON B.NoGilingan = A.NoGilingan
+    LEFT JOIN MstGilingan C 
+        ON C.IdGilingan = B.IdGilingan
+
+
+    /* =========================
+       FURNITURE WIP
+    ========================= */
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'INPUT',
+        'FURNITUREWIP',
+        ISNULL(B.IDFurnitureWIP, 0),
+        C.Nama,
+        CONCAT('FWIP|', A.NoFurnitureWIP),
+        NULL,
+        ISNULL(B.Pcs, 0)
+    FROM BongkarSusunInputFurnitureWIP A
+    LEFT JOIN FurnitureWIP B 
+        ON B.NoFurnitureWIP = A.NoFurnitureWIP
+    LEFT JOIN MstCabinetWIP C 
+        ON C.IdCabinetWIP = B.IDFurnitureWIP
+    WHERE ISNULL(B.IsPartial, 0) <> 1
+
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'INPUT',
+        'FURNITUREWIP',
+        ISNULL(F.IDFurnitureWIP, 0),
+        G.Nama,
+        CONCAT('FWIPP|', A.NoFurnitureWIPPartial),
+        NULL,
+        ISNULL(E.Pcs, 0)
+    FROM BongkarSusunInputFurnitureWIPPartial A
+    INNER JOIN FurnitureWIPPartial E 
+        ON E.NoFurnitureWIPPartial = A.NoFurnitureWIPPartial
+    INNER JOIN FurnitureWIP F 
+        ON F.NoFurnitureWIP = E.NoFurnitureWIP
+    INNER JOIN MstCabinetWIP G 
+        ON G.IdCabinetWIP = F.IDFurnitureWIP
+    WHERE ISNULL(F.IsPartial, 0) = 1
+
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'OUTPUT',
+        'FURNITUREWIP',
+        ISNULL(B.IDFurnitureWIP, 0),
+        C.Nama,
+        CONCAT('FWIP|', A.NoFurnitureWIP),
+        NULL,
+        ISNULL(B.Pcs, 0)
+    FROM BongkarSusunOutputFurnitureWIP A
+    LEFT JOIN FurnitureWIP B 
+        ON B.NoFurnitureWIP = A.NoFurnitureWIP
+    LEFT JOIN MstCabinetWIP C 
+        ON C.IdCabinetWIP = B.IDFurnitureWIP
+
+
+    /* =========================
+       BARANG JADI
+    ========================= */
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'INPUT',
+        'BARANGJADI',
+        ISNULL(B.IdBJ, 0),
+        C.NamaBJ AS Nama,
+        CONCAT('BJ|', A.NoBJ),
+        NULL,
+        ISNULL(B.Pcs, 0)
+    FROM BongkarSusunInputBarangJadi A
+    LEFT JOIN BarangJadi B 
+        ON B.NoBJ = A.NoBJ
+    LEFT JOIN MstBarangJadi C 
+        ON C.IdBJ = B.IdBJ
+
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'OUTPUT',
+        'BARANGJADI',
+        ISNULL(B.IdBJ, 0),
+        C.NamaBJ AS Nama,
+        CONCAT('BJ|', A.NoBJ),
+        NULL,
+        ISNULL(B.Pcs, 0)
+    FROM BongkarSusunOutputBarangJadi A
+    LEFT JOIN BarangJadi B 
+        ON B.NoBJ = A.NoBJ
+    LEFT JOIN MstBarangJadi C 
+        ON C.IdBJ = B.IdBJ
+)
+
+SELECT
+    D.NoBongkarSusun,
+    H.Tanggal,
+    D.ItemID,
+    D.Nama,
+    D.Kategori,
+
+    COUNT(DISTINCT CASE WHEN D.Tipe = 'INPUT'  THEN D.LabelKey END) AS JmlInput,
+    COUNT(DISTINCT CASE WHEN D.Tipe = 'OUTPUT' THEN D.LabelKey END) AS JmlOutput,
+
+    SUM(CASE WHEN D.Tipe = 'INPUT'  THEN D.Nilai ELSE 0 END) AS NilaiInput,
+    SUM(CASE WHEN D.Tipe = 'OUTPUT' THEN D.Nilai ELSE 0 END) AS NilaiOutput,
+
+    COUNT(DISTINCT CASE WHEN D.Tipe = 'INPUT'  THEN D.SakKey END) AS JumlahSakInput,
+    COUNT(DISTINCT CASE WHEN D.Tipe = 'OUTPUT' THEN D.SakKey END) AS JumlahSakOutput
+
+FROM DataLabel D
+LEFT JOIN BongkarSusun_h H 
+    ON H.NoBongkarSusun = D.NoBongkarSusun
+WHERE H.Tanggal >= @StartDate
+  AND H.Tanggal < DATEADD(DAY, 1, @EndDate)
+GROUP BY
+    D.NoBongkarSusun,
+    H.Tanggal,
+    D.ItemID,
+    D.Nama,
+    D.Kategori
+ORDER BY
+    H.Tanggal,
+    D.NoBongkarSusun,
+    D.Kategori,
+    D.Nama;
+  `;
+}
+
+exports.getLaporanBongkarSusun = async ({ startDate, endDate } = {}) => {
+  const start = String(startDate || "").trim();
+  const end = String(endDate || "").trim();
+
+  if (!start) throw badReq("startDate wajib diisi");
+  if (!end) throw badReq("endDate wajib diisi");
+
+  const pool = await poolPromise;
+  const result = await pool
+    .request()
+    .input("StartDate", sql.Date, start)
+    .input("EndDate", sql.Date, end)
+    .query(getReportQuery());
+
+  return (result.recordset || []).map(normalizeRow);
+};
+
+exports.getLaporanBongkarSusunHtml = async ({ startDate, endDate } = {}) => {
+  const rows = await exports.getLaporanBongkarSusun({ startDate, endDate });
+  return buildBongkarSusunReportHtml({ startDate, endDate, rows });
+};
+
+let browserPromise;
+
+async function getBrowser() {
+  if (!browserPromise) {
+    const pptr = require("puppeteer");
+    browserPromise = pptr.launch({
+      headless: "shell",
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+  }
+  return browserPromise;
+}
+
+process.on("SIGINT", async () => {
+  if (browserPromise) { const b = await browserPromise; await b.close(); browserPromise = null; }
+});
+process.on("SIGTERM", async () => {
+  if (browserPromise) { const b = await browserPromise; await b.close(); browserPromise = null; }
+});
+
+exports.getLaporanBongkarSusunPdf = async ({ startDate, endDate } = {}) => {
+  const html = await exports.getLaporanBongkarSusunHtml({ startDate, endDate });
+
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1240, height: 877 });
+
+  try {
+    await page.goto("about:blank", { waitUntil: "domcontentloaded" });
+    await page.evaluate((h) => { document.open(); document.write(h); document.close(); }, html);
+
+    return await page.pdf({
+      format: "A4",
+      landscape: true,
+      printBackground: true,
+      margin: {
+        top: "8mm",
+        right: "8mm",
+        bottom: "8mm",
+        left: "8mm",
+      },
+    });
+  } finally {
+    await page.close();
+  }
+};
+
 
 exports.createBongkarSusunWashing =
   createWashingHandler.createBongkarSusunWashing;

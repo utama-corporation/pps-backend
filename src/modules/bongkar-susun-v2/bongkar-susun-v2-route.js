@@ -13,10 +13,19 @@ router.get("/", verifyToken, ctrl.getAll);
 // Detail satu transaksi
 router.get("/:noBongkarSusun", verifyToken, ctrl.getDetail);
 
+
+router.get("/laporan/html", ctrl.getLaporanHtml);
+router.get("/laporan/pdf", ctrl.getLaporanPdf);
+
+// Untuk ambil JSON dari aplikasi, tetap pakai token
+router.get("/laporan", verifyToken, ctrl.getLaporan);
+
 // Buat transaksi bongkar susun baru
 router.post("/", verifyToken, ctrl.create);
 
 // Hapus transaksi
 router.delete("/:noBongkarSusun", verifyToken, ctrl.deleteBongkarSusun);
+
+
 
 module.exports = router;

@@ -4,6 +4,7 @@ const {
   getActorUsername,
   makeRequestId,
 } = require("../../core/utils/http-context");
+const { buildSortirRejectReportHtml } = require("../../core/utils/pdf/templates/laporan-sortir-reject/sortir-reject-report-pdf");
 
 function makeCtx(req) {
   return {
@@ -146,9 +147,92 @@ async function deleteSortirReject(req, res) {
   }
 }
 
+
+function getLaporanQuery(req) {
+  const startDate = String(req.query.startDate || req.query.StartDate || "").trim();
+  const endDate = String(req.query.endDate || req.query.EndDate || "").trim();
+  return {
+    startDate,
+    endDate,
+  };
+}
+
+async function getLaporan(req, res) {
+  try {
+    const params = getLaporanQuery(req);
+    const rows = await service.getLaporanBJSortirReject(params);
+
+    return res.status(200).json({
+      success: true,
+      message: "Data laporan berhasil diambil",
+      periode: {
+        startDate: params.startDate,
+        endDate: params.endDate,
+      },
+      total: rows.length,
+      data: rows,
+    });
+  } catch (e) {
+    return res
+      .status(e.statusCode || 500)
+      .json({ success: false, message: e.message });
+  }
+}
+
+async function getLaporanHtml(req, res) {
+  try {
+    const params = getLaporanQuery(req);
+    const rows = await service.getLaporanBJSortirReject(params);
+    const html = buildSortirRejectReportHtml({
+      startDate: params.startDate,
+      endDate: params.endDate,
+      rows,
+    });
+
+    return res.status(200).type("html").send(html);
+  } catch (e) {
+    return res
+      .status(e.statusCode || 500)
+      .json({ success: false, message: e.message });
+  }
+}
+
+
+async function getLaporanPdf(req, res) {
+  try {
+    const { startDate, endDate } = req.query;
+
+    const pdfBuffer = await service.getLaporanBJSortirRejectPdf({
+      startDate,
+      endDate,
+    });
+
+    const fileName = `Laporan-BJ-Sortir-Reject-${startDate}-sd-${endDate}.pdf`;
+
+    res.setHeader("Content-Type", "application/pdf");
+
+    // Tampil langsung di browser
+    res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+
+    // Kalau mau langsung download, pakai ini:
+    // res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+
+    return res.send(Buffer.from(pdfBuffer));
+  } catch (err) {
+    console.error("getLaporanPdf error:", err);
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message || "Gagal membuat PDF laporan",
+    });
+  }
+}
+
 module.exports = {
   getLabelInfo,
   getAll,
+  getLaporan,
+  getLaporanHtml,
+  getLaporanPdf,
   getDetail,
   create,
   createReject,
