@@ -38,6 +38,37 @@ exports.getAll = async (req, res) => {
   }
 };
 
+// GET all header BahanBaku Proses (prefix "AB.") with pagination + search
+exports.getAllProses = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 20;
+    const search = (req.query.search || "").trim();
+    const includeUsed =
+      String(req.query.includeUsed || "").toLowerCase() === "true";
+
+    const { data, total } = await bahanBakuService.getAll({
+      page,
+      limit,
+      search,
+      includeUsed,
+      prefix: "AB.",
+    });
+    const totalPages = Math.ceil(total / limit);
+
+    return res.status(200).json({
+      success: true,
+      data,
+      meta: { page, limit, total, totalPages, includeUsed },
+    });
+  } catch (err) {
+    console.error("Get Bahan Baku Proses List Error:", err);
+    return res
+      .status(500)
+      .json({ success: false, message: "Terjadi kesalahan server" });
+  }
+};
+
 exports.getPalletByNoBahanBaku = async (req, res) => {
   const { nobahanbaku } = req.params;
 

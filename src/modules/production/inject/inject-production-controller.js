@@ -17,6 +17,52 @@ const {
   toJamInt,
 } = require("../../../core/utils/parse");
 
+function normalizeInjectBatchPayload(source, { noProduksi } = {}) {
+  const raw = source && typeof source === "object" ? source : {};
+  const payload = { ...raw };
+
+  if (noProduksi !== undefined) {
+    payload.noProduksi = String(noProduksi || "").trim();
+  } else {
+    payload.noProduksi = String(payload.noProduksi || "").trim();
+  }
+
+  payload.hourStart = normalizeTime(payload.hourStart);
+  payload.berat = toFloat(payload.berat);
+  payload.cycleTime = toFloat(payload.cycleTime);
+  payload.counter = toInt(payload.counter);
+
+  if (Array.isArray(payload.items)) {
+    payload.items = payload.items.map((item) => ({
+      idJenis:
+        item.idJenis === null ||
+        item.idJenis === undefined ||
+        item.idJenis === ""
+          ? null
+          : toInt(item.idJenis),
+      carryOverIn: toInt(item.carryOverIn),
+      pcsInput: toInt(item.pcsInput),
+      carryOverOut: toInt(item.carryOverOut),
+    }));
+  }
+
+  if (payload.bonggolan && typeof payload.bonggolan === "object") {
+    payload.bonggolan = {
+      idBonggolan: toInt(payload.bonggolan.idBonggolan),
+      berat: toFloat(payload.bonggolan.berat),
+    };
+  }
+
+  if (payload.reject && typeof payload.reject === "object") {
+    payload.reject = {
+      idReject: toInt(payload.reject.idReject),
+      berat: toFloat(payload.reject.berat),
+    };
+  }
+
+  return payload;
+}
+
 // ------------------------------------------------------------
 // ✅ GET ALL (paged)
 // ------------------------------------------------------------
@@ -262,15 +308,13 @@ async function getPcsPerLabelByNoProduksi(req, res) {
 
   try {
     const info =
-      await injectProduksiService.getInjectPcsPerLabelByNoProduksi(noProduksi);
+      await injectProduksiService.getInjectPcsPerLabelListByNoProduksi(
+        noProduksi,
+      );
 
     return res.status(200).json({
       success: true,
-      data: {
-        idFurnitureWIP: info.idFurnitureWIP,
-        namaBarang: info.namaBarang,
-        pcsPerLabel: info.pcsPerLabel,
-      },
+      data: info,
     });
   } catch (error) {
     console.error("[inject.getPcsPerLabelByNoProduksi]", error);
@@ -291,7 +335,8 @@ async function getBatchByNoProduksi(req, res) {
   }
 
   try {
-    const data = await injectProduksiService.getInjectBatchByNoProduksi(noProduksi);
+    const data =
+      await injectProduksiService.getInjectBatchByNoProduksi(noProduksi);
 
     return res.status(200).json({
       success: true,
@@ -307,6 +352,279 @@ async function getBatchByNoProduksi(req, res) {
   }
 }
 
+async function getQcByNoProduksi(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+
+  try {
+    const data =
+      await injectProduksiService.getInjectQcByNoProduksi(noProduksi);
+
+    return res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error("[inject.getQcByNoProduksi]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function createQc(req, res) {
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const jumlahBSRaw =
+    body.jumlahBS ?? body.beratInput ?? body.qtyInput ?? body.pcsInput;
+  const payload = {
+    noProduksi: String(body.noProduksi || "").trim(),
+    hourStart: normalizeTime(body.hourStart),
+    jumlahBS:
+      jumlahBSRaw === null || jumlahBSRaw === undefined
+        ? null
+        : toFloat(jumlahBSRaw),
+    cycleTime:
+      body.cycleTime === null || body.cycleTime === undefined
+        ? null
+        : toFloat(body.cycleTime),
+    counter:
+      body.counter === null || body.counter === undefined
+        ? null
+        : toInt(body.counter),
+    berat:
+      body.berat === null || body.berat === undefined
+        ? null
+        : toFloat(body.berat),
+  };
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res
+      .status(401)
+      .json({ success: false, message: "Unauthorized (idUsername missing)" });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await injectProduksiService.createInjectQc(payload, {
+      actorId,
+      actorUsername,
+      requestId,
+    });
+
+    return res.status(201).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error("[inject.createQc]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function getQcCounters(req, res) {
+  try {
+    const data = await injectProduksiService.getInjectQcCounters();
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[inject.getQcCounters]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function getQcCounterByMesin(req, res) {
+  const idMesin = toInt(req.params.idMesin);
+  if (!idMesin) {
+    return res
+      .status(400)
+      .json({ success: false, message: "idMesin is required" });
+  }
+
+  try {
+    const data = await injectProduksiService.getInjectQcCounterByMesin(idMesin);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[inject.getQcCounterByMesin]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function getQcCounterByProduksi(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+
+  try {
+    const data =
+      await injectProduksiService.getInjectQcCounterByNoProduksi(noProduksi);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[inject.getQcCounterByProduksi]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function resetQcCounter(req, res) {
+  const idMesin = toInt(req.params.idMesin);
+  if (!idMesin) {
+    return res
+      .status(400)
+      .json({ success: false, message: "idMesin is required" });
+  }
+
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const payload = {
+    value:
+      body.value === null || body.value === undefined ? 0 : toInt(body.value),
+  };
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res
+      .status(401)
+      .json({ success: false, message: "Unauthorized (idUsername missing)" });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await injectProduksiService.resetInjectQcCounter(
+      idMesin,
+      payload,
+      { actorId, actorUsername, requestId },
+    );
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[inject.resetQcCounter]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function updateQc(req, res) {
+  const id = toInt(req.params.id);
+  if (!id) {
+    return res.status(400).json({ success: false, message: "id is required" });
+  }
+
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const payload = {};
+
+  if (Object.prototype.hasOwnProperty.call(body, "noProduksi")) {
+    payload.noProduksi = String(body.noProduksi || "").trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "hourStart")) {
+    payload.hourStart = normalizeTime(body.hourStart);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "jumlahBS")) {
+    payload.jumlahBS =
+      body.jumlahBS === null || body.jumlahBS === undefined
+        ? null
+        : toFloat(body.jumlahBS);
+  } else if (Object.prototype.hasOwnProperty.call(body, "beratInput")) {
+    payload.jumlahBS =
+      body.beratInput === null || body.beratInput === undefined
+        ? null
+        : toFloat(body.beratInput);
+  } else if (Object.prototype.hasOwnProperty.call(body, "qtyInput")) {
+    payload.jumlahBS =
+      body.qtyInput === null || body.qtyInput === undefined
+        ? null
+        : toFloat(body.qtyInput);
+  } else if (Object.prototype.hasOwnProperty.call(body, "pcsInput")) {
+    payload.jumlahBS =
+      body.pcsInput === null || body.pcsInput === undefined
+        ? null
+        : toFloat(body.pcsInput);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "cycleTime")) {
+    payload.cycleTime =
+      body.cycleTime === null || body.cycleTime === undefined
+        ? null
+        : toFloat(body.cycleTime);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "counter")) {
+    payload.counter =
+      body.counter === null || body.counter === undefined
+        ? null
+        : toInt(body.counter);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "berat")) {
+    payload.berat =
+      body.berat === null || body.berat === undefined
+        ? null
+        : toFloat(body.berat);
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res
+      .status(401)
+      .json({ success: false, message: "Unauthorized (idUsername missing)" });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await injectProduksiService.updateInjectQc(id, payload, {
+      actorId,
+      actorUsername,
+      requestId,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error("[inject.updateQc]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
 async function submitBatch(req, res) {
   const body = req.body && typeof req.body === "object" ? req.body : {};
   const {
@@ -314,35 +632,9 @@ async function submitBatch(req, res) {
     actorUsername: _clientActorUsername,
     actor: _clientActor,
     requestId: _clientRequestId,
-    ...payload
+    ...rawPayload
   } = body;
-
-  payload.noProduksi = String(payload.noProduksi || "").trim();
-  payload.hourStart = normalizeTime(payload.hourStart);
-  payload.carryOverIn = toInt(payload.carryOverIn);
-  payload.pcsInput = toInt(payload.pcsInput);
-  payload.carryOverOut = toInt(payload.carryOverOut);
-  payload.berat = toFloat(payload.berat);
-  payload.cycleTime = toFloat(payload.cycleTime);
-  payload.counter = toInt(payload.counter);
-  payload.idJenis =
-    payload.idJenis === null || payload.idJenis === undefined || payload.idJenis === ""
-      ? null
-      : toInt(payload.idJenis);
-
-  if (payload.bonggolan && typeof payload.bonggolan === "object") {
-    payload.bonggolan = {
-      idBonggolan: toInt(payload.bonggolan.idBonggolan),
-      berat: toFloat(payload.bonggolan.berat),
-    };
-  }
-
-  if (payload.reject && typeof payload.reject === "object") {
-    payload.reject = {
-      idReject: toInt(payload.reject.idReject),
-      berat: toFloat(payload.reject.berat),
-    };
-  }
+  const payload = normalizeInjectBatchPayload(rawPayload);
 
   const actorId = getActorId(req);
   if (!actorId) {
@@ -369,6 +661,165 @@ async function submitBatch(req, res) {
     });
   } catch (error) {
     console.error("[inject.submitBatch]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+// ------------------------------------------------------------
+// ✅ POST Terminate InjectProduksi
+//    - Update HourEnd produksi ke hourEnd input user
+//    - Insert batch dengan HourStart = hourEnd input
+//    - Set IsComplete = 1
+// ------------------------------------------------------------
+async function terminateInjectProduksi(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi wajib" });
+  }
+
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const {
+    actorId: _clientActorId,
+    actorUsername: _clientActorUsername,
+    actor: _clientActor,
+    requestId: _clientRequestId,
+    ...rawPayload
+  } = body;
+
+  const hourEnd = normalizeTime(rawPayload.hourEnd);
+  if (!hourEnd) {
+    return res
+      .status(400)
+      .json({
+        success: false,
+        message: "hourEnd wajib (jam berhenti produksi)",
+      });
+  }
+
+  const batchSource =
+    rawPayload.batch && typeof rawPayload.batch === "object"
+      ? rawPayload.batch
+      : rawPayload;
+  const payload = normalizeInjectBatchPayload(batchSource, { noProduksi });
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res
+      .status(401)
+      .json({ success: false, message: "Unauthorized (idUsername missing)" });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await injectProduksiService.terminateInjectProduksi(
+      payload,
+      hourEnd,
+      { actorId, actorUsername, requestId },
+    );
+
+    return res.status(201).json({ success: true, data });
+  } catch (error) {
+    console.error("[inject.terminateInjectProduksi]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function completeProduksi(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi wajib" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized (idUsername missing)",
+    });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await injectProduksiService.requestCompleteInjectProduksi(
+      noProduksi,
+      { actorId, actorUsername, requestId },
+    );
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[inject.completeProduksi]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function approveCompleteProduksi(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi wajib" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized (idUsername missing)",
+    });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await injectProduksiService.approveCompleteInjectProduksi(
+      noProduksi,
+      { actorId, actorUsername, requestId },
+    );
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[inject.approveCompleteProduksi]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function listPendingCompleteRequests(req, res) {
+  try {
+    const data = await injectProduksiService.listPendingCompleteRequests();
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[inject.listPendingCompleteRequests]", error);
     const status = error.statusCode || error.status || 500;
     return res.status(status).json({
       success: false,
@@ -1055,6 +1506,7 @@ async function deleteInputsAndPartials(req, res) {
     "gilingan",
     "furnitureWip",
     "cabinetMaterial",
+    "cabinetWIP",
     // Existing partial labels
     "brokerPartial",
     "mixerPartial",
@@ -1208,6 +1660,7 @@ async function getFormulaInputsByNoProduksi(req, res) {
         InputKategoriId: item.InputKategoriId ?? null,
         InputKategoriKode: item.InputKategoriKode ?? null,
         InputKategoriNama: item.InputKategoriNama ?? null,
+        InputPrefixLabel: item.InputPrefixLabel ?? null,
         InputId: item.InputId ?? null,
         InputNama: item.InputNama ?? null,
       });
@@ -1217,6 +1670,7 @@ async function getFormulaInputsByNoProduksi(req, res) {
       noProduksi: result.noProduksi,
       outputCategory: result.outputCategory ?? null,
       outputCategoryId: result.outputCategoryId ?? null,
+      outputPrefixLabel: result.outputPrefixLabel ?? null,
       outputs: Array.isArray(result.outputs)
         ? result.outputs.map((item) => ({
             idJenis: item.idJenis ?? null,
@@ -1233,10 +1687,7 @@ async function getFormulaInputsByNoProduksi(req, res) {
       meta: { noProduksi },
     });
   } catch (error) {
-    console.error(
-      "Error fetching formula input from InjectProduksi_h:",
-      error,
-    );
+    console.error("Error fetching formula input from InjectProduksi_h:", error);
     return res.status(error.statusCode || 500).json({
       success: false,
       message:
@@ -1271,6 +1722,8 @@ async function splitProduksiTime(req, res) {
   const idCetakan = Number(body.idCetakan);
   const idWarna = Number(body.idWarna);
   const idFurnitureMaterial = body.idFurnitureMaterial;
+  const batch =
+    body.batch && typeof body.batch === "object" ? body.batch : null;
 
   if (!hourStart) {
     return res.status(400).json({
@@ -1325,7 +1778,7 @@ async function splitProduksiTime(req, res) {
     const ctx = { actorId, actorUsername, requestId };
     const result = await injectProduksiService.splitProduksiTime(
       { idMesin, tanggal },
-      { hourStart, idCetakan, idWarna, idFurnitureMaterial },
+      { hourStart, idCetakan, idWarna, idFurnitureMaterial, batch },
       ctx,
     );
 
@@ -1357,7 +1810,14 @@ module.exports = {
   getPackingByNoProduksi,
   getPcsPerLabelByNoProduksi,
   getBatchByNoProduksi,
+  getQcByNoProduksi,
   getFormulaInputsByNoProduksi,
+  createQc,
+  updateQc,
+  getQcCounters,
+  getQcCounterByMesin,
+  getQcCounterByProduksi,
+  resetQcCounter,
   createProduksi,
   updateProduksi,
   deleteProduksi,
@@ -1370,6 +1830,10 @@ module.exports = {
   validateLabel,
   validateInputLabelForNoProduksi,
   submitBatch,
+  terminateInjectProduksi,
+  completeProduksi,
+  approveCompleteProduksi,
+  listPendingCompleteRequests,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
   splitProduksiTime,

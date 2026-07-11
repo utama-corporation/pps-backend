@@ -622,6 +622,66 @@ const UPSERT_INPUT_CONFIGS = {
 };
 
 /**
+ * Mapping tabel OUTPUT per modul produksi.
+ *
+ * Berbeda dengan INPUT_CONFIGS, config ini SENGAJA minimal: hanya menyimpan
+ * metadata `mappingTable` yang dibutuhkan untuk pengecekan relasi (mis. saat
+ * update/hapus header produksi). Logika INSERT output tetap berada di
+ * masing-masing service karena kolom tiap tipe output sangat heterogen
+ * (FurnitureWIP, BarangJadi, Bonggolan, RejectV2, dst).
+ */
+const OUTPUT_MAPPING_CONFIGS = {
+  injectProduksi: {
+    furnitureWip: { mappingTable: "InjectProduksiOutputFurnitureWIP" },
+    barangJadi: { mappingTable: "InjectProduksiOutputBarangJadi" },
+    bonggolan: { mappingTable: "InjectProduksiOutputBonggolan" },
+    rejectV2: { mappingTable: "InjectProduksiOutputRejectV2" },
+    mixer: { mappingTable: "InjectProduksiOutputMixer" },
+  },
+};
+
+/**
+ * Kumpulkan semua tabel mapping (input + partial + upsert + output) yang
+ * mereferensikan sebuah produksi. Menjadi single source of truth untuk
+ * pengecekan relasi sebelum update/hapus header produksi.
+ *
+ * @param {string} produksiType - key entitas, mis. "injectProduksi"
+ * @returns {Array<{ mappingTable: string, codeColumn: string }>}
+ */
+function getReferencedTables(produksiType) {
+  const codeColumn =
+    PRODUKSI_CONFIGS?.[produksiType]?.codeColumn || "NoProduksi";
+  const tables = [];
+  const seen = new Set();
+
+  const add = (mappingTable) => {
+    const name = String(mappingTable || "").trim();
+    if (!name || seen.has(name)) return;
+    seen.add(name);
+    tables.push({ mappingTable: name, codeColumn });
+  };
+
+  // Standard inputs
+  for (const cfg of Object.values(INPUT_CONFIGS?.[produksiType] || {})) {
+    add(cfg?.mappingTable);
+  }
+  // Partial inputs (mapping table per produksiType)
+  for (const cfg of Object.values(PARTIAL_CONFIGS || {})) {
+    add(cfg?.mappingTables?.[produksiType]);
+  }
+  // Upsert inputs
+  for (const cfg of Object.values(UPSERT_INPUT_CONFIGS?.[produksiType] || {})) {
+    add(cfg?.mappingTable);
+  }
+  // Outputs
+  for (const cfg of Object.values(OUTPUT_MAPPING_CONFIGS?.[produksiType] || {})) {
+    add(cfg?.mappingTable);
+  }
+
+  return tables;
+}
+
+/**
  * Mapping label untuk UI responses
  */
 const INPUT_LABELS = {
@@ -649,4 +709,6 @@ module.exports = {
   INPUT_LABELS,
   WEIGHT_TOLERANCE,
   UPSERT_INPUT_CONFIGS,
+  OUTPUT_MAPPING_CONFIGS,
+  getReferencedTables,
 };

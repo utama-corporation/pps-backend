@@ -21,6 +21,12 @@ router.post(
   gilinganProduksiController.createProduksi,
 );
 
+router.patch(
+  "/gilingan/:noProduksi/complete",
+  verifyToken,
+  gilinganProduksiController.completeProduksi,
+);
+
 // UPDATE
 router.put(
   "/gilingan/:noProduksi",

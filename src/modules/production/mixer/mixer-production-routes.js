@@ -16,6 +16,12 @@ router.get("/mixer", verifyToken, mixerProduksiController.getAllProduksi);
 
 router.post("/mixer", verifyToken, mixerProduksiController.createProduksi);
 
+router.patch(
+  "/mixer/:noProduksi/complete",
+  verifyToken,
+  mixerProduksiController.completeProduksi,
+);
+
 router.put(
   "/mixer/:noProduksi",
   verifyToken,
