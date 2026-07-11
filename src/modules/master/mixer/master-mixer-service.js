@@ -6,76 +6,73 @@ async function getAllActive() {
 
   const query = `
     SELECT TOP (1000)
-      IdBroker,
-      Nama,
-      IdUOM,
-      IdForm,
-      PicPacking,
-      PicContent,
-      ItemCode,
-      IsEnable,
-      IsReject,
-      IsDisableMinMax
-    FROM [dbo].[MstBroker]
-    WHERE ISNULL(IsEnable, 1) = 1
-    ORDER BY Nama ASC;
+      IdMixer,
+      Jenis,
+      Enable,
+      ItemCode
+    FROM [dbo].[MstMixer]
+    WHERE ISNULL(Enable, 1) = 1
+    ORDER BY Jenis ASC;
   `;
 
   const result = await request.query(query);
   return result.recordset || [];
 }
 
-// Stok sisa per jenis broker (MstBroker), net dari BrokerPartial (sak IsPartial=1
+// Stok sisa per jenis mixer (MstMixer), net dari MixerPartial (sak IsPartial=1
 // beratnya dikurangi total yang sudah dipakai sebagian) — sama seperti perhitungan
-// di modules/label/broker (getBrokerDetailByNoBroker).
+// di modules/label/mixer (getMixerHeaderByNoMixer), tapi partial di-precompute
+// per (NoMixer, NoSak) dulu supaya tidak fan-out kalau ada >1 baris partial per sak.
 async function getStokProses() {
   const pool = await poolPromise;
 
   const result = await pool.request().query(`
-    WITH EffectiveDetail AS (
+    WITH PartialSum AS (
+      SELECT NoMixer, NoSak, SUM(Berat) AS PartialBerat
+      FROM dbo.MixerPartial
+      GROUP BY NoMixer, NoSak
+    ),
+    EffectiveDetail AS (
       SELECT
-        h.IdJenisPlastik,
+        h.IdMixer,
         h.DateCreate,
         d.NoSak,
         CASE
-          WHEN d.IsPartial = 1 THEN
-            d.Berat - ISNULL((
-              SELECT SUM(p.Berat)
-              FROM dbo.BrokerPartial p
-              WHERE p.NoBroker = d.NoBroker
-                AND p.NoSak = d.NoSak
-            ), 0)
+          WHEN d.IsPartial = 1 THEN d.Berat - ISNULL(ps.PartialBerat, 0)
           ELSE d.Berat
         END AS BeratEfektif
-      FROM dbo.Broker_h h
-      INNER JOIN dbo.Broker_d d
-        ON d.NoBroker = h.NoBroker
+      FROM dbo.Mixer_h h
+      INNER JOIN dbo.Mixer_d d
+        ON d.NoMixer = h.NoMixer
+      LEFT JOIN PartialSum ps
+        ON ps.NoMixer = d.NoMixer
+       AND ps.NoSak = d.NoSak
       WHERE d.DateUsage IS NULL
     )
     SELECT
-      m.IdBroker,
-      m.Nama,
+      m.IdMixer,
+      m.Jenis,
       ISNULL(agg.SakSisa, 0)   AS SakSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
       agg.DateCreateTertua
-    FROM dbo.MstBroker m
+    FROM dbo.MstMixer m
     LEFT JOIN (
       SELECT
-        IdJenisPlastik,
+        IdMixer,
         COUNT(NoSak) AS SakSisa,
         SUM(ISNULL(BeratEfektif, 0)) AS BeratSisa,
         MIN(DateCreate) AS DateCreateTertua
       FROM EffectiveDetail
-      GROUP BY IdJenisPlastik
+      GROUP BY IdMixer
     ) agg
-      ON agg.IdJenisPlastik = m.IdBroker
-    WHERE ISNULL(m.IsEnable, 1) = 1
-    ORDER BY m.Nama ASC;
+      ON agg.IdMixer = m.IdMixer
+    WHERE ISNULL(m.Enable, 1) = 1
+    ORDER BY m.Jenis ASC;
   `);
 
   return result.recordset.map((r) => ({
-    IdBroker: r.IdBroker,
-    Nama: r.Nama,
+    IdMixer: r.IdMixer,
+    Jenis: r.Jenis,
     SakSisa: typeof r.SakSisa === "number" ? r.SakSisa : parseInt(r.SakSisa, 10) || 0,
     BeratSisa: Number(
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
@@ -84,46 +81,48 @@ async function getStokProses() {
   }));
 }
 
-async function getLabelByIdBroker(idBroker) {
+async function getLabelByIdMixer(idMixer) {
   const pool = await poolPromise;
 
   const result = await pool
     .request()
-    .input("IdJenisPlastik", sql.Int, idBroker).query(`
-      WITH EffectiveDetail AS (
+    .input("IdMixer", sql.Int, idMixer).query(`
+      WITH PartialSum AS (
+        SELECT NoMixer, NoSak, SUM(Berat) AS PartialBerat
+        FROM dbo.MixerPartial
+        GROUP BY NoMixer, NoSak
+      ),
+      EffectiveDetail AS (
         SELECT
-          h.NoBroker,
+          h.NoMixer,
           h.DateCreate,
           d.NoSak,
           CASE
-            WHEN d.IsPartial = 1 THEN
-              d.Berat - ISNULL((
-                SELECT SUM(p.Berat)
-                FROM dbo.BrokerPartial p
-                WHERE p.NoBroker = d.NoBroker
-                  AND p.NoSak = d.NoSak
-              ), 0)
+            WHEN d.IsPartial = 1 THEN d.Berat - ISNULL(ps.PartialBerat, 0)
             ELSE d.Berat
           END AS BeratEfektif
-        FROM dbo.Broker_h h
-        INNER JOIN dbo.Broker_d d
-          ON d.NoBroker = h.NoBroker
-        WHERE h.IdJenisPlastik = @IdJenisPlastik
+        FROM dbo.Mixer_h h
+        INNER JOIN dbo.Mixer_d d
+          ON d.NoMixer = h.NoMixer
+        LEFT JOIN PartialSum ps
+          ON ps.NoMixer = d.NoMixer
+         AND ps.NoSak = d.NoSak
+        WHERE h.IdMixer = @IdMixer
           AND d.DateUsage IS NULL
       )
       SELECT
-        NoBroker,
-        NoBroker AS Label,
+        NoMixer,
+        NoMixer AS Label,
         DateCreate,
         COUNT(NoSak) AS SakSisa,
         SUM(ISNULL(BeratEfektif, 0)) AS BeratSisa
       FROM EffectiveDetail
-      GROUP BY NoBroker, DateCreate
-      ORDER BY DateCreate ASC, NoBroker ASC;
+      GROUP BY NoMixer, DateCreate
+      ORDER BY DateCreate ASC, NoMixer ASC;
     `);
 
   return result.recordset.map((r) => ({
-    NoBroker: r.NoBroker,
+    NoMixer: r.NoMixer,
     Label: r.Label,
     ...(r.DateCreate && { DateCreate: r.DateCreate }),
     SakSisa: typeof r.SakSisa === "number" ? r.SakSisa : parseInt(r.SakSisa, 10) || 0,
@@ -133,4 +132,4 @@ async function getLabelByIdBroker(idBroker) {
   }));
 }
 
-module.exports = { getAllActive, getStokProses, getLabelByIdBroker };
+module.exports = { getAllActive, getStokProses, getLabelByIdMixer };

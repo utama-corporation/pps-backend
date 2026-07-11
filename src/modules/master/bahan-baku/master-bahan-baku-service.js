@@ -1,7 +1,7 @@
 const { sql, poolPromise } = require("../../../core/config/db");
 
-// GET jenis bahan baku proses (IsProses = 1) beserta sisa stok (sak & berat)
-exports.getStokProses = async () => {
+// Builder query stok sisa (sak & berat) per jenis MstBahanBaku, di-filter lewat whereClause.
+async function getStokByFilter(whereClause) {
   const pool = await poolPromise;
 
   const result = await pool.request().query(`
@@ -53,7 +53,7 @@ exports.getStokProses = async () => {
       GROUP BY p.IdJenisPlastik
     ) agg
       ON agg.IdJenisPlastik = m.IdBB
-    WHERE m.IsProses = 1
+    WHERE ${whereClause}
     ORDER BY m.Nama;
   `);
 
@@ -66,6 +66,16 @@ exports.getStokProses = async () => {
     ),
     ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
   }));
+}
+
+// GET jenis bahan baku proses (IsProses = 1) beserta sisa stok (sak & berat)
+exports.getStokProses = async () => {
+  return getStokByFilter("m.IsProses = 1");
+};
+
+// GET jenis bahan baku pakai (IsProses NULL atau 0) beserta sisa stok (sak & berat)
+exports.getStokPakai = async () => {
+  return getStokByFilter("ISNULL(m.IsProses, 0) = 0");
 };
 
 // GET label (NoBahanBaku-NoPallet) yang masih ada sisa untuk suatu jenis bahan baku (IdBB)

@@ -17,6 +17,23 @@ exports.getStokProses = async (req, res) => {
   }
 };
 
+// GET /master/bahan-baku/pakai/stok
+exports.getStokPakai = async (req, res) => {
+  try {
+    const data = await masterBahanBakuService.getStokPakai();
+
+    return res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (err) {
+    console.error("Get Stok Bahan Baku Pakai Error:", err);
+    return res
+      .status(500)
+      .json({ success: false, message: "Terjadi kesalahan server" });
+  }
+};
+
 // GET /master/bahan-baku/proses/:idbahanbaku/label
 exports.getLabelByIdBahanBaku = async (req, res) => {
   try {

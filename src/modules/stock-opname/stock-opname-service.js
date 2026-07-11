@@ -1,5 +1,8 @@
 const { sql, poolPromise } = require("../../core/config/db");
 const { formatDate } = require("../../core/utils/date-helper");
+const {
+  assertStockOpnameNotComplete,
+} = require("../../core/shared/stock-opname-lock-guard");
 // const { insertLogMappingLokasi } = require("../../core/shared/log"); // sesuaikan path
 
 async function getNoStockOpname(
@@ -866,6 +869,8 @@ async function deleteStockOpnameHasil({ noso, nomorLabel }) {
   }
 
   const pool = await poolPromise; // ✅ pakai pool global
+  await assertStockOpnameNotComplete(noso, pool);
+
   const request = pool.request();
   request.input("noso", sql.VarChar, noso);
 
@@ -2727,6 +2732,8 @@ async function insertStockOpnameLabel({
   await tx.begin();
 
   try {
+    await assertStockOpnameNotComplete(noso, tx);
+
     const request = new sql.Request(tx);
 
     // common bindings

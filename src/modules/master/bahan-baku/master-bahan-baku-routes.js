@@ -22,4 +22,16 @@ router.get(
   ctrl.getLabelByIdBahanBaku,
 );
 
+router.get(
+  "/master/bahan-baku/pakai/stok",
+  requirePermission("penerimaanbahanbaku:read"), // sesuaikan permission-mu
+  ctrl.getStokPakai,
+);
+
+router.get(
+  "/master/bahan-baku/pakai/:idbahanbaku/label",
+  requirePermission("penerimaanbahanbaku:read"), // sesuaikan permission-mu
+  ctrl.getLabelByIdBahanBaku,
+);
+
 module.exports = router;

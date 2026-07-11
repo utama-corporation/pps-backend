@@ -16,6 +16,7 @@ const {
   badReq,
   conflict,
   notFound,
+  forbidden,
 } = require("../../../core/utils/http-error");
 const {
   getFormulaInputsByCategory,
@@ -279,7 +280,15 @@ async function getAllProduksi(
 
       h.InputMode,
 
-      h.IsComplete
+      h.IsComplete,
+
+      h.CompleteRequestStatus,
+      h.CompleteRequestedBy,
+      reqUser.Username AS CompleteRequestedByUsername,
+      h.CompleteRequestedAt,
+      h.CompleteDecisionBy,
+      decUser.Username AS CompleteDecisionByUsername,
+      h.CompleteDecisionAt
 
     FROM dbo.InjectProduksi_h h WITH (NOLOCK)
     LEFT JOIN dbo.MstMesin    ms WITH (NOLOCK) ON ms.IdMesin    = h.IdMesin
@@ -288,6 +297,10 @@ async function getAllProduksi(
     LEFT JOIN dbo.MstWarna    wr WITH (NOLOCK) ON wr.IdWarna    = h.IdWarna
     LEFT JOIN dbo.MstCabinetMaterial mm WITH (NOLOCK)
       ON mm.IdCabinetMaterial = h.IdFurnitureMaterial
+    LEFT JOIN dbo.MstUsername reqUser WITH (NOLOCK)
+      ON reqUser.IdUsername = h.CompleteRequestedBy
+    LEFT JOIN dbo.MstUsername decUser WITH (NOLOCK)
+      ON decUser.IdUsername = h.CompleteDecisionBy
     OUTER APPLY (
       SELECT
         (
@@ -2330,12 +2343,9 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
         return toSec(batchHourStart) >= toSec(prodHourEnd) - 3600;
       })();
     if (shouldComplete) {
-      await new sql.Request(tx).input("NoProduksi", sql.VarChar(50), noProduksi)
-        .query(`
-          UPDATE dbo.InjectProduksi_h
-          SET IsComplete = 1
-          WHERE NoProduksi = @NoProduksi;
-        `);
+      // Bukan langsung IsComplete=1 — batch terakhir (baik alami maupun
+      // forceClose dari terminate) hanya membuat request approval.
+      await requestCompleteOnTx(tx, noProduksi, actorId);
     }
 
     const createdBonggolan = bonggolan
@@ -2391,7 +2401,7 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
 async function terminateInjectProduksi(payload, hourEnd, ctx) {
   // 1. Update HourEnd produksi
   // 2. Insert batch dengan HourStart = hourEnd
-  // 3. IsComplete = 1 (forceClose)
+  // 3. Request completion approval (forceClose) — IsComplete tetap 0 sampai di-approve
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
@@ -2445,15 +2455,41 @@ async function terminateInjectProduksi(payload, hourEnd, ctx) {
   return submitInjectBatch(payload, ctx, { forceClose: true });
 }
 
-async function completeInjectProduksi(noProduksi, ctx) {
-  const no = String(noProduksi || "").trim();
-  if (!no) throw badReq("noProduksi wajib");
-
+function requireActorId(ctx) {
   const actorIdNum = Number(ctx?.actorId);
   if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
     throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
   }
+  return Math.trunc(actorIdNum);
+}
 
+// Dipakai oleh semua jalur yang tadinya langsung SET IsComplete = 1
+// (auto-complete batch, terminate/forceClose, split-time).
+// SEMENTARA: fitur approval belum berjalan, jadi langsung IsComplete = 1
+// (bypass PENDING) alih-alih menunggu approval atasan.
+// TODO(next-dev): kembalikan ke alur PENDING begitu approval flow siap.
+// No-op kalau produksi sudah IsComplete=1.
+async function requestCompleteOnTx(tx, noProduksi, actorIdNum) {
+  await new sql.Request(tx)
+    .input("NoProduksi", sql.VarChar(50), noProduksi)
+    .input("ActorId", sql.Int, actorIdNum).query(`
+      UPDATE dbo.InjectProduksi_h
+      SET IsComplete = 1,
+          CompleteRequestStatus = 'APPROVED',
+          CompleteRequestedBy = @ActorId,
+          CompleteRequestedAt = SYSUTCDATETIME(),
+          CompleteDecisionBy = @ActorId,
+          CompleteDecisionAt = SYSUTCDATETIME()
+      WHERE NoProduksi = @NoProduksi
+        AND IsComplete = 0;
+    `);
+}
+
+async function requestCompleteInjectProduksi(noProduksi, ctx) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const actorIdNum = requireActorId(ctx);
   const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
   const requestId = String(ctx?.requestId || "").trim();
 
@@ -2463,7 +2499,7 @@ async function completeInjectProduksi(noProduksi, ctx) {
 
   try {
     await applyAuditContext(new sql.Request(tx), {
-      actorId: Math.trunc(actorIdNum),
+      actorId: actorIdNum,
       actorUsername,
       requestId,
     });
@@ -2473,7 +2509,7 @@ async function completeInjectProduksi(noProduksi, ctx) {
       sql.VarChar(50),
       no,
     ).query(`
-        SELECT TOP 1 NoProduksi, IsComplete
+        SELECT TOP 1 NoProduksi, IsComplete, CompleteRequestStatus
         FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoProduksi = @NoProduksi;
       `);
@@ -2482,13 +2518,23 @@ async function completeInjectProduksi(noProduksi, ctx) {
       throw notFound(`NoProduksi tidak ditemukan: ${no}`);
     }
 
-    if (checkRes.recordset[0].IsComplete) {
+    const row = checkRes.recordset[0];
+    if (row.IsComplete) {
       throw conflict(`Produksi ${no} sudah complete.`);
     }
 
-    await new sql.Request(tx).input("NoProduksi", sql.VarChar(50), no).query(`
+    // SEMENTARA: bypass approval, langsung IsComplete = 1.
+    // TODO(next-dev): kembalikan ke alur PENDING begitu approval flow siap.
+    await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), no)
+      .input("ActorId", sql.Int, actorIdNum).query(`
         UPDATE dbo.InjectProduksi_h
-        SET IsComplete = 1
+        SET IsComplete = 1,
+            CompleteRequestStatus = 'APPROVED',
+            CompleteRequestedBy = @ActorId,
+            CompleteRequestedAt = SYSUTCDATETIME(),
+            CompleteDecisionBy = @ActorId,
+            CompleteDecisionAt = SYSUTCDATETIME()
         WHERE NoProduksi = @NoProduksi;
       `);
 
@@ -2505,6 +2551,90 @@ async function completeInjectProduksi(noProduksi, ctx) {
     } catch (_) {}
     throw error;
   }
+}
+
+async function approveCompleteInjectProduksi(noProduksi, ctx) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const actorIdNum = requireActorId(ctx);
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: actorIdNum,
+      actorUsername,
+      requestId,
+    });
+
+    const checkRes = await new sql.Request(tx).input(
+      "NoProduksi",
+      sql.VarChar(50),
+      no,
+    ).query(`
+        SELECT TOP 1 NoProduksi, IsComplete, CompleteRequestStatus, CompleteRequestedBy
+        FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    if (!checkRes.recordset?.length) {
+      throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+    }
+
+    const row = checkRes.recordset[0];
+    if (row.CompleteRequestStatus !== "PENDING") {
+      throw conflict(`Produksi ${no} tidak punya request approval yang pending.`);
+    }
+    if (row.CompleteRequestedBy === actorIdNum) {
+      throw forbidden("Tidak boleh approve request completion milik sendiri.");
+    }
+
+    await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), no)
+      .input("ActorId", sql.Int, actorIdNum).query(`
+        UPDATE dbo.InjectProduksi_h
+        SET IsComplete = 1,
+            CompleteRequestStatus = 'APPROVED',
+            CompleteDecisionBy = @ActorId,
+            CompleteDecisionAt = SYSUTCDATETIME()
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    await tx.commit();
+
+    return {
+      noProduksi: no,
+      isComplete: true,
+      status: "complete",
+    };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
+  }
+}
+
+async function listPendingCompleteRequests() {
+  const pool = await poolPromise;
+  const result = await pool.request().query(`
+      SELECT h.NoProduksi, h.TglProduksi, h.IdMesin, ms.NamaMesin,
+             h.CompleteRequestedBy, reqUser.Username AS CompleteRequestedByUsername,
+             h.CompleteRequestedAt
+      FROM dbo.InjectProduksi_h h WITH (NOLOCK)
+      LEFT JOIN dbo.MstMesinInject ms WITH (NOLOCK)
+        ON ms.IdMesin = h.IdMesin
+      LEFT JOIN dbo.MstUsername reqUser WITH (NOLOCK)
+        ON reqUser.IdUsername = h.CompleteRequestedBy
+      WHERE h.CompleteRequestStatus = 'PENDING'
+      ORDER BY h.CompleteRequestedAt;
+    `);
+  return result.recordset;
 }
 
 async function getFormulaInputsByNoProduksi(noProduksi) {
@@ -4878,16 +5008,9 @@ async function splitProduksiTime(selector, payload, ctx) {
         WHERE NoProduksi = @SourceNoProduksi
       `);
 
-    // Source produksi selesai saat di-split — set IsComplete = 1 langsung
-    await new sql.Request(tx).input(
-      "SourceNoProduksi",
-      sql.VarChar(50),
-      sourceNo,
-    ).query(`
-        UPDATE dbo.InjectProduksi_h
-        SET IsComplete = 1
-        WHERE NoProduksi = @SourceNoProduksi;
-      `);
+    // Source produksi dianggap selesai saat di-split — tetap perlu approval
+    // atasan, bukan langsung IsComplete=1.
+    await requestCompleteOnTx(tx, sourceNo, actorIdNum);
 
     await new sql.Request(tx)
       .input("SourceNoProduksi", sql.VarChar(50), sourceNo)
@@ -5147,7 +5270,9 @@ module.exports = {
   validateInputLabelForNoProduksi,
   submitInjectBatch,
   terminateInjectProduksi,
-  completeInjectProduksi,
+  requestCompleteInjectProduksi,
+  approveCompleteInjectProduksi,
+  listPendingCompleteRequests,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
   splitProduksiTime,
