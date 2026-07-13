@@ -82,6 +82,29 @@ async function listJenisHandler(req, res) {
   }
 }
 
+async function previewLabelCountHandler(req, res) {
+  const { categoryId } = req.query || {};
+
+  try {
+    const result = await stockOpnameV2Service.previewStockOpnameLabelCount({
+      categoryId,
+    });
+
+    return res.json({
+      success: true,
+      message: `Terdapat ${result.labelCount} label ${result.categoryName} per tanggal ${result.date} yang akan digenerate`,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error previewing stock-opname label count:", error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+      code: error.code,
+    });
+  }
+}
+
 async function generateStockOpnameHandler(req, res) {
   const actorId = getActorId(req);
   if (!actorId) {
@@ -94,21 +117,18 @@ async function generateStockOpnameHandler(req, res) {
   const requestId = String(makeRequestId(req) || "").trim();
   if (requestId) res.setHeader("x-request-id", requestId);
 
-  const { date, categoryId } = req.body || {};
+  const { categoryId } = req.body || {};
 
   console.log(
     "Generate stock-opname snapshot | Username:",
     req.username,
     "| categoryId:",
     categoryId,
-    "| date:",
-    date,
   );
 
   try {
     const result = await stockOpnameV2Service.generateStockOpname({
       categoryId,
-      date,
       ctx: { actorId, actorUsername, requestId },
     });
 
@@ -161,6 +181,48 @@ async function completeStockOpnameHandler(req, res) {
     });
   } catch (error) {
     console.error("Error completing stock-opname:", error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+      code: error.code,
+    });
+  }
+}
+
+async function deleteStockOpnameHandler(req, res) {
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized (idUsername missing)",
+    });
+  }
+  const actorUsername = getActorUsername(req) || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  const { stockOpnameNo } = req.params;
+
+  console.log(
+    "Delete stock-opname | Username:",
+    req.username,
+    "| stockOpnameNo:",
+    stockOpnameNo,
+  );
+
+  try {
+    const result = await stockOpnameV2Service.deleteStockOpname({
+      stockOpnameNo,
+      ctx: { actorId, actorUsername, requestId },
+    });
+
+    return res.json({
+      success: true,
+      message: `Stock opname ${result.stockOpnameNo} berhasil dihapus`,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error deleting stock-opname:", error);
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Internal Server Error",
@@ -371,8 +433,10 @@ async function getLocationsHandler(req, res) {
 module.exports = {
   listKategoriHandler,
   listJenisHandler,
+  previewLabelCountHandler,
   generateStockOpnameHandler,
   completeStockOpnameHandler,
+  deleteStockOpnameHandler,
   getJenisInNosoHandler,
   getSnapshotHandler,
   insertHasilHandler,

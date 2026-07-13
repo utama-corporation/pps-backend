@@ -15,6 +15,15 @@ router.get(
   stockOpnameV2Controller.listJenisHandler,
 );
 
+// ⚠️ Daftarkan SEBELUM POST "/stock-opname-v2/no-stock-opname" (statis vs
+// dokumentasi urutan route, meski beda method tidak akan tabrakan) — dipakai
+// FE untuk menampilkan preview jumlah label sebelum benar-benar generate.
+router.get(
+  "/stock-opname-v2/no-stock-opname/preview",
+  verifyToken,
+  stockOpnameV2Controller.previewLabelCountHandler,
+);
+
 router.post(
   "/stock-opname-v2/no-stock-opname",
   verifyToken,
@@ -25,6 +34,12 @@ router.patch(
   "/stock-opname-v2/no-stock-opname/:stockOpnameNo/complete",
   verifyToken,
   stockOpnameV2Controller.completeStockOpnameHandler,
+);
+
+router.delete(
+  "/stock-opname-v2/no-stock-opname/:stockOpnameNo",
+  verifyToken,
+  stockOpnameV2Controller.deleteStockOpnameHandler,
 );
 
 router.get(

@@ -1,11 +1,14 @@
 const { sql, poolPromise } = require("../../core/config/db");
-const { getAllKategori } = require("../master-kategori/master-kategori-service");
+const {
+  getAllKategori,
+} = require("../master-kategori/master-kategori-service");
 const { getJenisByKategori } = require("../master-jenis/master-jenis-service");
 const { generateNextCode } = require("../../core/utils/sequence-code-helper");
 const { applyAuditContext } = require("../../core/utils/db-audit-context");
 const {
   assertNotLocked,
-  resolveEffectiveDateForCreate,
+  toDateOnly,
+  formatYMD,
 } = require("../../core/shared/tutup-transaksi-guard");
 const { badReq, notFound, conflict } = require("../../core/utils/http-error");
 const {
@@ -28,8 +31,7 @@ async function getAllKategoriWithStatus() {
   const ranked = await pool
     .request()
     .input("year", sql.Int, now.getFullYear())
-    .input("month", sql.Int, now.getMonth() + 1)
-    .query(`
+    .input("month", sql.Int, now.getMonth() + 1).query(`
       ;WITH ranked AS (
         SELECT
           NoSO, IdKategori, Tanggal, IsComplete,
@@ -64,7 +66,9 @@ async function getAllKategoriWithStatus() {
         };
       }
 
-      const categoryCode = String(k.KodeKategori || "").trim().toLowerCase();
+      const categoryCode = String(k.KodeKategori || "")
+        .trim()
+        .toLowerCase();
       const cfg = STOCK_OPNAME_SNAPSHOT_CONFIG[categoryCode];
 
       let labelCount = 0;
@@ -75,7 +79,9 @@ async function getAllKategoriWithStatus() {
           ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
         ].join(" AND ");
 
-        const countRes = await pool.request().input("stockOpnameNo", sql.VarChar, row.NoSO).query(`
+        const countRes = await pool
+          .request()
+          .input("stockOpnameNo", sql.VarChar, row.NoSO).query(`
           SELECT
             COUNT(*) AS labelCount,
             SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
@@ -90,7 +96,9 @@ async function getAllKategoriWithStatus() {
       return {
         ...base,
         stockOpnameNo: row.NoSO,
-        status: row.IsComplete ? STOCK_OPNAME_STATUS.COMPLETED : STOCK_OPNAME_STATUS.IN_PROGRESS,
+        status: row.IsComplete
+          ? STOCK_OPNAME_STATUS.COMPLETED
+          : STOCK_OPNAME_STATUS.IN_PROGRESS,
         labelCount,
         scannedCount,
       };
@@ -102,25 +110,32 @@ async function resolveStockOpnameCategory(pool, stockOpnameNo) {
   const no = String(stockOpnameNo || "").trim();
   if (!no) throw badReq("stockOpnameNo wajib diisi");
 
-  const headerRes = await pool.request().input("stockOpnameNo", sql.VarChar, no).query(`
+  const headerRes = await pool.request().input("stockOpnameNo", sql.VarChar, no)
+    .query(`
     SELECT NoSO, Tanggal, IdKategori, IsComplete FROM dbo.StockOpname_h WHERE NoSO = @stockOpnameNo;
   `);
   const header = headerRes.recordset?.[0];
   if (!header) throw notFound(`Stock opname tidak ditemukan: ${no}`);
   if (!header.IdKategori) {
-    throw badReq(`Stock opname ${no} belum punya categoryId (bukan sesi stock-opname-v2)`);
+    throw badReq(
+      `Stock opname ${no} belum punya categoryId (bukan sesi stock-opname-v2)`,
+    );
   }
 
   const categoryRes = await pool
     .request()
     .input("categoryId", sql.Int, header.IdKategori)
-    .query(`SELECT KodeKategori, NamaKategori FROM dbo.MstKategori WHERE IdKategori = @categoryId;`);
+    .query(
+      `SELECT KodeKategori, NamaKategori FROM dbo.MstKategori WHERE IdKategori = @categoryId;`,
+    );
   const categoryRow = categoryRes.recordset?.[0];
   const categoryCode = categoryRow?.KodeKategori
     ? String(categoryRow.KodeKategori).trim().toLowerCase()
     : null;
   if (!categoryCode) {
-    throw badReq(`MstKategori tidak ditemukan untuk categoryId: ${header.IdKategori}`);
+    throw badReq(
+      `MstKategori tidak ditemukan untuk categoryId: ${header.IdKategori}`,
+    );
   }
 
   const cfg = STOCK_OPNAME_SNAPSHOT_CONFIG[categoryCode];
@@ -129,12 +144,65 @@ async function resolveStockOpnameCategory(pool, stockOpnameNo) {
   return { no, header, categoryRow, categoryCode, cfg };
 }
 
-async function generateStockOpname({ categoryId, date, ctx }) {
+async function previewStockOpnameLabelCount({ categoryId }) {
   const categoryIdNum = Number(categoryId);
   if (!Number.isInteger(categoryIdNum) || categoryIdNum <= 0) {
     throw badReq("categoryId wajib berupa integer valid");
   }
-  if (!date) throw badReq("date wajib diisi");
+
+  // Tanggal acuan sama seperti generate: selalu H-1 (UTC).
+  const todayUtc = toDateOnly(new Date());
+  const docDateOnly = new Date(todayUtc.getTime() - 24 * 60 * 60 * 1000);
+
+  const pool = await poolPromise;
+
+  const categoryRes = await pool
+    .request()
+    .input("categoryId", sql.Int, categoryIdNum).query(`
+    SELECT KodeKategori, NamaKategori FROM dbo.MstKategori WHERE IdKategori = @categoryId;
+  `);
+  const categoryRow = categoryRes.recordset?.[0];
+  const categoryCode = categoryRow?.KodeKategori
+    ? String(categoryRow.KodeKategori).trim().toLowerCase()
+    : null;
+  if (!categoryCode) {
+    throw badReq(
+      `MstKategori tidak ditemukan untuk categoryId: ${categoryIdNum}`,
+    );
+  }
+  const categoryName = categoryRow?.NamaKategori || categoryCode;
+
+  const cfg = STOCK_OPNAME_SNAPSHOT_CONFIG[categoryCode];
+  if (!cfg) throw badReq(`categoryCode tidak dikenali: ${categoryCode}`);
+
+  // Reuse persis query sumber yang dipakai generateStockOpname (cteSql + finalSelectSql),
+  // dibungkus COUNT(*) supaya tidak perlu insert apa pun untuk sekadar preview jumlah.
+  const countReq = pool.request();
+  countReq.input("noso", sql.VarChar, "");
+  countReq.input("tanggal", sql.Date, docDateOnly);
+
+  const result = await countReq.query(`
+    ${cfg.cteSql || ""}
+    SELECT COUNT(*) AS labelCount FROM (
+      ${cfg.finalSelectSql}
+    ) AS src;
+  `);
+
+  return {
+    categoryId: categoryIdNum,
+    categoryCode,
+    categoryName,
+    date: formatYMD(docDateOnly),
+    hasDateFilter: cfg.hasDateCreateFilter,
+    labelCount: result.recordset?.[0]?.labelCount || 0,
+  };
+}
+
+async function generateStockOpname({ categoryId, ctx }) {
+  const categoryIdNum = Number(categoryId);
+  if (!Number.isInteger(categoryIdNum) || categoryIdNum <= 0) {
+    throw badReq("categoryId wajib berupa integer valid");
+  }
 
   const actorIdNum = Number(ctx?.actorId);
   if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
@@ -143,7 +211,9 @@ async function generateStockOpname({ categoryId, date, ctx }) {
   const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
   const requestId = String(ctx?.requestId || "").trim();
 
-  const docDateOnly = resolveEffectiveDateForCreate(date);
+  // Tanggal snapshot selalu H-1 (UTC), tidak lagi menerima input dari client.
+  const todayUtc = toDateOnly(new Date());
+  const docDateOnly = new Date(todayUtc.getTime() - 24 * 60 * 60 * 1000);
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -173,7 +243,9 @@ async function generateStockOpname({ categoryId, date, ctx }) {
       ? String(categoryRes.recordset[0].KodeKategori).trim().toLowerCase()
       : null;
     if (!categoryCode) {
-      throw badReq(`MstKategori tidak ditemukan untuk categoryId: ${categoryIdNum}`);
+      throw badReq(
+        `MstKategori tidak ditemukan untuk categoryId: ${categoryIdNum}`,
+      );
     }
 
     const cfg = STOCK_OPNAME_SNAPSHOT_CONFIG[categoryCode];
@@ -247,8 +319,11 @@ async function completeStockOpname({ stockOpnameNo, ctx }) {
       requestId,
     });
 
-    const checkRes = await new sql.Request(tx).input("stockOpnameNo", sql.VarChar, no)
-      .query(`
+    const checkRes = await new sql.Request(tx).input(
+      "stockOpnameNo",
+      sql.VarChar,
+      no,
+    ).query(`
         SELECT TOP 1 NoSO, IsComplete
         FROM dbo.StockOpname_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoSO = @stockOpnameNo;
@@ -281,10 +356,8 @@ async function completeStockOpname({ stockOpnameNo, ctx }) {
 
 async function getTypesInStockOpname({ stockOpnameNo }) {
   const pool = await poolPromise;
-  const { no, header, categoryRow, categoryCode, cfg } = await resolveStockOpnameCategory(
-    pool,
-    stockOpnameNo,
-  );
+  const { no, header, categoryRow, categoryCode, cfg } =
+    await resolveStockOpnameCategory(pool, stockOpnameNo);
 
   const jenisColumn = cfg.jenisColumn;
   const scannedMatchSql = [
@@ -292,7 +365,9 @@ async function getTypesInStockOpname({ stockOpnameNo }) {
     ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
   ].join(" AND ");
 
-  const summaryRes = await pool.request().input("stockOpnameNo", sql.VarChar, no).query(`
+  const summaryRes = await pool
+    .request()
+    .input("stockOpnameNo", sql.VarChar, no).query(`
     SELECT
       src.${jenisColumn} AS typeId,
       COUNT(*) AS labelCount,
@@ -339,23 +414,30 @@ async function getStockOpnameSnapshot({
   search = "",
 }) {
   const pool = await poolPromise;
-  const { no, header, categoryRow, categoryCode, cfg } = await resolveStockOpnameCategory(
-    pool,
-    stockOpnameNo,
-  );
+  const { no, header, categoryRow, categoryCode, cfg } =
+    await resolveStockOpnameCategory(pool, stockOpnameNo);
 
-  const typeIdNum = typeId !== undefined && typeId !== null && typeId !== ""
-    ? Number(typeId)
-    : null;
-  if (typeId !== undefined && typeId !== null && typeId !== "" && !Number.isInteger(typeIdNum)) {
+  const typeIdNum =
+    typeId !== undefined && typeId !== null && typeId !== ""
+      ? Number(typeId)
+      : null;
+  if (
+    typeId !== undefined &&
+    typeId !== null &&
+    typeId !== "" &&
+    !Number.isInteger(typeIdNum)
+  ) {
     throw badReq("typeId wajib berupa integer valid");
   }
 
-  const locationIdNum = locationId !== undefined && locationId !== null && locationId !== ""
-    ? Number(locationId)
-    : null;
+  const locationIdNum =
+    locationId !== undefined && locationId !== null && locationId !== ""
+      ? Number(locationId)
+      : null;
   if (
-    locationId !== undefined && locationId !== null && locationId !== "" &&
+    locationId !== undefined &&
+    locationId !== null &&
+    locationId !== "" &&
     !Number.isInteger(locationIdNum)
   ) {
     throw badReq("locationId wajib berupa integer valid");
@@ -375,10 +457,12 @@ async function getStockOpnameSnapshot({
 
   const selectColumnsSql = cfg.insertColumns.map((c) => `src.${c}`).join(", ");
   const whereSearch = searchTerm ? `AND src.${labelColumn} LIKE @search` : "";
-  const whereType = typeIdNum !== null ? `AND src.${cfg.jenisColumn} = @typeId` : "";
-  const whereLocation = locationIdNum !== null
-    ? `AND src.Blok = @blok AND src.IdLokasi = @locationId`
-    : "";
+  const whereType =
+    typeIdNum !== null ? `AND src.${cfg.jenisColumn} = @typeId` : "";
+  const whereLocation =
+    locationIdNum !== null
+      ? `AND src.Blok = @blok AND src.IdLokasi = @locationId`
+      : "";
 
   const bindInputs = (req) => {
     req.input("stockOpnameNo", sql.VarChar, no);
@@ -389,7 +473,10 @@ async function getStockOpnameSnapshot({
     return req;
   };
 
-  const scannedMatchSql = ["h.NoSO = src.NoSO", ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`)].join(" AND ");
+  const scannedMatchSql = [
+    "h.NoSO = src.NoSO",
+    ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
+  ].join(" AND ");
 
   const dataQuery = `
     SELECT
@@ -449,10 +536,8 @@ async function getAllBlok() {
 
 async function getLocationsInBlok({ stockOpnameNo, blok }) {
   const pool = await poolPromise;
-  const { no, header, categoryRow, categoryCode, cfg } = await resolveStockOpnameCategory(
-    pool,
-    stockOpnameNo,
-  );
+  const { no, header, categoryRow, categoryCode, cfg } =
+    await resolveStockOpnameCategory(pool, stockOpnameNo);
 
   const blokTrim = String(blok || "").trim();
   if (!blokTrim) throw badReq("blok wajib diisi");
@@ -460,8 +545,7 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
   const locationRes = await pool
     .request()
     .input("blok", sql.VarChar, blokTrim)
-    .input("categoryId", sql.Int, header.IdKategori)
-    .query(`
+    .input("categoryId", sql.Int, header.IdKategori).query(`
       SELECT IdLokasi, Description
       FROM dbo.MstLokasi
       WHERE Blok = @blok
@@ -484,13 +568,15 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
     };
   }
 
-  const scannedMatchSql = ["h.NoSO = src.NoSO", ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`)].join(" AND ");
+  const scannedMatchSql = [
+    "h.NoSO = src.NoSO",
+    ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
+  ].join(" AND ");
 
   const summaryRes = await pool
     .request()
     .input("stockOpnameNo", sql.VarChar, no)
-    .input("blok", sql.VarChar, blokTrim)
-    .query(`
+    .input("blok", sql.VarChar, blokTrim).query(`
       SELECT
         src.IdLokasi AS locationId,
         COUNT(*) AS labelCount,
@@ -506,16 +592,19 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
     (summaryRes.recordset || []).map((r) => [r.locationId, r]),
   );
 
-  const data = locations.map((loc) => {
-    const summary = summaryByLocationId.get(loc.IdLokasi);
-    return {
-      locationId: loc.IdLokasi,
-      description: loc.Description,
-      labelCount: summary?.labelCount ?? 0,
-      scannedCount: summary?.scannedCount ?? 0,
-      totalWeight: summary?.totalWeight ?? 0,
-    };
-  });
+  // Hanya lokasi yang punya data snapshot untuk stock opname ini yang ditampilkan.
+  const data = locations
+    .filter((loc) => summaryByLocationId.has(loc.IdLokasi))
+    .map((loc) => {
+      const summary = summaryByLocationId.get(loc.IdLokasi);
+      return {
+        locationId: loc.IdLokasi,
+        description: loc.Description,
+        labelCount: summary.labelCount,
+        scannedCount: summary.scannedCount,
+        totalWeight: summary.totalWeight,
+      };
+    });
 
   return {
     stockOpnameNo: no,
@@ -529,12 +618,22 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
   };
 }
 
-async function insertStockOpnameHasil({ stockOpnameNo, labelNo, palletNo, ctx }) {
+async function insertStockOpnameHasil({
+  stockOpnameNo,
+  labelNo,
+  palletNo,
+  ctx,
+}) {
   const pool = await poolPromise;
-  const { no, header, categoryCode, cfg } = await resolveStockOpnameCategory(pool, stockOpnameNo);
+  const { no, header, categoryCode, cfg } = await resolveStockOpnameCategory(
+    pool,
+    stockOpnameNo,
+  );
 
   if (header.IsComplete) {
-    throw conflict(`Stock opname ${no} sudah ditandai selesai, tidak bisa insert hasil.`);
+    throw conflict(
+      `Stock opname ${no} sudah ditandai selesai, tidak bisa insert hasil.`,
+    );
   }
 
   const label = String(labelNo || "").trim();
@@ -575,7 +674,9 @@ async function insertStockOpnameHasil({ stockOpnameNo, labelNo, palletNo, ctx })
   `);
   const referenceRow = referenceRes.recordset?.[0];
   if (!referenceRow) {
-    throw notFound(`Label ${labelDisplay} tidak terdaftar di acuan stock opname ini`);
+    throw notFound(
+      `Label ${labelDisplay} tidak terdaftar di acuan stock opname ini`,
+    );
   }
 
   const dupRes = await bindLabel(pool.request()).query(`
@@ -588,8 +689,10 @@ async function insertStockOpnameHasil({ stockOpnameNo, labelNo, palletNo, ctx })
   const insertReq = bindLabel(pool.request());
   insertReq.input("weight", sql.Float, referenceRow.Berat ?? 0);
   insertReq.input("username", sql.VarChar, actorUsername);
-  if (hasSackCount) insertReq.input("sackCount", sql.Int, referenceRow.JmlhSak ?? 0);
-  if (hasPieceCount) insertReq.input("pieceCount", sql.Float, referenceRow.Pcs ?? 0);
+  if (hasSackCount)
+    insertReq.input("sackCount", sql.Int, referenceRow.JmlhSak ?? 0);
+  if (hasPieceCount)
+    insertReq.input("pieceCount", sql.Float, referenceRow.Pcs ?? 0);
 
   const valuePlaceholder = {
     [cfg.labelColumns[0]]: "@label",
@@ -599,7 +702,9 @@ async function insertStockOpnameHasil({ stockOpnameNo, labelNo, palletNo, ctx })
     Berat: "@weight",
   };
   const hasilColumnsSql = cfg.hasilColumns.join(", ");
-  const valuesSql = cfg.hasilColumns.map((col) => valuePlaceholder[col]).join(", ");
+  const valuesSql = cfg.hasilColumns
+    .map((col) => valuePlaceholder[col])
+    .join(", ");
 
   await insertReq.query(`
     INSERT INTO dbo.${cfg.hasilTable} (NoSO, ${hasilColumnsSql}, Username, DateTimeScan, IdDiscrepancy)
@@ -610,21 +715,123 @@ async function insertStockOpnameHasil({ stockOpnameNo, labelNo, palletNo, ctx })
     stockOpnameNo: no,
     categoryCode,
     labelNo: labelDisplay,
-    sackCount: hasSackCount ? referenceRow.JmlhSak ?? 0 : undefined,
-    pieceCount: hasPieceCount ? referenceRow.Pcs ?? 0 : undefined,
+    sackCount: hasSackCount ? (referenceRow.JmlhSak ?? 0) : undefined,
+    pieceCount: hasPieceCount ? (referenceRow.Pcs ?? 0) : undefined,
     weight: referenceRow.Berat ?? 0,
   };
+}
+
+async function deleteStockOpname({ stockOpnameNo, ctx }) {
+  const no = String(stockOpnameNo || "").trim();
+  if (!no) throw badReq("stockOpnameNo wajib diisi");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const headerRes = await new sql.Request(tx).input(
+      "stockOpnameNo",
+      sql.VarChar,
+      no,
+    ).query(`
+        SELECT TOP 1 NoSO, Tanggal, IdKategori, IsComplete
+        FROM dbo.StockOpname_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoSO = @stockOpnameNo;
+      `);
+    const header = headerRes.recordset?.[0];
+    if (!header) throw notFound(`Stock opname tidak ditemukan: ${no}`);
+    if (!header.IdKategori) {
+      throw badReq(
+        `Stock opname ${no} belum punya categoryId (bukan sesi stock-opname-v2)`,
+      );
+    }
+
+    const categoryRes = await new sql.Request(tx)
+      .input("categoryId", sql.Int, header.IdKategori)
+      .query(
+        `SELECT KodeKategori FROM dbo.MstKategori WHERE IdKategori = @categoryId;`,
+      );
+    const categoryCode = categoryRes.recordset?.[0]?.KodeKategori
+      ? String(categoryRes.recordset[0].KodeKategori).trim().toLowerCase()
+      : null;
+    if (!categoryCode) {
+      throw badReq(
+        `MstKategori tidak ditemukan untuk categoryId: ${header.IdKategori}`,
+      );
+    }
+
+    const cfg = STOCK_OPNAME_SNAPSHOT_CONFIG[categoryCode];
+    if (!cfg) throw badReq(`categoryCode tidak dikenali: ${categoryCode}`);
+
+    await assertNotLocked({
+      date: header.Tanggal,
+      runner: tx,
+      action: "menghapus stock opname",
+      useLock: true,
+    });
+
+    // Hasil scan dulu (FK ke snapshot lewat NoSO + kolom label), baru snapshot acuan, baru header.
+    const hasilRes = await new sql.Request(tx).input(
+      "stockOpnameNo",
+      sql.VarChar,
+      no,
+    ).query(`
+      DELETE FROM dbo.${cfg.hasilTable} WHERE NoSO = @stockOpnameNo;
+    `);
+
+    const snapshotRes = await new sql.Request(tx).input(
+      "stockOpnameNo",
+      sql.VarChar,
+      no,
+    ).query(`
+      DELETE FROM dbo.${cfg.snapshotTable} WHERE NoSO = @stockOpnameNo;
+    `);
+
+    await new sql.Request(tx).input("stockOpnameNo", sql.VarChar, no).query(`
+      DELETE FROM dbo.StockOpname_h WHERE NoSO = @stockOpnameNo;
+    `);
+
+    await tx.commit();
+
+    return {
+      stockOpnameNo: no,
+      categoryCode,
+      deletedHasilCount: hasilRes.rowsAffected?.[0] || 0,
+      deletedSnapshotCount: snapshotRes.rowsAffected?.[0] || 0,
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
 }
 
 module.exports = {
   getAllKategori,
   getAllKategoriWithStatus,
   getJenisByKategori,
+  previewStockOpnameLabelCount,
   generateStockOpname,
   completeStockOpname,
   getTypesInStockOpname,
   getStockOpnameSnapshot,
   insertStockOpnameHasil,
+  deleteStockOpname,
   getAllBlok,
   getLocationsInBlok,
 };
