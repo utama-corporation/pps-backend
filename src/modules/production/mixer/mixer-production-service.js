@@ -1324,22 +1324,9 @@ async function validateLabel(labelCode) {
   if (!raw) throw new Error("Label code is required");
 
   let prefix = "";
-<<<<<<< HEAD
   const prefix3 = raw.substring(0, 3).toUpperCase();
   if (prefix3 === "BF." || prefix3 === "AB.") {
     prefix = prefix3;
-=======
-<<<<<<< HEAD
-  if (raw.substring(0, 3).toUpperCase() === "BF.") {
-    prefix = "BF.";
-  } else if (raw.substring(0, 3).toUpperCase() === "AB.") {
-    prefix = "AB.";
-=======
-  const prefix3 = raw.substring(0, 3).toUpperCase();
-  if (prefix3 === "BF." || prefix3 === "AB.") {
-    prefix = prefix3;
->>>>>>> develop
->>>>>>> main
   } else {
     prefix = raw.substring(0, 2).toUpperCase();
   }
@@ -1369,15 +1356,7 @@ async function validateLabel(labelCode) {
     case "A.":
     case "AB.": {
       tableName = "BahanBaku_d";
-<<<<<<< HEAD
       // Format: A.0000000001-1 / AB.0000000001-1
-=======
-<<<<<<< HEAD
-      // Format: A.0000000001-1 atau AB.0000000001-1
-=======
-      // Format: A.0000000001-1 / AB.0000000001-1
->>>>>>> develop
->>>>>>> main
       const parts = raw.split("-");
       if (parts.length !== 2) {
         throw new Error(
