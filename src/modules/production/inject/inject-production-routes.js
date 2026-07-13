@@ -2,6 +2,8 @@
 const express = require("express");
 const router = express.Router();
 const verifyToken = require("../../../core/middleware/verify-token");
+const attachPermissions = require("../../../core/middleware/attach-permissions");
+const requirePermission = require("../../../core/middleware/require-permission");
 const injectProduksiController = require("./inject-production-controller");
 
 // ✅ GET ALL InjectProduksi_h (paged)
@@ -33,6 +35,40 @@ router.get(
   injectProduksiController.getBatchByNoProduksi,
 );
 
+// ⚠️ Daftarkan SEBELUM "/inject/qc/:noProduksi" agar "counter" tidak
+// tertangkap sebagai :noProduksi.
+router.get(
+  "/inject/qc/counter",
+  verifyToken,
+  injectProduksiController.getQcCounters,
+);
+
+// ⚠️ Daftarkan SEBELUM "/inject/qc/counter/:idMesin" agar "by-produksi"
+// tidak tertangkap sebagai :idMesin.
+router.get(
+  "/inject/qc/counter/by-produksi/:noProduksi",
+  verifyToken,
+  injectProduksiController.getQcCounterByProduksi,
+);
+
+router.get(
+  "/inject/qc/counter/:idMesin",
+  verifyToken,
+  injectProduksiController.getQcCounterByMesin,
+);
+
+router.post(
+  "/inject/qc/counter/:idMesin/reset",
+  verifyToken,
+  injectProduksiController.resetQcCounter,
+);
+
+router.get(
+  "/inject/qc/:noProduksi",
+  verifyToken,
+  injectProduksiController.getQcByNoProduksi,
+);
+
 router.get(
   "/inject/:noProduksi/formula-inputs",
   verifyToken,
@@ -56,6 +92,42 @@ router.get(
 router.post("/inject", verifyToken, injectProduksiController.createProduksi);
 
 router.post("/inject/batch", verifyToken, injectProduksiController.submitBatch);
+
+router.post(
+  "/inject/:noProduksi/terminate",
+  verifyToken,
+  injectProduksiController.terminateInjectProduksi,
+);
+
+// ⚠️ Daftarkan SEBELUM "/inject/:noProduksi/complete/*" agar tidak konflik
+// dengan route berparameter di bawahnya.
+router.get(
+  "/inject/complete-requests/pending",
+  verifyToken,
+  attachPermissions,
+  requirePermission("produksi_inject:approve"),
+  injectProduksiController.listPendingCompleteRequests,
+);
+
+// Operator request approval completion (belum benar-benar IsComplete=1).
+router.patch(
+  "/inject/:noProduksi/complete",
+  verifyToken,
+  injectProduksiController.completeProduksi,
+);
+
+// Atasan approve request completion.
+router.patch(
+  "/inject/:noProduksi/complete/approve",
+  verifyToken,
+  attachPermissions,
+  requirePermission("produksi_inject:approve"),
+  injectProduksiController.approveCompleteProduksi,
+);
+
+router.post("/inject/qc", verifyToken, injectProduksiController.createQc);
+
+router.put("/inject/qc/:id", verifyToken, injectProduksiController.updateQc);
 
 router.post(
   "/inject/split-time/:idMesin/:tanggal",

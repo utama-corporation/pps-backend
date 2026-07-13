@@ -25,6 +25,12 @@ router.post(
   ctrl.splitProduksiTime,
 );
 
+router.patch(
+  "/crusher/:noCrusherProduksi/complete",
+  verifyToken,
+  ctrl.completeProduksi,
+);
+
 router.put("/crusher/:noCrusherProduksi", verifyToken, ctrl.updateProduksi); // ⬅️ NEW
 
 router.delete("/crusher/:noCrusherProduksi", verifyToken, ctrl.deleteProduksi); // ⬅️ NEW
@@ -33,6 +39,12 @@ router.get(
   "/crusher/:noCrusherProduksi/inputs",
   verifyToken,
   ctrl.getInputsByNoCrusherProduksi,
+);
+
+router.get(
+  "/crusher/:noCrusherProduksi/formula-inputs",
+  verifyToken,
+  ctrl.getFormulaInputsByNoCrusherProduksi,
 );
 
 router.get(

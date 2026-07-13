@@ -5,7 +5,13 @@ const { normalizeDecimalField } = require("../../../core/utils/number-utils");
 const { createSetIf } = require("../../../core/utils/update-diff-helper");
 
 // GET all header BahanBaku with pagination & search
-exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
+exports.getAll = async ({
+  page,
+  limit,
+  search,
+  includeUsed = false,
+  prefix = "",
+}) => {
   const pool = await poolPromise;
   const request = pool.request();
 
@@ -18,6 +24,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
          WHERE d.NoBahanBaku = h.NoBahanBaku
            AND d.DateUsage IS NULL
        )`;
+  const prefixFilter = prefix ? `AND h.NoBahanBaku LIKE @prefix` : "";
 
   const baseQuery = `
     SELECT
@@ -42,6 +49,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
       ON s.IdSupplier = h.IdSupplier
     WHERE 1=1
       ${dateUsageFilter}
+      ${prefixFilter}
       ${
         search
           ? `AND (
@@ -64,6 +72,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
       ON s.IdSupplier = h.IdSupplier
     WHERE 1=1
       ${dateUsageFilter}
+      ${prefixFilter}
       ${
         search
           ? `AND (
@@ -80,6 +89,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
   request.input("offset", sql.Int, offset);
   request.input("limit", sql.Int, limit);
   if (search) request.input("search", sql.VarChar, `%${search}%`);
+  if (prefix) request.input("prefix", sql.VarChar, `${prefix}%`);
 
   const [dataResult, countResult] = await Promise.all([
     request.query(baseQuery),

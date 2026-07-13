@@ -540,6 +540,70 @@ async function getInputsByNoCrusherProduksi(req, res) {
   }
 }
 
+async function getFormulaInputsByNoCrusherProduksi(req, res) {
+  const { noCrusherProduksi } = req.params;
+
+  try {
+    const result =
+      await service.getFormulaInputsByNoCrusherProduksi(noCrusherProduksi);
+
+    const formulasByOutputId = new Map();
+    for (const item of Array.isArray(result.formulas) ? result.formulas : []) {
+      const mainOutputId = Number(item.MainOutputId);
+      if (!Number.isFinite(mainOutputId)) continue;
+      if (!formulasByOutputId.has(mainOutputId)) {
+        formulasByOutputId.set(mainOutputId, []);
+      }
+      formulasByOutputId.get(mainOutputId).push({
+        IdFormula: item.IdFormula ?? null,
+        InputKategoriId: item.InputKategoriId ?? null,
+        InputKategoriKode: item.InputKategoriKode ?? null,
+        InputKategoriNama: item.InputKategoriNama ?? null,
+        InputPrefixLabel: item.InputPrefixLabel ?? null,
+        InputId: item.InputId ?? null,
+        InputNama: item.InputNama ?? null,
+      });
+    }
+
+    const data = {
+      noProduksi: result.noProduksi,
+      outputCategory: result.outputCategory ?? null,
+      outputCategoryId: result.outputCategoryId ?? null,
+      outputPrefixLabel: result.outputPrefixLabel ?? null,
+      outputs: Array.isArray(result.outputs)
+        ? result.outputs.map((item) => ({
+            idJenis: item.idJenis ?? null,
+            namaJenis: item.namaJenis ?? null,
+            formulas: formulasByOutputId.get(Number(item.idJenis)) || [],
+          }))
+        : [],
+    };
+
+    return res.status(200).json({
+      success: true,
+      message: `Formula input for NoProduksi ${noCrusherProduksi} retrieved successfully`,
+      data,
+      meta: { noCrusherProduksi },
+    });
+  } catch (error) {
+    console.error(
+      'Error fetching formula input from CrusherProduksi_h:',
+      error,
+    );
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message:
+        error.statusCode && error.statusCode !== 500
+          ? error.message
+          : 'Internal Server Error',
+      error:
+        error.statusCode && error.statusCode !== 500
+          ? undefined
+          : error.message,
+    });
+  }
+}
+
 async function getOutputsByNoCrusherProduksi(req, res) {
   const noCrusherProduksi = (req.params.noCrusherProduksi || '').trim();
   if (!noCrusherProduksi) {
@@ -805,6 +869,45 @@ async function deleteInputsAndPartials(req, res) {
   }
 }
 
+async function completeProduksi(req, res) {
+  const noCrusherProduksi = String(req.params.noCrusherProduksi || "").trim();
+  if (!noCrusherProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noCrusherProduksi wajib" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized (idUsername missing)",
+    });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await service.completeCrusherProduksi(noCrusherProduksi, {
+      actorId,
+      actorUsername,
+      requestId,
+    });
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[crusher.completeProduksi]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
 async function splitProduksiTime(req, res) {
   const normalizeSqlTimeToHms = (value) => {
     if (value == null) return value;
@@ -911,4 +1014,4 @@ async function splitProduksiTime(req, res) {
   }
 }
 
-module.exports = { getAllProduksi, getProduksiByDate, getCrusherMasters, createProduksi, updateProduksi, deleteProduksi, getInputsByNoCrusherProduksi, getOutputsByNoCrusherProduksi, upsertInputsAndPartials, validateLabel, deleteInputsAndPartials, splitProduksiTime };
+module.exports = { getAllProduksi, getProduksiByDate, getCrusherMasters, createProduksi, updateProduksi, deleteProduksi, completeProduksi, getInputsByNoCrusherProduksi, getFormulaInputsByNoCrusherProduksi, getOutputsByNoCrusherProduksi, upsertInputsAndPartials, validateLabel, deleteInputsAndPartials, splitProduksiTime };

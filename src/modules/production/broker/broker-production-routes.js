@@ -24,6 +24,12 @@ router.post(
   brokerProduksiController.splitProduksiTime,
 );
 
+router.patch(
+  "/broker/:noProduksi/complete",
+  verifyToken,
+  brokerProduksiController.completeProduksi,
+);
+
 // ✅ Update by NoProduksi
 router.put(
   "/broker/:noProduksi",
@@ -50,6 +56,12 @@ router.get(
   "/broker/:noProduksi/inputs",
   verifyToken,
   brokerProduksiController.getInputsByNoProduksi,
+);
+
+router.get(
+  "/broker/:noProduksi/formula-inputs",
+  verifyToken,
+  brokerProduksiController.getFormulaInputsByNoProduksi,
 );
 
 router.get(

@@ -47,10 +47,14 @@ async function getStokProses() {
     IdBonggolan: r.IdBonggolan,
     NamaBonggolan: r.NamaBonggolan,
     BeratSisa: Number(
+<<<<<<< HEAD
       (typeof r.BeratSisa === "number"
         ? r.BeratSisa
         : parseFloat(r.BeratSisa) || 0
       ).toFixed(2),
+=======
+      (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
+>>>>>>> develop
     ),
     ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
   }));
@@ -59,8 +63,14 @@ async function getStokProses() {
 async function getLabelByIdBonggolan(idBonggolan) {
   const pool = await poolPromise;
 
+<<<<<<< HEAD
   const result = await pool.request().input("IdBonggolan", sql.Int, idBonggolan)
     .query(`
+=======
+  const result = await pool
+    .request()
+    .input("IdBonggolan", sql.Int, idBonggolan).query(`
+>>>>>>> develop
       SELECT
         b.NoBonggolan,
         b.NoBonggolan AS Label,
@@ -77,10 +87,14 @@ async function getLabelByIdBonggolan(idBonggolan) {
     Label: r.Label,
     ...(r.DateCreate && { DateCreate: r.DateCreate }),
     BeratSisa: Number(
+<<<<<<< HEAD
       (typeof r.BeratSisa === "number"
         ? r.BeratSisa
         : parseFloat(r.BeratSisa) || 0
       ).toFixed(2),
+=======
+      (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
+>>>>>>> develop
     ),
   }));
 }

@@ -25,6 +25,12 @@ router.post(
   washingProduksiController.splitProduksiTime,
 );
 
+router.patch(
+  "/washing/:noProduksi/complete",
+  verifyToken,
+  washingProduksiController.completeProduksi,
+);
+
 // req.body support: { ..., isBlower: 1 | 0 }
 router.put(
   "/washing/:noProduksi",
@@ -50,6 +56,12 @@ router.get(
   "/washing/:noProduksi/outputs",
   verifyToken,
   washingProduksiController.getOutputsByNoProduksi,
+);
+
+router.get(
+  "/washing/:noProduksi/formula-inputs",
+  verifyToken,
+  washingProduksiController.getFormulaInputsByNoProduksi,
 );
 
 router.get(

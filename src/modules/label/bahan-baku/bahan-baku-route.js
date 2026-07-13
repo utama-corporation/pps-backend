@@ -17,6 +17,13 @@ router.get(
   ctrl.getAll,
 );
 
+// GET all bahan baku proses (prefix "AB.") (pagination + search ?page=&limit=&search=)
+router.get(
+  "/labels/bahan-baku-proses",
+  requirePermission("penerimaanbahanbaku:read"), // sesuaikan permission-mu
+  ctrl.getAllProses,
+);
+
 // GET pallet list by NoBahanBaku
 router.get(
   "/labels/bahan-baku/:nobahanbaku/pallet",

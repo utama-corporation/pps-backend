@@ -26,4 +26,47 @@ async function getAllActive(req, res) {
   }
 }
 
-module.exports = { getAllActive };
+async function getStokProses(req, res) {
+  try {
+    const data = await service.getStokProses();
+
+    return res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error('Get Stok Reject Proses Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Terjadi kesalahan server',
+    });
+  }
+}
+
+async function getLabelByIdReject(req, res) {
+  try {
+    const idReject = parseInt(req.params.idreject, 10);
+
+    if (!Number.isFinite(idReject)) {
+      return res.status(400).json({
+        success: false,
+        message: 'idreject wajib berupa angka',
+      });
+    }
+
+    const data = await service.getLabelByIdReject(idReject);
+
+    return res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error('Get Label Reject By IdReject Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Terjadi kesalahan server',
+    });
+  }
+}
+
+module.exports = { getAllActive, getStokProses, getLabelByIdReject };

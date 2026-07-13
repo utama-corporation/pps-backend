@@ -62,7 +62,13 @@ BEGIN
                 i.HourMeter,
                 i.BeratProdukHasilTimbang,
                 i.HourStart,
-                i.HourEnd
+                i.HourEnd,
+                i.InputMode,
+                i.CompleteRequestStatus,
+                i.CompleteRequestedBy,
+                i.CompleteRequestedAt,
+                i.CompleteDecisionBy,
+                i.CompleteDecisionAt
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         )
     FROM inserted i
@@ -102,7 +108,13 @@ BEGIN
                 d.HourMeter,
                 d.BeratProdukHasilTimbang,
                 d.HourStart,
-                d.HourEnd
+                d.HourEnd,
+                d.InputMode,
+                d.CompleteRequestStatus,
+                d.CompleteRequestedBy,
+                d.CompleteRequestedAt,
+                d.CompleteDecisionBy,
+                d.CompleteDecisionAt
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         ),
         (
@@ -128,7 +140,13 @@ BEGIN
                 i.HourMeter,
                 i.BeratProdukHasilTimbang,
                 i.HourStart,
-                i.HourEnd
+                i.HourEnd,
+                i.InputMode,
+                i.CompleteRequestStatus,
+                i.CompleteRequestedBy,
+                i.CompleteRequestedAt,
+                i.CompleteDecisionBy,
+                i.CompleteDecisionAt
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         )
     FROM inserted i
@@ -167,7 +185,13 @@ BEGIN
                 d.HourMeter,
                 d.BeratProdukHasilTimbang,
                 d.HourStart,
-                d.HourEnd
+                d.HourEnd,
+                d.InputMode,
+                d.CompleteRequestStatus,
+                d.CompleteRequestedBy,
+                d.CompleteRequestedAt,
+                d.CompleteDecisionBy,
+                d.CompleteDecisionAt
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         ),
         NULL

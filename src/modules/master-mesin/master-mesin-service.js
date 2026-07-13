@@ -785,15 +785,15 @@ async function getInjectByNoProduksi({
       m.NamaMesin,
       m.Bagian,
       m.IdBagianMesin,
-      h.NoProduksi,
-      CONVERT(date, h.TglProduksi) AS TglProduksi,
-      h.IdRegu,
+      COALESCE(h.NoProduksi, pendingProd.NoProduksi) AS NoProduksi,
+      CONVERT(date, COALESCE(h.TglProduksi, pendingProd.TglProduksi)) AS TglProduksi,
+      COALESCE(h.IdRegu, pendingProd.IdRegu) AS IdRegu,
       rg.NamaRegu,
-      h.IdCetakan,
+      COALESCE(h.IdCetakan, pendingProd.IdCetakan) AS IdCetakan,
       ct.NamaCetakan,
-      h.IdWarna,
+      COALESCE(h.IdWarna, pendingProd.IdWarna) AS IdWarna,
       wr.Warna,
-      h.IdFurnitureMaterial,
+      COALESCE(h.IdFurnitureMaterial, pendingProd.IdFurnitureMaterial) AS IdFurnitureMaterial,
       fm.Nama AS NamaFurnitureMaterial,
       CASE
         WHEN fwCount.TotalCount > 0 THEN 'furnitureWip'
@@ -810,7 +810,7 @@ async function getInjectByNoProduksi({
           (
             SELECT od.IdOperator AS [value]
             FROM dbo.InjectProduksiOperator_d od WITH (NOLOCK)
-            WHERE od.NoProduksi = h.NoProduksi
+            WHERE od.NoProduksi = COALESCE(h.NoProduksi, pendingProd.NoProduksi)
             ORDER BY od.IdOperator
             FOR JSON PATH
           ),
@@ -823,21 +823,35 @@ async function getInjectByNoProduksi({
           FROM dbo.InjectProduksiOperator_d od WITH (NOLOCK)
           INNER JOIN dbo.MstOperator op WITH (NOLOCK)
             ON op.IdOperator = od.IdOperator
-          WHERE od.NoProduksi = h.NoProduksi
+          WHERE od.NoProduksi = COALESCE(h.NoProduksi, pendingProd.NoProduksi)
         ),
         ''
       ) AS Operators,
-      h.Shift,
-      CONVERT(varchar(8), h.HourStart, 108) AS HourStart,
-      CONVERT(varchar(8), h.HourEnd, 108) AS HourEnd,
+      COALESCE(h.Shift, pendingProd.Shift) AS Shift,
+      CONVERT(varchar(8), COALESCE(h.HourStart, pendingProd.HourStart), 108) AS HourStart,
+      CONVERT(varchar(8), COALESCE(h.HourEnd, pendingProd.HourEnd), 108) AS HourEnd,
       m.Target,
       CONVERT(varchar(10), c.CurrentDate, 23) AS CurrentDate,
       CONVERT(varchar(8), c.CurrentTime, 108) AS CurrentTime,
       s.NoShift AS ActiveShift,
       CONVERT(varchar(8), s.HourStart, 108) AS ActiveShiftHourStart,
       CONVERT(varchar(8), s.HourEnd, 108) AS ActiveShiftHourEnd,
-      s.ValidFrmDate AS ActiveShiftValidFrmDate
+      s.ValidFrmDate AS ActiveShiftValidFrmDate,
+      mi.StandarBerat,
+      mi.StandarCycleTime,
+      mi.CounterCurrent,
+      mi.CounterAtReset,
+      mi.LastResetAt,
+      mi.LastResetBy,
+      mi.CounterUpdatedAt,
+      CASE
+        WHEN pendingProd.NoProduksi IS NOT NULL THEN 'pending'
+        WHEN h.NoProduksi IS NULL THEN 'idle'
+        ELSE 'aktif'
+      END AS MachineStatus
     FROM dbo.MstMesin m WITH (NOLOCK)
+    LEFT JOIN dbo.MstMesinInject mi WITH (NOLOCK)
+      ON mi.IdMesin = m.IdMesin
     OUTER APPLY (
       SELECT TOP 1
         ih.NoProduksi,
@@ -871,14 +885,49 @@ async function getInjectByNoProduksi({
         )
       ORDER BY ih.HourStart DESC, ih.NoProduksi DESC
     ) h
+    OUTER APPLY (
+      -- Ambil produksi incomplete terbaru untuk kandidat pending
+      SELECT TOP 1
+        ph.NoProduksi,
+        ph.TglProduksi,
+        ph.IdRegu,
+        ph.IdCetakan,
+        ph.IdWarna,
+        ph.IdFurnitureMaterial,
+        ph.Shift,
+        ph.HourStart,
+        ph.HourEnd
+      FROM dbo.InjectProduksi_h ph WITH (NOLOCK)
+      CROSS JOIN CurrentCtx c
+      WHERE ph.IdMesin = m.IdMesin
+        AND ph.IsComplete = 0
+        AND (
+          CONVERT(date, ph.TglProduksi) < c.CurrentDate
+          OR (
+            CONVERT(date, ph.TglProduksi) = c.CurrentDate
+            AND (
+              (
+                ph.HourStart <= ph.HourEnd
+                AND c.CurrentTime >= CAST(ph.HourEnd AS time(0))
+              )
+              OR (
+                ph.HourStart > ph.HourEnd
+                AND c.CurrentTime >= CAST(ph.HourEnd AS time(0))
+                AND c.CurrentTime < CAST(ph.HourStart AS time(0))
+              )
+            )
+          )
+        )
+      ORDER BY ph.TglProduksi DESC, ph.HourEnd DESC, ph.NoProduksi DESC
+    ) pendingProd
     LEFT JOIN dbo.MstCetakan ct WITH (NOLOCK)
-      ON ct.IdCetakan = h.IdCetakan
+      ON ct.IdCetakan = COALESCE(h.IdCetakan, pendingProd.IdCetakan)
     LEFT JOIN dbo.MstWarna wr WITH (NOLOCK)
-      ON wr.IdWarna = h.IdWarna
+      ON wr.IdWarna = COALESCE(h.IdWarna, pendingProd.IdWarna)
     LEFT JOIN dbo.MstCabinetWIP fm WITH (NOLOCK)
-      ON fm.IdCabinetWIP = h.IdFurnitureMaterial
+      ON fm.IdCabinetWIP = COALESCE(h.IdFurnitureMaterial, pendingProd.IdFurnitureMaterial)
     LEFT JOIN dbo.MstRegu rg WITH (NOLOCK)
-      ON rg.IdRegu = h.IdRegu
+      ON rg.IdRegu = COALESCE(h.IdRegu, pendingProd.IdRegu)
     OUTER APPLY (
       SELECT
         COUNT(1) AS TotalCount
@@ -889,12 +938,13 @@ async function getInjectByNoProduksi({
         FROM dbo.CetakanWarnaToFurnitureWIP_d dFw WITH (NOLOCK)
         INNER JOIN dbo.MstCabinetWIP cab WITH (NOLOCK)
           ON cab.IdCabinetWIP = dFw.IdFurnitureWIP
-        WHERE dFw.IdCetakan = h.IdCetakan
-          AND dFw.IdWarna = h.IdWarna
+        WHERE dFw.IdCetakan = COALESCE(h.IdCetakan, pendingProd.IdCetakan)
+          AND dFw.IdWarna = COALESCE(h.IdWarna, pendingProd.IdWarna)
           AND (
             (dFw.IdFurnitureMaterial IS NULL
-              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
-            OR dFw.IdFurnitureMaterial = h.IdFurnitureMaterial
+              AND (COALESCE(h.IdFurnitureMaterial, pendingProd.IdFurnitureMaterial) = 0
+                OR COALESCE(h.IdFurnitureMaterial, pendingProd.IdFurnitureMaterial) IS NULL))
+            OR dFw.IdFurnitureMaterial = COALESCE(h.IdFurnitureMaterial, pendingProd.IdFurnitureMaterial)
           )
       ) x
     ) fwCount
@@ -913,12 +963,13 @@ async function getInjectByNoProduksi({
                 FROM dbo.CetakanWarnaToFurnitureWIP_d dFw WITH (NOLOCK)
                 INNER JOIN dbo.MstCabinetWIP cab WITH (NOLOCK)
                   ON cab.IdCabinetWIP = dFw.IdFurnitureWIP
-                WHERE dFw.IdCetakan = h.IdCetakan
-                  AND dFw.IdWarna = h.IdWarna
+                WHERE dFw.IdCetakan = COALESCE(h.IdCetakan, pendingProd.IdCetakan)
+                  AND dFw.IdWarna = COALESCE(h.IdWarna, pendingProd.IdWarna)
                   AND (
                     (dFw.IdFurnitureMaterial IS NULL
-                      AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
-                    OR dFw.IdFurnitureMaterial = h.IdFurnitureMaterial
+                      AND (COALESCE(h.IdFurnitureMaterial, pendingProd.IdFurnitureMaterial) = 0
+                        OR COALESCE(h.IdFurnitureMaterial, pendingProd.IdFurnitureMaterial) IS NULL))
+                    OR dFw.IdFurnitureMaterial = COALESCE(h.IdFurnitureMaterial, pendingProd.IdFurnitureMaterial)
                   )
               ) x
               FOR JSON PATH
@@ -937,12 +988,13 @@ async function getInjectByNoProduksi({
         FROM dbo.CetakanWarnaToProduk_d dBj WITH (NOLOCK)
         INNER JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
           ON mbj.IdBJ = dBj.IdBarangJadi
-        WHERE dBj.IdCetakan = h.IdCetakan
-          AND dBj.IdWarna = h.IdWarna
+        WHERE dBj.IdCetakan = COALESCE(h.IdCetakan, pendingProd.IdCetakan)
+          AND dBj.IdWarna = COALESCE(h.IdWarna, pendingProd.IdWarna)
           AND (
             (dBj.IdFurnitureMaterial IS NULL
-              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
-            OR dBj.IdFurnitureMaterial = h.IdFurnitureMaterial
+              AND (COALESCE(h.IdFurnitureMaterial, pendingProd.IdFurnitureMaterial) = 0
+                OR COALESCE(h.IdFurnitureMaterial, pendingProd.IdFurnitureMaterial) IS NULL))
+            OR dBj.IdFurnitureMaterial = COALESCE(h.IdFurnitureMaterial, pendingProd.IdFurnitureMaterial)
           )
       ) x
     ) bjCount
@@ -961,12 +1013,13 @@ async function getInjectByNoProduksi({
                 FROM dbo.CetakanWarnaToProduk_d dBj WITH (NOLOCK)
                 INNER JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
                   ON mbj.IdBJ = dBj.IdBarangJadi
-                WHERE dBj.IdCetakan = h.IdCetakan
-                  AND dBj.IdWarna = h.IdWarna
+                WHERE dBj.IdCetakan = COALESCE(h.IdCetakan, pendingProd.IdCetakan)
+                  AND dBj.IdWarna = COALESCE(h.IdWarna, pendingProd.IdWarna)
                   AND (
                     (dBj.IdFurnitureMaterial IS NULL
-                      AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
-                    OR dBj.IdFurnitureMaterial = h.IdFurnitureMaterial
+                      AND (COALESCE(h.IdFurnitureMaterial, pendingProd.IdFurnitureMaterial) = 0
+                        OR COALESCE(h.IdFurnitureMaterial, pendingProd.IdFurnitureMaterial) IS NULL))
+                    OR dBj.IdFurnitureMaterial = COALESCE(h.IdFurnitureMaterial, pendingProd.IdFurnitureMaterial)
                   )
               ) x
               FOR JSON PATH
@@ -998,6 +1051,13 @@ async function getInjectByNoProduksi({
     return {
       ...row,
       Outputs: outputs,
+      standarBerat: row.StandarBerat == null ? null : Number(row.StandarBerat),
+      standarCycleTime: row.StandarCycleTime == null ? null : Number(row.StandarCycleTime),
+      counterCurrent: row.CounterCurrent == null ? null : Number(row.CounterCurrent),
+      counterAtReset: row.CounterAtReset == null ? null : Number(row.CounterAtReset),
+      lastResetAt: row.LastResetAt ?? null,
+      lastResetBy: row.LastResetBy ?? null,
+      counterUpdatedAt: row.CounterUpdatedAt ?? null,
     };
   });
 }

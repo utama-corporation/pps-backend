@@ -15,6 +15,9 @@ const {
 } = require("../../../core/utils/jam-kerja-helper");
 
 const sharedInputService = require("../../../core/shared/produksi-input.service");
+const {
+  getFormulaInputsByCategory,
+} = require("../../../core/shared/production-formula.service");
 
 const {
   badReq,
@@ -26,6 +29,55 @@ const { applyAuditContext } = require("../../../core/utils/db-audit-context");
 const {
   generateNextCode,
 } = require("../../../core/utils/sequence-code-helper");
+
+function formatTanggalPanjangIndonesia(value) {
+  if (!value) return null;
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return new Intl.DateTimeFormat("id-ID", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(date);
+}
+
+async function assertNoIncompleteProduksiForMesin(tx, idMesin) {
+  const mesinId = Number(idMesin);
+  if (!Number.isInteger(mesinId) || mesinId <= 0) {
+    throw badReq("idMesin wajib integer positif");
+  }
+
+  const activeRes = await new sql.Request(tx).input("IdMesin", sql.Int, mesinId)
+    .query(`
+      SELECT TOP 1
+        NoProduksi,
+        TglProduksi,
+        Shift
+      FROM dbo.BrokerProduksi_h WITH (UPDLOCK, HOLDLOCK)
+      WHERE IdMesin = @IdMesin
+        AND ISNULL(IsComplete, 0) = 0
+      ORDER BY TglProduksi ASC, HourStart ASC, NoProduksi ASC;
+    `);
+
+  const activeRow = activeRes.recordset?.[0] || null;
+  const activeNoProduksi = String(activeRow?.NoProduksi || "").trim();
+
+  if (activeNoProduksi) {
+    const tanggalPanjang =
+      formatTanggalPanjangIndonesia(activeRow?.TglProduksi) || "-";
+    const shiftText =
+      activeRow?.Shift == null || activeRow?.Shift === ""
+        ? "-"
+        : String(activeRow.Shift).trim();
+
+    throw conflict(
+      `Terdapat produksi yang belum di selesaikan pada ${tanggalPanjang}, shift ${shiftText} dengan Nomor Produksi ${activeNoProduksi}. Selesaikan produksi tersebut terlebih dahulu.`,
+    );
+  }
+}
 
 /**
  * Paginated fetch for dbo.BrokerProduksi_h
@@ -130,6 +182,7 @@ async function getAllProduksi(
       mb.Nama         AS OutputJenisNama,
       h.Jam           AS JamKerja,
       h.Shift,
+      h.IsComplete,
       h.CreateBy,
       h.CheckBy1,
       h.CheckBy2,
@@ -544,6 +597,50 @@ async function fetchInputs(noProduksi) {
   return out;
 }
 
+async function getFormulaInputsByNoProduksi(noProduksi) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const pool = await poolPromise;
+  const request = pool.request();
+  request.input("NoProduksi", sql.VarChar(50), no);
+
+  const headerRes = await request.query(`
+    SELECT TOP 1
+      h.NoProduksi,
+      h.OutputJenisId AS OutputId,
+      mb.Nama AS OutputNama
+    FROM dbo.BrokerProduksi_h h WITH (NOLOCK)
+    LEFT JOIN dbo.MstBroker mb WITH (NOLOCK)
+      ON mb.IdBroker = h.OutputJenisId
+    WHERE h.NoProduksi = @NoProduksi;
+  `);
+
+  const header = headerRes.recordset?.[0];
+  if (!header) {
+    throw notFound(`BrokerProduksi ${no} tidak ditemukan`);
+  }
+
+  const outputId = Number(header.OutputId);
+  const normalizedOutputs = Number.isFinite(outputId) && outputId > 0
+    ? [
+        {
+          idJenis: outputId,
+          namaJenis: header.OutputNama ?? null,
+        },
+      ]
+    : [];
+
+  return {
+    noProduksi: no,
+    ...(await getFormulaInputsByCategory({
+      pool,
+      outputCategory: "broker",
+      outputs: normalizedOutputs,
+    })),
+  };
+}
+
 async function fetchOutputs(noProduksi) {
   const pool = await poolPromise;
   const req = pool.request();
@@ -648,7 +745,8 @@ async function getProduksiByDate(date) {
       h.ApproveBy,
       h.JmlhAnggota,
       h.Hadir,
-      h.HourMeter
+      h.HourMeter,
+      h.IsComplete
     FROM dbo.BrokerProduksi_h h
     LEFT JOIN dbo.MstMesin m ON h.IdMesin = m.IdMesin
     WHERE CONVERT(date, h.TglProduksi) = @date
@@ -740,7 +838,13 @@ async function createBrokerProduksi(payload, ctx) {
     });
 
     // =====================================================
-    // 4) Generate NoProduksi
+    // 4) Precondition: satu mesin tidak boleh punya produksi broker
+    // aktif lebih dari satu pada saat create.
+    // =====================================================
+    await assertNoIncompleteProduksiForMesin(tx, body.idMesin);
+
+    // =====================================================
+    // 5) Generate NoProduksi
     // =====================================================
     const gen = async () =>
       generateNextCode(tx, {
@@ -782,7 +886,7 @@ async function createBrokerProduksi(payload, ctx) {
     }
 
     // =====================================================
-    // 5) Insert header (FIX: OUTPUT ... INTO @out)
+    // 6) Insert header (FIX: OUTPUT ... INTO @out)
     // =====================================================
     const rqIns = new sql.Request(tx);
     rqIns
@@ -1744,6 +1848,68 @@ async function deleteBrokerProduksi(noProduksi, ctx) {
       await tx.rollback();
     } catch (_) {}
     throw e;
+  }
+}
+
+async function completeBrokerProduksi(noProduksi, ctx) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const checkRes = await new sql.Request(tx).input(
+      "NoProduksi",
+      sql.VarChar(50),
+      no,
+    ).query(`
+        SELECT TOP 1 NoProduksi, IsComplete
+        FROM dbo.BrokerProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    if (!checkRes.recordset?.length) {
+      throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+    }
+
+    if (checkRes.recordset[0].IsComplete) {
+      throw conflict(`Produksi ${no} sudah complete.`);
+    }
+
+    await new sql.Request(tx).input("NoProduksi", sql.VarChar(50), no).query(`
+        UPDATE dbo.BrokerProduksi_h
+        SET IsComplete = 1
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    await tx.commit();
+
+    return {
+      noProduksi: no,
+      isComplete: true,
+      status: "complete",
+    };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
   }
 }
 
@@ -2744,9 +2910,11 @@ module.exports = {
   getAllProduksi,
   getProduksiByDate,
   fetchInputs,
+  getFormulaInputsByNoProduksi,
   fetchOutputs,
   fetchOutputsBonggolan,
   createBrokerProduksi,
+  completeBrokerProduksi,
   updateBrokerProduksi,
   deleteBrokerProduksi,
   validateLabel,
