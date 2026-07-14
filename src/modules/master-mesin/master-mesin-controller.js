@@ -1,6 +1,6 @@
 const service = require("./master-mesin-service");
 
-function mapInjectStatus(machineStatus) {
+function mapMachineStatus(machineStatus) {
   if (machineStatus === "aktif") return "current";
   if (machineStatus === "pending") return "pending";
   return "idle";
@@ -399,6 +399,7 @@ async function getGilingan(req, res) {
       Shift: row.Shift ?? null,
       HourStart: row.HourStart ?? null,
       HourEnd: row.HourEnd ?? null,
+      status: mapMachineStatus(row.MachineStatus),
     }));
 
     return res.status(200).json({
@@ -568,7 +569,7 @@ async function getInject(req, res) {
       Shift: r.Shift ?? null,
       HourStart: r.HourStart ?? null,
       HourEnd: r.HourEnd ?? null,
-      status: mapInjectStatus(r.MachineStatus),
+      status: mapMachineStatus(r.MachineStatus),
       standarBerat: r.standarBerat ?? r.StandarBerat ?? null,
       standarCycleTime: r.standarCycleTime ?? r.StandarCycleTime ?? null,
       counterCurrent: r.counterCurrent ?? r.CounterCurrent ?? null,

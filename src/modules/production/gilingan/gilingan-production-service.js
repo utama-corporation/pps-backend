@@ -98,7 +98,10 @@ async function getProduksiByDate(date) {
 
   request.input("date", sql.Date, date);
   const result = await request.query(query);
-  return result.recordset;
+  return (result.recordset || []).map((row) => ({
+    ...row,
+    status: row.IsComplete ? "complete" : "pending",
+  }));
 }
 
 async function getAllProduksi(
@@ -249,6 +252,7 @@ async function getAllProduksi(
     IdOperators: typeof r.IdOperators === "string"
       ? JSON.parse(r.IdOperators).map((x) => x.value)
       : (r.IdOperators ?? []),
+    status: r.IsComplete ? "complete" : "pending",
   }));
 
   return { data: rows, total };
