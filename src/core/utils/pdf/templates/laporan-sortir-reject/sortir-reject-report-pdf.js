@@ -45,64 +45,56 @@ function getFirstFilled(rows, fieldName) {
   return row ? row[fieldName] : "";
 }
 
-function buildRowsHtml(rows) {
+function buildSrKategoriRowsHtml(rows) {
   return rows
     .map((row) => {
       const hasOutput = String(row.JenisOutput || "").trim() !== "";
-      const outputName = hasOutput ? escapeHtml(row.JenisOutput) : '<span class="empty-output">-</span>';
+      const outputName = hasOutput ? escapeHtml(row.JenisOutput) : '<span class="empty-value">-</span>';
       const outputQty = hasOutput ? formatNumber(row.JumlahOutput, 2) : "";
+      const inputName = escapeHtml(row.JenisInput || "-");
+      const inputQty = formatNumber(row.JlhInput, 0);
 
       return `
         <tr>
-          <td class="input-cell">${escapeHtml(row.ProsesAsal || "-")}</td>
           <td class="center">${escapeHtml(formatDate(row.Tanggal))}</td>
-          <td class="input-cell">${escapeHtml(row.JenisInput || "-")}</td>
-          <td class="right input-cell">${formatNumber(row.JlhInput, 0)}</td>
+          <td class="input-cell">${inputName}</td>
+          <td class="right input-cell">${inputQty}</td>
+          <td class="center">Pcs</td>
           <td class="output-cell">${outputName}</td>
           <td class="right output-cell">${outputQty}</td>
+          <td class="center">Kg</td>
         </tr>`;
     })
     .join("");
 }
 
-function buildGroupTableHtml(groupRows) {
-  return `
-    <table>
-      <thead>
-        <tr>
-          <th class="col-asal">PROSES / ASAL</th>
-          <th class="col-tgl center">TANGGAL</th>
-          <th class="col-input">INPUT</th>
-          <th class="col-jlh right">INPUT (Pcs)</th>
-          <th class="col-output">OUTPUT</th>
-          <th class="col-jumlah right">OUTPUT (Kg)</th>
-        </tr>
-      </thead>
-      <tbody>${buildRowsHtml(groupRows)}</tbody>
-    </table>`;
-}
-
-function buildSortirCard(noBJSortir, rows, totals) {
-  const t = totals || {};
-  const tanggal = formatDate(getFirstFilled(rows, "Tanggal"));
-  const totalInput = formatNumber(t.TotalInput, 0);
-  const totalOutput = formatNumber(t.TotalOutput, 2);
-  const jenisOutput = escapeHtml(t.JenisOutput || "-");
+function buildSrKategoriSection(groupInput, rows) {
+  const totalInput = rows.reduce((s, r) => s + (Number(r.JlhInput) || 0), 0);
+  const totalOutput = rows.reduce((s, r) => s + (Number(r.JumlahOutput) || 0), 0);
 
   return `
-    <div class="sortir-card">
-      <div class="sortir-head">
-        <div>
-          <div class="sortir-no">No Sortir : ${escapeHtml(noBJSortir)}</div>
-          <div class="sortir-meta">Tanggal : ${escapeHtml(tanggal)}</div>
-        </div>
+    <div class="bs-card">
+      <div class="kategori-header">
+        <span class="kategori-title-label">${escapeHtml(groupInput || "TANPA GROUP")}</span>
         <div class="summary">
-          <div class="summary-output">${jenisOutput}</div>
-          <span>Input: ${totalInput} Pcs</span>
-          <span class="total-output">Output: ${totalOutput} Kg</span>
+          <span>IN Pcs: ${formatNumber(totalInput, 0)}</span>
+          <span class="total-output">OUT Kg: ${formatNumber(totalOutput, 2)}</span>
         </div>
       </div>
-      ${buildGroupTableHtml(rows)}
+      <table>
+        <thead>
+          <tr>
+            <th class="col-tgl center">TANGGAL</th>
+            <th class="col-jenis">JENIS INPUT</th>
+            <th class="col-qty right">QTY/BERAT IN</th>
+            <th class="col-sat center">SATUAN</th>
+            <th class="col-jenis">JENIS OUTPUT</th>
+            <th class="col-qty right">QTY/BERAT</th>
+            <th class="col-sat center">SATUAN</th>
+          </tr>
+        </thead>
+        <tbody>${buildSrKategoriRowsHtml(rows)}</tbody>
+      </table>
     </div>`;
 }
 
@@ -111,19 +103,6 @@ function buildSortirRejectReportHtml({ startDate, endDate, rows }) {
   const templateHtml = fs.readFileSync(templatePath, "utf8");
 
   const sortPriority = { BJADI: 0, WIP: 1 };
-
-  const totalsBySortir = new Map();
-  for (const row of dataRows) {
-    const key = row.NoBJSortir;
-    if (!totalsBySortir.has(key)) {
-      totalsBySortir.set(key, { TotalInput: 0, TotalOutput: 0, JenisOutput: row.JenisOutput });
-    } else if (!totalsBySortir.get(key).JenisOutput && row.JenisOutput) {
-      totalsBySortir.get(key).JenisOutput = row.JenisOutput;
-    }
-    const t = totalsBySortir.get(key);
-    t.TotalInput += Number(row.JlhInput) || 0;
-    t.TotalOutput += Number(row.JumlahOutput) || 0;
-  }
 
   const content = dataRows.length === 0
     ? '<div class="no-data">Data laporan tidak ditemukan.</div>'
@@ -134,16 +113,7 @@ function buildSortirRejectReportHtml({ startDate, endDate, rows }) {
           if (pa !== pb) return pa - pb;
           return a.localeCompare(b);
         })
-        .map(([groupName, groupRows]) => {
-          const sortirCards = Array.from(groupBy(groupRows, (row) => row.NoBJSortir).entries())
-            .map(([sortirNo, sortirRows]) => buildSortirCard(sortirNo, sortirRows, totalsBySortir.get(sortirNo)))
-            .join("");
-          return `
-        <div class="group-section">
-          <div class="group-title-main">GROUP INPUT : ${escapeHtml(groupName)}</div>
-          ${sortirCards}
-        </div>`;
-        })
+        .map(([groupName, groupRows]) => buildSrKategoriSection(groupName, groupRows))
         .join("");
 
   return templateHtml
