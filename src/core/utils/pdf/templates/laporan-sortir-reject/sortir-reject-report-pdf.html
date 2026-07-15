@@ -12,46 +12,46 @@
     }
 
     .report-header {
-      text-align: center;
-      margin-bottom: 20px;
-      padding-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
       border-bottom: 3px solid #1e40af;
+      padding-bottom: 10px;
+      margin-bottom: 18px;
     }
-    .report-header h1 {
+    .title {
       font-size: 18px;
+      font-weight: 800;
       color: #1e3a5f;
       text-transform: uppercase;
-      letter-spacing: 1.5px;
-      margin-bottom: 4px;
+      letter-spacing: 1px;
     }
-    .report-header .periode {
-      font-size: 12px;
-      color: #475569;
+    .subtitle {
+      font-size: 10px;
+      color: #64748b;
+      margin-top: 2px;
+    }
+    .period-box {
+      text-align: right;
+      font-size: 11px;
+    }
+    .period-box .label {
+      color: #64748b;
+      font-size: 9px;
+    }
+    .period-box .value {
+      font-weight: 700;
+      color: #1e3a5f;
     }
 
-    .group-section {
-      margin-bottom: 22px;
-    }
-    .group-title-main {
-      background: #1e40af;
-      color: #fff;
-      padding: 7px 14px;
-      font-weight: bold;
-      font-size: 13px;
-      border-radius: 6px 6px 0 0;
-      letter-spacing: 0.5px;
-    }
-
-    .sortir-card {
+    .bs-card {
       border: 1px solid #cbd5e1;
-      border-top: none;
-      margin-bottom: 12px;
-    }
-    .sortir-card:last-child {
-      margin-bottom: 0;
+      border-radius: 6px;
+      margin-bottom: 24px;
+      overflow: hidden;
     }
 
-    .sortir-head {
+    .kategori-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -59,29 +59,20 @@
       padding: 8px 14px;
       border-bottom: 1px solid #cbd5e1;
     }
-    .sortir-no {
-      font-weight: bold;
-      font-size: 12px;
+    .kategori-title-label {
+      font-weight: 800;
+      font-size: 13px;
       color: #1e3a5f;
-    }
-    .sortir-meta {
-      font-size: 10px;
-      color: #64748b;
-      margin-top: 2px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
     }
     .summary {
-      text-align: right;
-      font-size: 11px;
-    }
-    .summary-output {
-      font-size: 14px;
-      font-weight: bold;
-      color: #1e40af;
-      margin-bottom: 4px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
     }
     .summary span {
       display: inline-block;
-      margin-left: 12px;
       padding: 2px 10px;
       background: #dbeafe;
       border-radius: 4px;
@@ -104,25 +95,23 @@
     th {
       background: #f1f5f9;
       font-weight: 700;
-      color: #334155;
+      color: #475569;
       text-align: center;
       font-size: 9px;
       text-transform: uppercase;
       letter-spacing: 0.3px;
     }
-    .center { text-align: center; }
     .right { text-align: right; }
+    .center { text-align: center; }
 
-    .col-asal { width: 22%; }
-    .col-tgl { width: 13%; }
-    .col-input { width: 18%; }
-    .col-jlh { width: 10%; }
-    .col-output { width: 22%; }
-    .col-jumlah { width: 15%; }
+    .col-tgl { width: 12%; }
+    .col-jenis { width: 22%; }
+    .col-qty { width: 10%; }
+    .col-sat { width: 6%; }
 
     .input-cell { background: #f8fafc; }
     .output-cell { background: #f0fdf4; font-weight: 600; }
-    .empty-output { color: #94a3b8; font-style: italic; font-weight: normal; }
+    .empty-value { color: #94a3b8; font-style: italic; font-weight: normal; }
 
     .no-data {
       text-align: center;
@@ -134,8 +123,14 @@
 </head>
 <body>
   <div class="report-header">
-    <h1>Laporan Sortir Reject</h1>
-    <div class="periode">Periode : {{periode}}</div>
+    <div>
+      <div class="title">LAPORAN SORTIR REJECT</div>
+      <div class="subtitle">Input dan Output per Group Input</div>
+    </div>
+    <div class="period-box">
+      <div class="label">Periode</div>
+      <div class="value">{{periode}}</div>
+    </div>
   </div>
   {{content}}
 </body>
