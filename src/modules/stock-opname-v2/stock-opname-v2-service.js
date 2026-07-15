@@ -21,27 +21,47 @@ const STOCK_OPNAME_STATUS = {
   COMPLETED: "completed",
 };
 
-async function getAllKategoriWithStatus() {
+// Sentinel dipakai saat label snapshot tidak punya Blok/IdLokasi tercatat
+// (mis. label belum pernah ditempatkan). Dikembalikan ke client sebagai
+// grouping "Lokasi Tidak Diketahui" alih-alih disembunyikan begitu saja.
+const UNKNOWN_BLOK_CODE = "TIDAK_DIKETAHUI";
+const UNKNOWN_LOCATION_ID = 0;
+const UNKNOWN_LOCATION_LABEL = "Lokasi Tidak Diketahui";
+
+async function getAllKategoriWithStatus({ year, month } = {}) {
   const kategoriList = await getAllKategori();
   if (!kategoriList.length) return kategoriList;
 
   const pool = await poolPromise;
   const now = new Date();
 
+  const yearNum =
+    year !== undefined && year !== null && year !== "" ? Number(year) : now.getFullYear();
+  if (!Number.isInteger(yearNum)) {
+    throw badReq("year wajib berupa integer valid");
+  }
+  const monthNum =
+    month !== undefined && month !== null && month !== ""
+      ? Number(month)
+      : now.getMonth() + 1;
+  if (!Number.isInteger(monthNum) || monthNum < 1 || monthNum > 12) {
+    throw badReq("month wajib berupa integer 1-12");
+  }
+
   const ranked = await pool
     .request()
-    .input("year", sql.Int, now.getFullYear())
-    .input("month", sql.Int, now.getMonth() + 1).query(`
+    .input("year", sql.Int, yearNum)
+    .input("month", sql.Int, monthNum).query(`
       ;WITH ranked AS (
         SELECT
-          NoSO, IdKategori, Tanggal, IsComplete,
+          NoSO, IdKategori, Tanggal, IsComplete, DateComplete,
           ROW_NUMBER() OVER (PARTITION BY IdKategori ORDER BY Tanggal DESC, NoSO DESC) AS rn
         FROM dbo.StockOpname_h
         WHERE IdKategori IS NOT NULL
           AND YEAR(Tanggal) = @year
           AND MONTH(Tanggal) = @month
       )
-      SELECT IdKategori, NoSO, IsComplete FROM ranked WHERE rn = 1;
+      SELECT IdKategori, NoSO, Tanggal, IsComplete, DateComplete FROM ranked WHERE rn = 1;
     `);
 
   const statusByIdKategori = new Map(
@@ -63,6 +83,8 @@ async function getAllKategoriWithStatus() {
           status: STOCK_OPNAME_STATUS.NOT_STARTED,
           labelCount: 0,
           scannedCount: 0,
+          startDate: null,
+          completedAt: null,
         };
       }
 
@@ -101,9 +123,134 @@ async function getAllKategoriWithStatus() {
           : STOCK_OPNAME_STATUS.IN_PROGRESS,
         labelCount,
         scannedCount,
+        startDate: row.Tanggal ?? null,
+        completedAt: row.DateComplete ?? null,
       };
     }),
   );
+}
+
+// Riwayat sesi stock opname per kategori (termasuk yang sudah lewat bulan/completed).
+// Endpoint kategori (getAllKategoriWithStatus) cuma nunjukin status TERKINI (1 SO
+// teraktif per kategori) — untuk lihat SO bulan-bulan sebelumnya pakai fungsi ini.
+async function getStockOpnameRiwayat({ categoryId, year, month, page = 1, pageSize = 20 }) {
+  const categoryIdNum = Number(categoryId);
+  if (!Number.isInteger(categoryIdNum) || categoryIdNum <= 0) {
+    throw badReq("categoryId wajib berupa integer valid");
+  }
+
+  const pool = await poolPromise;
+
+  const categoryRes = await pool
+    .request()
+    .input("categoryId", sql.Int, categoryIdNum).query(`
+      SELECT KodeKategori, NamaKategori FROM dbo.MstKategori WHERE IdKategori = @categoryId;
+    `);
+  const categoryRow = categoryRes.recordset?.[0];
+  if (!categoryRow) {
+    throw notFound(`MstKategori tidak ditemukan untuk categoryId: ${categoryIdNum}`);
+  }
+  const categoryCode = String(categoryRow.KodeKategori || "").trim().toLowerCase();
+  const cfg = STOCK_OPNAME_SNAPSHOT_CONFIG[categoryCode];
+
+  const yearNum =
+    year !== undefined && year !== null && year !== "" ? Number(year) : null;
+  if (
+    year !== undefined && year !== null && year !== "" &&
+    !Number.isInteger(yearNum)
+  ) {
+    throw badReq("year wajib berupa integer valid");
+  }
+  const monthNum =
+    month !== undefined && month !== null && month !== "" ? Number(month) : null;
+  if (
+    month !== undefined && month !== null && month !== "" &&
+    (!Number.isInteger(monthNum) || monthNum < 1 || monthNum > 12)
+  ) {
+    throw badReq("month wajib berupa integer 1-12");
+  }
+  if (monthNum !== null && yearNum === null) {
+    throw badReq("year wajib diisi kalau month diisi");
+  }
+
+  const p = Math.max(1, Number(page) || 1);
+  const ps = Math.max(1, Math.min(100, Number(pageSize) || 20));
+  const offset = (p - 1) * ps;
+
+  const whereYear = yearNum !== null ? "AND YEAR(h.Tanggal) = @year" : "";
+  const whereMonth = monthNum !== null ? "AND MONTH(h.Tanggal) = @month" : "";
+
+  const bindInputs = (req) => {
+    req.input("categoryId", sql.Int, categoryIdNum);
+    if (yearNum !== null) req.input("year", sql.Int, yearNum);
+    if (monthNum !== null) req.input("month", sql.Int, monthNum);
+    return req;
+  };
+
+  const [listRes, countRes] = await Promise.all([
+    bindInputs(pool.request()).query(`
+      SELECT h.NoSO, h.Tanggal, h.IsComplete, h.DateComplete
+      FROM dbo.StockOpname_h AS h
+      WHERE h.IdKategori = @categoryId ${whereYear} ${whereMonth}
+      ORDER BY h.Tanggal DESC, h.NoSO DESC
+      OFFSET ${offset} ROWS FETCH NEXT ${ps} ROWS ONLY;
+    `),
+    bindInputs(pool.request()).query(`
+      SELECT COUNT(*) AS total
+      FROM dbo.StockOpname_h AS h
+      WHERE h.IdKategori = @categoryId ${whereYear} ${whereMonth};
+    `),
+  ]);
+  const total = countRes.recordset?.[0]?.total || 0;
+  const rows = listRes.recordset || [];
+
+  const data = await Promise.all(
+    rows.map(async (row) => {
+      let labelCount = 0;
+      let scannedCount = 0;
+      if (cfg) {
+        const scannedMatchSql = [
+          "hasil.NoSO = src.NoSO",
+          ...cfg.labelColumns.map((col) => `hasil.${col} = src.${col}`),
+        ].join(" AND ");
+
+        const summaryRes = await pool
+          .request()
+          .input("stockOpnameNo", sql.VarChar, row.NoSO).query(`
+            SELECT
+              COUNT(*) AS labelCount,
+              SUM(CASE WHEN hasil.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
+            FROM dbo.${cfg.snapshotTable} AS src
+            LEFT JOIN dbo.${cfg.hasilTable} AS hasil ON ${scannedMatchSql}
+            WHERE src.NoSO = @stockOpnameNo;
+          `);
+        labelCount = summaryRes.recordset?.[0]?.labelCount || 0;
+        scannedCount = summaryRes.recordset?.[0]?.scannedCount || 0;
+      }
+
+      return {
+        stockOpnameNo: row.NoSO,
+        startDate: row.Tanggal,
+        status: row.IsComplete
+          ? STOCK_OPNAME_STATUS.COMPLETED
+          : STOCK_OPNAME_STATUS.IN_PROGRESS,
+        labelCount,
+        scannedCount,
+        completedAt: row.DateComplete ?? null,
+      };
+    }),
+  );
+
+  return {
+    categoryId: categoryIdNum,
+    categoryCode,
+    categoryName: categoryRow.NamaKategori,
+    data,
+    currentPage: p,
+    pageSize: ps,
+    totalRecords: total,
+    totalPages: Math.ceil(total / ps) || 0,
+  };
 }
 
 async function resolveStockOpnameCategory(pool, stockOpnameNo) {
@@ -112,7 +259,7 @@ async function resolveStockOpnameCategory(pool, stockOpnameNo) {
 
   const headerRes = await pool.request().input("stockOpnameNo", sql.VarChar, no)
     .query(`
-    SELECT NoSO, Tanggal, IdKategori, IsComplete FROM dbo.StockOpname_h WHERE NoSO = @stockOpnameNo;
+    SELECT NoSO, Tanggal, IdKategori, IsComplete, DateComplete FROM dbo.StockOpname_h WHERE NoSO = @stockOpnameNo;
   `);
   const header = headerRes.recordset?.[0];
   if (!header) throw notFound(`Stock opname tidak ditemukan: ${no}`);
@@ -337,15 +484,21 @@ async function completeStockOpname({ stockOpnameNo, ctx }) {
       throw conflict(`Stock opname ${no} sudah ditandai selesai.`);
     }
 
-    await new sql.Request(tx).input("stockOpnameNo", sql.VarChar, no).query(`
+    const completeRes = await new sql.Request(tx)
+      .input("stockOpnameNo", sql.VarChar, no).query(`
       UPDATE dbo.StockOpname_h
-      SET IsComplete = 1
+      SET IsComplete = 1, DateComplete = GETDATE()
+      OUTPUT INSERTED.DateComplete
       WHERE NoSO = @stockOpnameNo;
     `);
 
     await tx.commit();
 
-    return { stockOpnameNo: no, isComplete: true };
+    return {
+      stockOpnameNo: no,
+      isComplete: true,
+      completedAt: completeRes.recordset?.[0]?.DateComplete ?? null,
+    };
   } catch (e) {
     try {
       await tx.rollback();
@@ -365,13 +518,16 @@ async function getTypesInStockOpname({ stockOpnameNo }) {
     ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
   ].join(" AND ");
 
+  // Furniture WIP dihitung per pcs, bukan berat.
+  const showWeight = categoryCode !== "furniturewip";
+
   const summaryRes = await pool
     .request()
     .input("stockOpnameNo", sql.VarChar, no).query(`
     SELECT
       src.${jenisColumn} AS typeId,
       COUNT(*) AS labelCount,
-      ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight,
+      ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
       SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
     FROM dbo.${cfg.snapshotTable} AS src
     LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
@@ -389,7 +545,7 @@ async function getTypesInStockOpname({ stockOpnameNo }) {
     typeName: typeNameById.get(row.typeId) ?? null,
     labelCount: row.labelCount,
     scannedCount: row.scannedCount,
-    totalWeight: row.totalWeight,
+    ...(showWeight ? { totalWeight: row.totalWeight } : { totalPcs: row.totalPcs }),
   }));
 
   return {
@@ -399,6 +555,7 @@ async function getTypesInStockOpname({ stockOpnameNo }) {
     categoryCode,
     categoryName: categoryRow.NamaKategori,
     isComplete: !!header.IsComplete,
+    completedAt: header.DateComplete ?? null,
     data,
     totalRecords: data.length,
   };
@@ -455,21 +612,35 @@ async function getStockOpnameSnapshot({
   const offset = (p - 1) * ps;
   const searchTerm = String(search || "").trim();
 
-  const selectColumnsSql = cfg.insertColumns.map((c) => `src.${c}`).join(", ");
+  const isUnknownBlok = blokTrim === UNKNOWN_BLOK_CODE;
+  const isUnknownLocation = locationIdNum === UNKNOWN_LOCATION_ID;
+
+  // Furniture WIP dihitung per pcs, bukan berat — Berat tidak relevan
+  // ditampilkan untuk kategori ini.
+  const showWeight = categoryCode !== "furniturewip";
+  const displayColumns = showWeight
+    ? cfg.insertColumns
+    : cfg.insertColumns.filter((c) => c !== "Berat");
+
+  const selectColumnsSql = displayColumns.map((c) => `src.${c}`).join(", ");
   const whereSearch = searchTerm ? `AND src.${labelColumn} LIKE @search` : "";
   const whereType =
     typeIdNum !== null ? `AND src.${cfg.jenisColumn} = @typeId` : "";
   const whereLocation =
     locationIdNum !== null
-      ? `AND src.Blok = @blok AND src.IdLokasi = @locationId`
+      ? `AND ${isUnknownBlok ? "src.Blok IS NULL" : "src.Blok = @blok"} AND ${
+          isUnknownLocation ? "src.IdLokasi IS NULL" : "src.IdLokasi = @locationId"
+        }`
       : "";
 
   const bindInputs = (req) => {
     req.input("stockOpnameNo", sql.VarChar, no);
     if (searchTerm) req.input("search", sql.VarChar, `%${searchTerm}%`);
-    if (locationIdNum !== null) req.input("blok", sql.VarChar, blokTrim);
+    if (locationIdNum !== null && !isUnknownBlok)
+      req.input("blok", sql.VarChar, blokTrim);
     if (typeIdNum !== null) req.input("typeId", sql.Int, typeIdNum);
-    if (locationIdNum !== null) req.input("locationId", sql.Int, locationIdNum);
+    if (locationIdNum !== null && !isUnknownLocation)
+      req.input("locationId", sql.Int, locationIdNum);
     return req;
   };
 
@@ -483,7 +654,9 @@ async function getStockOpnameSnapshot({
       src.NoSO, ${selectColumnsSql},
       CASE WHEN EXISTS (
         SELECT 1 FROM dbo.${cfg.hasilTable} h WHERE ${scannedMatchSql}
-      ) THEN 1 ELSE 0 END AS isScanned
+      ) THEN 1 ELSE 0 END AS isScanned,
+      (SELECT TOP 1 h.ScannedBlok FROM dbo.${cfg.hasilTable} h WHERE ${scannedMatchSql}) AS ScannedBlok,
+      (SELECT TOP 1 h.ScannedIdLokasi FROM dbo.${cfg.hasilTable} h WHERE ${scannedMatchSql}) AS ScannedIdLokasi
     FROM dbo.${cfg.snapshotTable} AS src
     WHERE src.NoSO = @stockOpnameNo ${whereType} ${whereLocation} ${whereSearch}
     ORDER BY src.${labelColumn} ASC
@@ -492,7 +665,7 @@ async function getStockOpnameSnapshot({
   const countQuery = `
     SELECT
       COUNT(*) AS total,
-      ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight,
+      ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
       SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS totalScanned
     FROM dbo.${cfg.snapshotTable} AS src
     LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
@@ -506,6 +679,51 @@ async function getStockOpnameSnapshot({
 
   const total = countRes.recordset?.[0]?.total || 0;
 
+  const rows = (dataRes.recordset || []).map((row) => ({
+    ...row,
+    isLocationMismatch: row.isScanned
+      ? normBlokValue(row.ScannedBlok) !== normBlokValue(row.Blok) ||
+        (row.ScannedIdLokasi ?? null) !== (row.IdLokasi ?? null)
+      : false,
+  }));
+
+  // Kelompokkan label pada halaman ini per jenis, dengan nama jenis
+  // di-join dari master jenis kategori ini (mis. MstBonggolan untuk
+  // kategori bonggolan) lewat getJenisByKategori — sama seperti dipakai
+  // getTypesInStockOpname, jadi konsisten untuk semua kategori.
+  const typeMaster = await getJenisByKategori(header.IdKategori);
+  const typeNameById = new Map(
+    (typeMaster?.jenis || []).map((j) => [j.IdJenis, j.NamaJenis]),
+  );
+
+  const groupsByTypeId = new Map();
+  for (const row of rows) {
+    const rowTypeId = row[cfg.jenisColumn] ?? null;
+    if (!groupsByTypeId.has(rowTypeId)) {
+      groupsByTypeId.set(rowTypeId, {
+        typeId: rowTypeId,
+        typeName: rowTypeId !== null ? typeNameById.get(rowTypeId) ?? null : null,
+        labelCount: 0,
+        ...(showWeight ? { totalWeight: 0 } : { totalPcs: 0 }),
+        labels: [],
+      });
+    }
+    const group = groupsByTypeId.get(rowTypeId);
+    group.labelCount += 1;
+    if (showWeight) {
+      group.totalWeight = Math.round((group.totalWeight + (row.Berat ?? 0)) * 100) / 100;
+    } else {
+      group.totalPcs += row.Pcs ?? 0;
+    }
+    group.labels.push(row);
+  }
+
+  const data = Array.from(groupsByTypeId.values()).sort((a, b) => {
+    const an = a.typeName ?? "";
+    const bn = b.typeName ?? "";
+    return an < bn ? -1 : an > bn ? 1 : 0;
+  });
+
   return {
     stockOpnameNo: no,
     date: header.Tanggal,
@@ -516,22 +734,76 @@ async function getStockOpnameSnapshot({
     blok: locationIdNum !== null ? blokTrim : null,
     locationId: locationIdNum,
     isComplete: !!header.IsComplete,
-    data: dataRes.recordset || [],
+    completedAt: header.DateComplete ?? null,
+    data,
     currentPage: p,
     pageSize: ps,
     totalRecords: total,
     totalPages: Math.ceil(total / ps) || 0,
-    totalWeight: countRes.recordset?.[0]?.totalWeight ?? 0,
+    ...(showWeight
+      ? { totalWeight: countRes.recordset?.[0]?.totalWeight ?? 0 }
+      : { totalPcs: countRes.recordset?.[0]?.totalPcs ?? 0 }),
     totalScanned: countRes.recordset?.[0]?.totalScanned ?? 0,
   };
 }
 
-async function getAllBlok() {
+async function getAllBlok({ stockOpnameNo }) {
   const pool = await poolPromise;
-  const res = await pool.request().query(`
-    SELECT Blok FROM dbo.MstBlok ORDER BY Blok ASC;
-  `);
-  return (res.recordset || []).map((r) => r.Blok);
+  const { no, header, categoryCode, cfg } =
+    await resolveStockOpnameCategory(pool, stockOpnameNo);
+
+  const scannedMatchSql = [
+    "h.NoSO = src.NoSO",
+    ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
+  ].join(" AND ");
+
+  // Furniture WIP dihitung per pcs, bukan berat.
+  const showWeight = categoryCode !== "furniturewip";
+
+  // locationCount harus konsisten dengan getLocationsInBlok: hanya hitung
+  // IdLokasi yang benar-benar match MstLokasi (Blok sama, kategori cocok,
+  // Enable=1) — kalau tidak match (mis. lokasi discope untuk kategori lain),
+  // jangan ikut dihitung, sama seperti yang disaring diam-diam di
+  // getLocationsInBlok. Ditambah 1 kalau ada label dengan IdLokasi kosong
+  // (dihitung sebagai bucket "Lokasi Tidak Diketahui").
+  const res = await pool
+    .request()
+    .input("stockOpnameNo", sql.VarChar, no)
+    .input("categoryId", sql.Int, header.IdKategori).query(`
+      SELECT
+        src.Blok AS blok,
+        COUNT(DISTINCT CASE WHEN ml.IdLokasi IS NOT NULL THEN src.IdLokasi END)
+          + MAX(CASE WHEN src.IdLokasi IS NULL THEN 1 ELSE 0 END) AS locationCount,
+        COUNT(*) AS labelCount,
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+        SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
+      FROM dbo.${cfg.snapshotTable} AS src
+      LEFT JOIN dbo.MstLokasi AS ml
+        ON ml.IdLokasi = src.IdLokasi
+        AND ml.Blok = src.Blok
+        AND (ml.IdKategori IS NULL OR ml.IdKategori = @categoryId)
+        AND ISNULL(ml.Enable, 1) = 1
+      LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
+      WHERE src.NoSO = @stockOpnameNo
+      GROUP BY src.Blok;
+    `);
+
+  // Blok tidak diketahui: seluruh label tanpa Blok tercatat digabung jadi
+  // satu bucket "Lokasi Tidak Diketahui" (IdLokasi tidak relevan tanpa Blok).
+  const bloks = (res.recordset || []).map((r) => ({
+    blok: r.blok ?? UNKNOWN_BLOK_CODE,
+    locationCount: r.blok === null ? 1 : r.locationCount,
+    labelCount: r.labelCount,
+    scannedCount: r.scannedCount,
+    ...(showWeight ? { totalWeight: r.totalWeight } : { totalPcs: r.totalPcs }),
+  }));
+
+  bloks.sort((a, b) => {
+    if (a.blok === UNKNOWN_BLOK_CODE) return 1;
+    if (b.blok === UNKNOWN_BLOK_CODE) return -1;
+    return a.blok < b.blok ? -1 : a.blok > b.blok ? 1 : 0;
+  });
+  return bloks;
 }
 
 async function getLocationsInBlok({ stockOpnameNo, blok }) {
@@ -541,6 +813,60 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
 
   const blokTrim = String(blok || "").trim();
   if (!blokTrim) throw badReq("blok wajib diisi");
+
+  const isUnknownBlok = blokTrim === UNKNOWN_BLOK_CODE;
+
+  const scannedMatchSql = [
+    "h.NoSO = src.NoSO",
+    ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
+  ].join(" AND ");
+
+  // Furniture WIP dihitung per pcs, bukan berat.
+  const showWeight = categoryCode !== "furniturewip";
+
+  // Blok tidak diketahui: seluruh label tanpa Blok tercatat digabung jadi
+  // satu bucket "Lokasi Tidak Diketahui" (IdLokasi tidak relevan tanpa Blok).
+  if (isUnknownBlok) {
+    const summaryRes = await pool
+      .request()
+      .input("stockOpnameNo", sql.VarChar, no).query(`
+        SELECT
+          COUNT(*) AS labelCount,
+          ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+          SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
+        FROM dbo.${cfg.snapshotTable} AS src
+        LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
+        WHERE src.NoSO = @stockOpnameNo AND src.Blok IS NULL;
+      `);
+
+    const summary = summaryRes.recordset?.[0];
+    const data =
+      summary && summary.labelCount > 0
+        ? [
+            {
+              locationId: UNKNOWN_LOCATION_ID,
+              description: UNKNOWN_LOCATION_LABEL,
+              labelCount: summary.labelCount,
+              scannedCount: summary.scannedCount,
+              ...(showWeight
+                ? { totalWeight: summary.totalWeight }
+                : { totalPcs: summary.totalPcs }),
+            },
+          ]
+        : [];
+
+    return {
+      stockOpnameNo: no,
+      categoryId: header.IdKategori,
+      categoryCode,
+      categoryName: categoryRow.NamaKategori,
+      isComplete: !!header.IsComplete,
+      completedAt: header.DateComplete ?? null,
+      blok: blokTrim,
+      data,
+      totalRecords: data.length,
+    };
+  }
 
   const locationRes = await pool
     .request()
@@ -555,23 +881,6 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
     `);
 
   const locations = locationRes.recordset || [];
-  if (!locations.length) {
-    return {
-      stockOpnameNo: no,
-      categoryId: header.IdKategori,
-      categoryCode,
-      categoryName: categoryRow.NamaKategori,
-      isComplete: !!header.IsComplete,
-      blok: blokTrim,
-      data: [],
-      totalRecords: 0,
-    };
-  }
-
-  const scannedMatchSql = [
-    "h.NoSO = src.NoSO",
-    ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
-  ].join(" AND ");
 
   const summaryRes = await pool
     .request()
@@ -580,7 +889,7 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
       SELECT
         src.IdLokasi AS locationId,
         COUNT(*) AS labelCount,
-        ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight,
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
         SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
       FROM dbo.${cfg.snapshotTable} AS src
       LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
@@ -588,9 +897,14 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
       GROUP BY src.IdLokasi;
     `);
 
+  const summaryRows = summaryRes.recordset || [];
   const summaryByLocationId = new Map(
-    (summaryRes.recordset || []).map((r) => [r.locationId, r]),
+    summaryRows.filter((r) => r.locationId !== null).map((r) => [r.locationId, r]),
   );
+  // Label dengan Blok diketahui tapi IdLokasi kosong ikut ditampilkan sebagai
+  // bucket "Lokasi Tidak Diketahui" di dalam blok ini.
+  const unknownLocationSummary =
+    summaryRows.find((r) => r.locationId === null) || null;
 
   // Hanya lokasi yang punya data snapshot untuk stock opname ini yang ditampilkan.
   const data = locations
@@ -602,9 +916,23 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
         description: loc.Description,
         labelCount: summary.labelCount,
         scannedCount: summary.scannedCount,
-        totalWeight: summary.totalWeight,
+        ...(showWeight
+          ? { totalWeight: summary.totalWeight }
+          : { totalPcs: summary.totalPcs }),
       };
     });
+
+  if (unknownLocationSummary) {
+    data.push({
+      locationId: UNKNOWN_LOCATION_ID,
+      description: UNKNOWN_LOCATION_LABEL,
+      labelCount: unknownLocationSummary.labelCount,
+      scannedCount: unknownLocationSummary.scannedCount,
+      ...(showWeight
+        ? { totalWeight: unknownLocationSummary.totalWeight }
+        : { totalPcs: unknownLocationSummary.totalPcs }),
+    });
+  }
 
   return {
     stockOpnameNo: no,
@@ -612,16 +940,25 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
     categoryCode,
     categoryName: categoryRow.NamaKategori,
     isComplete: !!header.IsComplete,
+    completedAt: header.DateComplete ?? null,
     blok: blokTrim,
     data,
     totalRecords: data.length,
   };
 }
 
+// Bandingkan Blok/IdLokasi case/whitespace-insensitive, konsisten dengan
+// normalizer yang sama dipakai modul stock-opname v1.
+function normBlokValue(value) {
+  return (value ?? "").toString().trim().toUpperCase() || null;
+}
+
 async function insertStockOpnameHasil({
   stockOpnameNo,
   labelNo,
   palletNo,
+  blok,
+  locationId,
   ctx,
 }) {
   const pool = await poolPromise;
@@ -648,6 +985,30 @@ async function insertStockOpnameHasil({
     }
   }
 
+  // Lokasi hasil scan opsional: kalau tidak dikirim, dianggap sama dengan acuan
+  // (tidak ada koreksi). Kalau dikirim, blok & locationId wajib sepasang —
+  // IdLokasi bukan unique sendirian, komposit dengan Blok.
+  const blokProvided = blok !== undefined && blok !== null && String(blok).trim() !== "";
+  const locationIdProvided =
+    locationId !== undefined && locationId !== null && locationId !== "";
+  if (blokProvided !== locationIdProvided) {
+    throw badReq("blok dan locationId wajib dikirim berpasangan");
+  }
+
+  let scannedBlokInput = null;
+  let scannedLocationIdInput = null;
+  if (blokProvided) {
+    const blokTrim = String(blok).trim();
+    const locationIdNum = Number(locationId);
+    if (!Number.isInteger(locationIdNum)) {
+      throw badReq("locationId wajib berupa integer valid");
+    }
+    const isUnknown =
+      blokTrim === UNKNOWN_BLOK_CODE || locationIdNum === UNKNOWN_LOCATION_ID;
+    scannedBlokInput = isUnknown ? null : blokTrim;
+    scannedLocationIdInput = isUnknown ? null : locationIdNum;
+  }
+
   const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
   const labelDisplay = needsPalletNo ? `${label}-${palletNoNum}` : label;
 
@@ -669,7 +1030,7 @@ async function insertStockOpnameHasil({
   // acuan (StockOpname{Kategori}) yang sudah dibekukan saat generate, supaya "hasil"
   // selalu konsisten dengan apa yang dicatat sistem untuk label tersebut.
   const referenceRes = await bindLabel(pool.request()).query(`
-    SELECT ${cfg.hasilColumns.join(", ")} FROM dbo.${cfg.snapshotTable}
+    SELECT ${cfg.hasilColumns.join(", ")}, Blok, IdLokasi FROM dbo.${cfg.snapshotTable}
     WHERE NoSO = @stockOpnameNo AND ${labelWhereSql};
   `);
   const referenceRow = referenceRes.recordset?.[0];
@@ -686,9 +1047,20 @@ async function insertStockOpnameHasil({
     throw conflict(`Label ${labelDisplay} sudah discan sebelumnya`);
   }
 
+  // Default ke lokasi acuan kalau operator tidak mengirim lokasi hasil scan.
+  const scannedBlok = blokProvided ? scannedBlokInput : (referenceRow.Blok ?? null);
+  const scannedLocationId = blokProvided
+    ? scannedLocationIdInput
+    : (referenceRow.IdLokasi ?? null);
+  const isLocationMismatch =
+    normBlokValue(scannedBlok) !== normBlokValue(referenceRow.Blok) ||
+    (scannedLocationId ?? null) !== (referenceRow.IdLokasi ?? null);
+
   const insertReq = bindLabel(pool.request());
   insertReq.input("weight", sql.Float, referenceRow.Berat ?? 0);
   insertReq.input("username", sql.VarChar, actorUsername);
+  insertReq.input("scannedBlok", sql.VarChar(3), scannedBlok);
+  insertReq.input("scannedLocationId", sql.Int, scannedLocationId);
   if (hasSackCount)
     insertReq.input("sackCount", sql.Int, referenceRow.JmlhSak ?? 0);
   if (hasPieceCount)
@@ -707,8 +1079,10 @@ async function insertStockOpnameHasil({
     .join(", ");
 
   await insertReq.query(`
-    INSERT INTO dbo.${cfg.hasilTable} (NoSO, ${hasilColumnsSql}, Username, DateTimeScan, IdDiscrepancy)
-    VALUES (@stockOpnameNo, ${valuesSql}, @username, GETDATE(), NULL);
+    INSERT INTO dbo.${cfg.hasilTable}
+      (NoSO, ${hasilColumnsSql}, Username, DateTimeScan, IdDiscrepancy, ScannedBlok, ScannedIdLokasi)
+    VALUES
+      (@stockOpnameNo, ${valuesSql}, @username, GETDATE(), NULL, @scannedBlok, @scannedLocationId);
   `);
 
   return {
@@ -717,7 +1091,13 @@ async function insertStockOpnameHasil({
     labelNo: labelDisplay,
     sackCount: hasSackCount ? (referenceRow.JmlhSak ?? 0) : undefined,
     pieceCount: hasPieceCount ? (referenceRow.Pcs ?? 0) : undefined,
-    weight: referenceRow.Berat ?? 0,
+    // Furniture WIP dihitung per pcs, bukan berat.
+    weight: categoryCode === "furniturewip" ? undefined : (referenceRow.Berat ?? 0),
+    referenceBlok: referenceRow.Blok ?? null,
+    referenceLocationId: referenceRow.IdLokasi ?? null,
+    scannedBlok: scannedBlok ?? UNKNOWN_BLOK_CODE,
+    scannedLocationId: scannedLocationId ?? UNKNOWN_LOCATION_ID,
+    isLocationMismatch,
   };
 }
 
@@ -824,6 +1204,7 @@ async function deleteStockOpname({ stockOpnameNo, ctx }) {
 module.exports = {
   getAllKategori,
   getAllKategoriWithStatus,
+  getStockOpnameRiwayat,
   getJenisByKategori,
   previewStockOpnameLabelCount,
   generateStockOpname,

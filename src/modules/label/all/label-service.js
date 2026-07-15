@@ -856,7 +856,7 @@ async function getAllLabelsV2(page = 1, limit = 50, kategori = null, idlokasi = 
 
     let sub;
 
-    if (kode === "bahanbaku") {
+    if (["bahanbaku", "bahanbakupakai"].includes(kode)) {
       const j = jenisJoin("p");
       sub = `
         SELECT
