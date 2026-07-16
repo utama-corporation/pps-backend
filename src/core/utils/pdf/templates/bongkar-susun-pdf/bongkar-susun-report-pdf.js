@@ -65,7 +65,7 @@ function nilaiDigits(row) {
   return isPcs(row) ? 0 : 2;
 }
 
-function buildRowsHtml(rows) {
+function buildKategoriRowsHtml(rows) {
   return rows
     .map((row) => {
       const hasInput = Number(row.JmlInput || 0) > 0;
@@ -81,74 +81,39 @@ function buildRowsHtml(rows) {
 
       const inputQty = hasInput ? formatNumber(row.NilaiInput, nilaiDigits(row)) : "";
       const outputQty = hasOutput ? formatNumber(row.NilaiOutput, nilaiDigits(row)) : "";
+      const satuan = escapeHtml(row.Satuan || "");
 
       return `
         <tr>
           <td class="center">${escapeHtml(formatDate(row.Tanggal))}</td>
           <td class="input-cell">${inputName}</td>
           <td class="right input-cell">${inputQty}</td>
-          <td class="center input-cell">${escapeHtml(row.Satuan || "")}</td>
+          <td class="center">${satuan}</td>
           <td class="output-cell">${outputName}</td>
           <td class="right output-cell">${outputQty}</td>
-          <td class="center output-cell">${escapeHtml(row.Satuan || "")}</td>
+          <td class="center">${satuan}</td>
         </tr>`;
     })
     .join("");
 }
 
-function buildKategoriTableHtml(rows) {
-  return `
-    <table>
-      <thead>
-        <tr>
-          <th class="col-tgl center">TANGGAL</th>
-          <th class="col-jenis">INPUT</th>
-          <th class="col-qty right">QTY IN</th>
-          <th class="col-sat center">SAT</th>
-          <th class="col-jenis">OUTPUT</th>
-          <th class="col-qty right">QTY OUT</th>
-          <th class="col-sat center">SAT</th>
-        </tr>
-      </thead>
-      <tbody>${buildRowsHtml(rows)}</tbody>
-    </table>`;
-}
-
-function buildBongkarCard(noBongkarSusun, rows) {
-  const tanggal = formatDate(getFirstFilled(rows, "Tanggal"));
-
+function buildKategoriSection(kategori, rows) {
   const totalInputKg = sumBy(rows, isKg, "NilaiInput");
   const totalOutputKg = sumBy(rows, isKg, "NilaiOutput");
   const totalInputPcs = sumBy(rows, isPcs, "NilaiInput");
   const totalOutputPcs = sumBy(rows, isPcs, "NilaiOutput");
-
-  const kategoriRowsMap = groupBy(rows, (row) => row.Kategori || "TANPA KATEGORI");
-  const kategoriHtml = Array.from(kategoriRowsMap.entries())
-    .map(([kategori, kategoriRows]) => {
-      const totalLabelIn = sumBy(kategoriRows, () => true, "JmlInput");
-      const totalLabelOut = sumBy(kategoriRows, () => true, "JmlOutput");
-      const totalSakIn = sumBy(kategoriRows, () => true, "JumlahSakInput");
-      const totalSakOut = sumBy(kategoriRows, () => true, "JumlahSakOutput");
-      return `
-        <div class="kategori-title">${escapeHtml(kategori || "TANPA KATEGORI")}</div>
-        ${buildKategoriTableHtml(kategoriRows)}
-        <div class="kategori-sum">
-          Label IN: ${formatNumber(totalLabelIn, 0)} | Label OUT: ${formatNumber(totalLabelOut, 0)}
-          ${totalSakIn > 0 || totalSakOut > 0 ? `&nbsp;&nbsp;—&nbsp;&nbsp;Sak IN: ${formatNumber(totalSakIn, 0)} | Sak OUT: ${formatNumber(totalSakOut, 0)}` : ""}
-        </div>`;
-    })
-    .join("");
+  const totalLabelIn = sumBy(rows, () => true, "JmlInput");
+  const totalLabelOut = sumBy(rows, () => true, "JmlOutput");
+  const totalSakIn = sumBy(rows, () => true, "JumlahSakInput");
+  const totalSakOut = sumBy(rows, () => true, "JumlahSakOutput");
 
   const showKg = totalInputKg > 0 || totalOutputKg > 0;
   const showPcs = totalInputPcs > 0 || totalOutputPcs > 0;
 
   return `
     <div class="bs-card">
-      <div class="bs-head">
-        <div>
-          <div class="bs-no">No Bongkar Susun : ${escapeHtml(noBongkarSusun)}</div>
-          <div class="bs-meta">Tanggal : ${escapeHtml(tanggal)}</div>
-        </div>
+      <div class="kategori-header">
+        <span class="kategori-title-label">${escapeHtml(kategori || "TANPA KATEGORI")}</span>
         <div class="summary">
           ${showKg ? `<span class="kg">IN Kg: ${formatNumber(totalInputKg, 2)}</span>` : ""}
           ${showKg ? `<span class="kg">OUT Kg: ${formatNumber(totalOutputKg, 2)}</span>` : ""}
@@ -156,7 +121,24 @@ function buildBongkarCard(noBongkarSusun, rows) {
           ${showPcs ? `<span class="pcs">OUT Pcs: ${formatNumber(totalOutputPcs, 0)}</span>` : ""}
         </div>
       </div>
-      ${kategoriHtml}
+      <table>
+        <thead>
+          <tr>
+            <th class="col-tgl center">TANGGAL</th>
+            <th class="col-jenis">JENIS INPUT</th>
+            <th class="col-qty right">QTY/BERAT IN</th>
+            <th class="col-sat center">SATUAN</th>
+            <th class="col-jenis">JENIS OUTPUT</th>
+            <th class="col-qty right">QTY/BERAT</th>
+            <th class="col-sat center">SATUAN</th>
+          </tr>
+        </thead>
+        <tbody>${buildKategoriRowsHtml(rows)}</tbody>
+      </table>
+      <div class="kategori-sum">
+        Label IN: ${formatNumber(totalLabelIn, 0)} | Label OUT: ${formatNumber(totalLabelOut, 0)}
+        ${totalSakIn > 0 || totalSakOut > 0 ? `&nbsp;&nbsp;—&nbsp;&nbsp;Sak IN: ${formatNumber(totalSakIn, 0)} | Sak OUT: ${formatNumber(totalSakOut, 0)}` : ""}
+      </div>
     </div>`;
 }
 
@@ -166,8 +148,8 @@ function buildBongkarSusunReportHtml({ startDate, endDate, rows }) {
 
   const content = dataRows.length === 0
     ? '<div class="no-data">Data laporan tidak ditemukan.</div>'
-    : Array.from(groupBy(dataRows, (row) => row.NoBongkarSusun).entries())
-        .map(([noBongkarSusun, bongkarRows]) => buildBongkarCard(noBongkarSusun, bongkarRows))
+    : Array.from(groupBy(dataRows, (row) => row.Kategori || "TANPA KATEGORI").entries())
+        .map(([kategori, kategoriRows]) => buildKategoriSection(kategori, kategoriRows))
         .join("");
 
   return templateHtml
