@@ -781,8 +781,11 @@ async function getAllBlok({ stockOpnameNo }) {
       LEFT JOIN dbo.MstLokasi AS ml
         ON ml.IdLokasi = src.IdLokasi
         AND ml.Blok = src.Blok
-        AND (ml.IdKategori IS NULL OR ml.IdKategori = @categoryId)
         AND ISNULL(ml.Enable, 1) = 1
+        AND EXISTS (
+          SELECT 1 FROM dbo.MstLokasiJenis lj
+          WHERE lj.Blok = ml.Blok AND lj.IdLokasi = ml.IdLokasi AND lj.IdKategori = @categoryId
+        )
       LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
       WHERE src.NoSO = @stockOpnameNo
       GROUP BY src.Blok;
@@ -872,12 +875,15 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
     .request()
     .input("blok", sql.VarChar, blokTrim)
     .input("categoryId", sql.Int, header.IdKategori).query(`
-      SELECT IdLokasi, Description
-      FROM dbo.MstLokasi
-      WHERE Blok = @blok
-        AND (IdKategori IS NULL OR IdKategori = @categoryId)
-        AND ISNULL(Enable, 1) = 1
-      ORDER BY IdLokasi ASC;
+      SELECT l.IdLokasi, l.Description
+      FROM dbo.MstLokasi l
+      WHERE l.Blok = @blok
+        AND ISNULL(l.Enable, 1) = 1
+        AND EXISTS (
+          SELECT 1 FROM dbo.MstLokasiJenis lj
+          WHERE lj.Blok = l.Blok AND lj.IdLokasi = l.IdLokasi AND lj.IdKategori = @categoryId
+        )
+      ORDER BY l.IdLokasi ASC;
     `);
 
   const locations = locationRes.recordset || [];

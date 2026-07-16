@@ -228,7 +228,7 @@ async function saveLayoutByBlok(req, res) {
 async function createLokasi(req, res) {
   const { username } = req;
   const blok = String(req.params.blok || "").trim();
-  const { IdLokasi, IdKategori, IdJenis, Description, Enable } = req.body || {};
+  const { IdLokasi, JenisList, Description, Enable } = req.body || {};
 
   console.log(
     "Creating lokasi | Username:",
@@ -237,6 +237,8 @@ async function createLokasi(req, res) {
     blok,
     "| IdLokasi:",
     IdLokasi,
+    "| JenisList:",
+    JenisList,
   );
 
   if (!blok) {
@@ -253,11 +255,29 @@ async function createLokasi(req, res) {
     });
   }
 
+  const jenisEntries = Array.isArray(JenisList) ? JenisList : [];
+
+  if (jenisEntries.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: "Field 'JenisList' wajib diisi minimal 1 jenis",
+    });
+  }
+
+  for (let i = 0; i < jenisEntries.length; i++) {
+    const entry = jenisEntries[i];
+    if (!entry || !Number.isInteger(entry.IdKategori) || !Number.isInteger(entry.IdJenis) || entry.IdKategori <= 0 || entry.IdJenis <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: `JenisList[${i}] wajib memiliki 'IdKategori' dan 'IdJenis' berupa integer > 0`,
+      });
+    }
+  }
+
   try {
     const created = await mappingService.createLokasi(blok, {
       IdLokasi,
-      IdKategori,
-      IdJenis,
+      JenisList: jenisEntries,
       Description,
       Enable,
     });
@@ -287,7 +307,7 @@ async function updateLokasi(req, res) {
   const { username } = req;
   const blok = String(req.params.blok || "").trim();
   const idLokasi = parseInt(req.params.idLokasi, 10);
-  const { IdKategori, IdJenis, Description, Enable } = req.body || {};
+  const { JenisList, Description, Enable } = req.body || {};
 
   console.log(
     "Updating lokasi | Username:",
@@ -296,6 +316,8 @@ async function updateLokasi(req, res) {
     blok,
     "| IdLokasi:",
     idLokasi,
+    "| JenisList:",
+    JenisList,
   );
 
   if (!blok) {
@@ -312,10 +334,21 @@ async function updateLokasi(req, res) {
     });
   }
 
+  const jenisEntries = Array.isArray(JenisList) ? JenisList : [];
+
+  for (let i = 0; i < jenisEntries.length; i++) {
+    const entry = jenisEntries[i];
+    if (!entry || !Number.isInteger(entry.IdKategori) || !Number.isInteger(entry.IdJenis) || entry.IdKategori <= 0 || entry.IdJenis <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: `JenisList[${i}] wajib memiliki 'IdKategori' dan 'IdJenis' berupa integer > 0`,
+      });
+    }
+  }
+
   try {
     const updated = await mappingService.updateLokasi(blok, idLokasi, {
-      IdKategori,
-      IdJenis,
+      JenisList: jenisEntries,
       Description,
       Enable,
     });
