@@ -22,14 +22,11 @@ async function getBlokWarehouseMapping() {
       GROUP BY Blok
     ) l ON l.Blok = b.Blok
     LEFT JOIN (
-      SELECT Blok, COUNT(*) AS TotalJenis
-      FROM (
-        SELECT Blok, IdKategori, IdJenis
-        FROM [dbo].[MstLokasi]
-        WHERE ISNULL(Enable, 1) = 1 AND IdKategori IS NOT NULL AND IdJenis IS NOT NULL
-        GROUP BY Blok, IdKategori, IdJenis
-      ) j
-      GROUP BY Blok
+      SELECT lj.Blok, COUNT(*) AS TotalJenis
+      FROM [dbo].[MstLokasiJenis] lj
+      JOIN [dbo].[MstLokasi] l ON l.Blok = lj.Blok AND l.IdLokasi = lj.IdLokasi
+      WHERE ISNULL(l.Enable, 1) = 1
+      GROUP BY lj.Blok
     ) j ON j.Blok = b.Blok
     ORDER BY b.Blok ASC;
   `;
@@ -40,45 +37,51 @@ async function getBlokWarehouseMapping() {
 
 async function getLokasiByBlok(blok) {
   const pool = await poolPromise;
-  const request = pool.request();
-  request.input("blok", sql.VarChar(100), blok);
 
-  const query = `
-    SELECT
-      l.IdLokasi,
-      l.Blok,
-      l.[Description],
-      l.Enable,
-      l.IdKategori,
-      l.IdJenis,
-      k.IdKategori AS KategoriId,
-      k.KodeKategori,
-      k.NamaKategori,
-      k.NamaTableJenis,
-      k.NamaKolomIdJenis,
-      k.NamaKolomNamaJenis,
-      k.IdUOM,
-      u.NamaUOM
-    FROM [dbo].[MstLokasi] l
-    LEFT JOIN [dbo].[MstKategori] k ON k.IdKategori = l.IdKategori
-    LEFT JOIN [dbo].[MstUOM] u ON u.IdUOM = k.IdUOM
-    WHERE l.Blok = @blok
-      AND ISNULL(l.Enable, 1) = 1
-    ORDER BY l.IdLokasi ASC;
-  `;
+  // 1. Fetch lokasi headers
+  const lokasiResult = await pool
+    .request()
+    .input("blok", sql.VarChar(100), blok).query(`
+      SELECT l.IdLokasi, l.Blok, l.[Description], l.Enable
+      FROM [dbo].[MstLokasi] l
+      WHERE l.Blok = @blok
+        AND ISNULL(l.Enable, 1) = 1
+      ORDER BY l.IdLokasi ASC;
+    `);
+  const lokasiRows = lokasiResult.recordset || [];
 
-  const result = await request.query(query);
-  const rows = result.recordset || [];
+  // 2. Fetch semua jenis + kategori info dari child table
+  const jenisResult = await pool
+    .request()
+    .input("blok", sql.VarChar(100), blok).query(`
+      SELECT
+        lj.IdLokasi,
+        lj.IdKategori,
+        lj.IdJenis,
+        k.KodeKategori,
+        k.NamaKategori,
+        k.NamaTableJenis,
+        k.NamaKolomIdJenis,
+        k.NamaKolomNamaJenis,
+        k.IdUOM,
+        u.NamaUOM
+      FROM [dbo].[MstLokasiJenis] lj
+      LEFT JOIN [dbo].[MstKategori] k ON k.IdKategori = lj.IdKategori
+      LEFT JOIN [dbo].[MstUOM] u ON u.IdUOM = k.IdUOM
+      WHERE lj.Blok = @blok
+      ORDER BY lj.IdLokasi, lj.IdKategori, lj.IdJenis;
+    `);
+  const jenisRows = jenisResult.recordset || [];
 
+  // 3. Resolve jenis names secara dinamis per kategori
   const isSafe = (v) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(v || "").trim());
 
   const groups = new Map();
-  for (const row of rows) {
-    if (!row.IdKategori || !row.IdJenis) continue;
+  for (const row of jenisRows) {
     const tbl = String(row.NamaTableJenis || "").trim();
     const idCol = String(row.NamaKolomIdJenis || "").trim();
     const nameCol = String(row.NamaKolomNamaJenis || "").trim();
-    if (!isSafe(tbl) || !isSafe(idCol) || !isSafe(nameCol)) continue;
+    if (!tbl || !isSafe(tbl) || !isSafe(idCol) || !isSafe(nameCol)) continue;
     const key = `${tbl}|${idCol}|${nameCol}`;
     if (!groups.has(key)) {
       groups.set(key, { tableName: tbl, idColumn: idCol, nameColumn: nameCol, ids: new Set() });
@@ -94,13 +97,13 @@ async function getLokasiByBlok(blok) {
     const req = pool.request();
     ids.forEach((id, i) => req.input(`p${i}`, sql.Int, id));
     try {
-      const jenisResult = await req.query(`
+      const nameResult = await req.query(`
         SELECT CAST(${group.idColumn} AS int) AS IdJenis,
                CAST(${group.nameColumn} AS nvarchar(4000)) AS NamaJenis
         FROM [dbo].[${group.tableName}] WITH (NOLOCK)
         WHERE ${group.idColumn} IN (${params.join(",")});
       `);
-      for (const j of jenisResult.recordset || []) {
+      for (const j of nameResult.recordset || []) {
         jenisNameMap.set(`${group.tableName}:${Number(j.IdJenis)}`, j.NamaJenis);
       }
     } catch (err) {
@@ -108,26 +111,38 @@ async function getLokasiByBlok(blok) {
     }
   }
 
+  // 4. Aggregate labels per lokasi
   const aggMap = await getLabelAggregatesByLokasi(blok);
 
-  return rows.map((row) => {
+  // 5. Group jenis entries by IdLokasi
+  const jenisByLokasi = new Map();
+  for (const row of jenisRows) {
+    if (!jenisByLokasi.has(row.IdLokasi)) {
+      jenisByLokasi.set(row.IdLokasi, []);
+    }
+    const tbl = String(row.NamaTableJenis || "").trim();
+    jenisByLokasi.get(row.IdLokasi).push({
+      IdKategori: row.IdKategori,
+      IdJenis: row.IdJenis,
+      KodeKategori: row.KodeKategori ?? null,
+      NamaKategori: row.NamaKategori ?? null,
+      NamaJenis: tbl ? (jenisNameMap.get(`${tbl}:${Number(row.IdJenis)}`) ?? null) : null,
+      IdUOM: row.IdUOM ?? null,
+      NamaUOM: row.NamaUOM ?? null,
+    });
+  }
+
+  // 6. Build response
+  return lokasiRows.map((row) => {
     const agg = aggMap.get(row.IdLokasi) ?? { TotalLabel: 0, TotalQty: 0, TotalBerat: 0 };
-    const uom = String(row.NamaUOM || "").toLowerCase();
+    const jenisList = jenisByLokasi.get(row.IdLokasi) || [];
+    const uom = String(jenisList[0]?.NamaUOM || "").toLowerCase();
     return {
       IdLokasi: row.IdLokasi,
       Blok: row.Blok,
       Description: row.Description,
       Enable: row.Enable,
-      IdKategori: row.IdKategori ?? null,
-      IdJenis: row.IdJenis ?? null,
-      KodeKategori: row.KodeKategori ?? null,
-      NamaKategori: row.NamaKategori ?? null,
-      NamaJenis:
-        row.IdJenis && row.NamaTableJenis
-          ? jenisNameMap.get(`${row.NamaTableJenis}:${Number(row.IdJenis)}`) ?? null
-          : null,
-      IdUOM: row.IdUOM ?? null,
-      NamaUOM: row.NamaUOM ?? null,
+      JenisList: jenisList,
       TotalLabel: agg.TotalLabel,
       TotalQty: uom === "kg" ? 0 : agg.TotalQty,
       TotalBerat: uom === "pcs" ? 0 : agg.TotalBerat,
@@ -443,45 +458,99 @@ async function saveLayoutByBlok(blok, payload) {
 
 async function createLokasi(blok, payload) {
   const pool = await poolPromise;
-  const { IdLokasi, IdKategori, IdJenis, Description, Enable } = payload;
+  const { IdLokasi, JenisList, Description, Enable } = payload;
+  const jenisEntries = Array.isArray(JenisList) ? JenisList : [];
 
-  const result = await pool
-    .request()
-    .input("blok", sql.VarChar(100), blok)
-    .input("IdLokasi", sql.Int, IdLokasi)
-    .input("IdKategori", sql.Int, IdKategori ?? null)
-    .input("IdJenis", sql.Int, IdJenis ?? null)
-    .input("Description", sql.VarChar(sql.MAX), Description ?? null)
-    .input("Enable", sql.Bit, Enable ?? true).query(`
-      INSERT INTO [dbo].[MstLokasi] (Blok, IdLokasi, IdKategori, IdJenis, Description, Enable)
-      VALUES (@blok, @IdLokasi, @IdKategori, @IdJenis, @Description, @Enable);
-    `);
+  const transaction = new sql.Transaction(pool);
+  try {
+    await transaction.begin();
 
-  return result.rowsAffected[0] > 0;
+    const result = await new sql.Request(transaction)
+      .input("blok", sql.VarChar(100), blok)
+      .input("IdLokasi", sql.Int, IdLokasi)
+      .input("Description", sql.VarChar(sql.MAX), Description ?? null)
+      .input("Enable", sql.Bit, Enable ?? true).query(`
+        INSERT INTO [dbo].[MstLokasi] (Blok, IdLokasi, Description, Enable)
+        VALUES (@blok, @IdLokasi, @Description, @Enable);
+      `);
+
+    if (result.rowsAffected[0] === 0) {
+      await transaction.rollback();
+      return false;
+    }
+
+    for (const entry of jenisEntries) {
+      await new sql.Request(transaction)
+        .input("blok", sql.VarChar(100), blok)
+        .input("IdLokasi", sql.Int, IdLokasi)
+        .input("IdKategori", sql.Int, entry.IdKategori)
+        .input("IdJenis", sql.Int, entry.IdJenis)
+        .query(`
+          INSERT INTO [dbo].[MstLokasiJenis] (Blok, IdLokasi, IdKategori, IdJenis)
+          VALUES (@blok, @IdLokasi, @IdKategori, @IdJenis);
+        `);
+    }
+
+    await transaction.commit();
+    return true;
+  } catch (error) {
+    try { await transaction.rollback(); } catch (_) { /* ignore */ }
+    throw error;
+  }
 }
 
 async function updateLokasi(blok, idLokasi, payload) {
   const pool = await poolPromise;
-  const { IdKategori, IdJenis, Description, Enable } = payload;
+  const { JenisList, Description, Enable } = payload;
+  const jenisEntries = Array.isArray(JenisList) ? JenisList : [];
 
-  const result = await pool
-    .request()
-    .input("blok", sql.VarChar(100), blok)
-    .input("idLokasi", sql.Int, idLokasi)
-    .input("IdKategori", sql.Int, IdKategori ?? null)
-    .input("IdJenis", sql.Int, IdJenis ?? null)
-    .input("Description", sql.VarChar(sql.MAX), Description ?? null)
-    .input("Enable", sql.Bit, Enable ?? true).query(`
-      UPDATE [dbo].[MstLokasi]
-      SET
-        IdKategori  = @IdKategori,
-        IdJenis     = @IdJenis,
-        Description = @Description,
-        Enable      = @Enable
-      WHERE Blok = @blok AND IdLokasi = @idLokasi;
-    `);
+  const transaction = new sql.Transaction(pool);
+  try {
+    await transaction.begin();
 
-  return result.rowsAffected[0] > 0;
+    const result = await new sql.Request(transaction)
+      .input("blok", sql.VarChar(100), blok)
+      .input("idLokasi", sql.Int, idLokasi)
+      .input("Description", sql.VarChar(sql.MAX), Description ?? null)
+      .input("Enable", sql.Bit, Enable ?? true).query(`
+        UPDATE [dbo].[MstLokasi]
+        SET
+          Description = @Description,
+          Enable      = @Enable
+        WHERE Blok = @blok AND IdLokasi = @idLokasi;
+      `);
+
+    if (result.rowsAffected[0] === 0) {
+      await transaction.rollback();
+      return false;
+    }
+
+    await new sql.Request(transaction)
+      .input("blok", sql.VarChar(100), blok)
+      .input("idLokasi", sql.Int, idLokasi)
+      .query(`
+        DELETE FROM [dbo].[MstLokasiJenis]
+        WHERE Blok = @blok AND IdLokasi = @idLokasi;
+      `);
+
+    for (const entry of jenisEntries) {
+      await new sql.Request(transaction)
+        .input("blok", sql.VarChar(100), blok)
+        .input("idLokasi", sql.Int, idLokasi)
+        .input("IdKategori", sql.Int, entry.IdKategori)
+        .input("IdJenis", sql.Int, entry.IdJenis)
+        .query(`
+          INSERT INTO [dbo].[MstLokasiJenis] (Blok, IdLokasi, IdKategori, IdJenis)
+          VALUES (@blok, @idLokasi, @IdKategori, @IdJenis);
+        `);
+    }
+
+    await transaction.commit();
+    return true;
+  } catch (error) {
+    try { await transaction.rollback(); } catch (_) { /* ignore */ }
+    throw error;
+  }
 }
 
 module.exports = {

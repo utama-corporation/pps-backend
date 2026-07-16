@@ -7,10 +7,22 @@ const {
 
 async function listKategoriHandler(req, res) {
   const { username } = req;
-  console.log("Fetching kategori (stock-opname-v2) | Username:", username);
+  const { year, month } = req.query;
+
+  console.log(
+    "Fetching kategori (stock-opname-v2) | Username:",
+    username,
+    "| year:",
+    year,
+    "| month:",
+    month,
+  );
 
   try {
-    const data = await stockOpnameV2Service.getAllKategoriWithStatus();
+    const data = await stockOpnameV2Service.getAllKategoriWithStatus({
+      year,
+      month,
+    });
 
     if (!data || data.length === 0) {
       return res.status(404).json({
@@ -28,10 +40,10 @@ async function listKategoriHandler(req, res) {
     });
   } catch (error) {
     console.error("Error fetching kategori (stock-opname-v2):", error);
-    return res.status(500).json({
+    return res.status(error.statusCode || 500).json({
       success: false,
-      message: "Internal Server Error",
-      error: error.message,
+      message: error.message || "Internal Server Error",
+      code: error.code,
     });
   }
 }
@@ -78,6 +90,54 @@ async function listJenisHandler(req, res) {
       success: false,
       message: "Internal Server Error",
       error: error.message,
+    });
+  }
+}
+
+async function listRiwayatHandler(req, res) {
+  const { username } = req;
+  const categoryId = parseInt(req.params.categoryId, 10);
+  const { year, month, page, pageSize } = req.query;
+
+  console.log(
+    "Fetching riwayat stock-opname (stock-opname-v2) | Username:",
+    username,
+    "| categoryId:",
+    categoryId,
+    "| year:",
+    year,
+    "| month:",
+    month,
+  );
+
+  try {
+    const result = await stockOpnameV2Service.getStockOpnameRiwayat({
+      categoryId,
+      year,
+      month,
+      page,
+      pageSize,
+    });
+
+    if (!result.data.length) {
+      return res.status(404).json({
+        success: false,
+        message: `Riwayat stock opname tidak ditemukan untuk kategori ${result.categoryName}`,
+        data: result,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `Riwayat stock opname ${result.categoryName} berhasil diambil`,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error fetching riwayat stock-opname:", error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+      code: error.code,
     });
   }
 }
@@ -331,12 +391,14 @@ async function insertHasilHandler(req, res) {
   if (requestId) res.setHeader("x-request-id", requestId);
 
   const { stockOpnameNo } = req.params;
-  const { labelNo, palletNo } = req.body || {};
+  const { labelNo, palletNo, blok, locationId } = req.body || {};
 
   console.log(
     "Insert stock-opname hasil | Username:", req.username,
     "| stockOpnameNo:", stockOpnameNo,
     "| labelNo:", labelNo,
+    "| blok:", blok,
+    "| locationId:", locationId,
   );
 
   try {
@@ -344,6 +406,8 @@ async function insertHasilHandler(req, res) {
       stockOpnameNo,
       labelNo,
       palletNo,
+      blok,
+      locationId,
       ctx: { actorId, actorUsername, requestId },
     });
 
@@ -363,10 +427,17 @@ async function insertHasilHandler(req, res) {
 }
 
 async function listBlokHandler(req, res) {
-  console.log("Fetching blok (stock-opname-v2) | Username:", req.username);
+  const { stockOpnameNo } = req.params;
+
+  console.log(
+    "Fetching blok (stock-opname-v2) | Username:",
+    req.username,
+    "| stockOpnameNo:",
+    stockOpnameNo,
+  );
 
   try {
-    const data = await stockOpnameV2Service.getAllBlok();
+    const data = await stockOpnameV2Service.getAllBlok({ stockOpnameNo });
 
     if (!data.length) {
       return res.status(404).json({
@@ -384,10 +455,10 @@ async function listBlokHandler(req, res) {
     });
   } catch (error) {
     console.error("Error fetching blok:", error);
-    return res.status(500).json({
+    return res.status(error.statusCode || 500).json({
       success: false,
-      message: "Internal Server Error",
-      error: error.message,
+      message: error.message || "Internal Server Error",
+      code: error.code,
     });
   }
 }
@@ -433,6 +504,7 @@ async function getLocationsHandler(req, res) {
 module.exports = {
   listKategoriHandler,
   listJenisHandler,
+  listRiwayatHandler,
   previewLabelCountHandler,
   generateStockOpnameHandler,
   completeStockOpnameHandler,
