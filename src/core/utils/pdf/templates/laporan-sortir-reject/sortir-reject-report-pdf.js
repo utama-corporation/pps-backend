@@ -45,19 +45,26 @@ function getFirstFilled(rows, fieldName) {
   return row ? row[fieldName] : "";
 }
 
-function buildSrKategoriRowsHtml(rows) {
-  return rows
-    .map((row) => {
+function buildSrJenisInputGroup(jenisInput, rows) {
+  const totalQty = rows.reduce((s, r) => s + (Number(r.JlhInput) || 0), 0);
+  const rowspan = rows.length;
+  const escapedInput = escapeHtml(jenisInput || "-");
+
+  const detailRows = rows
+    .map((row, idx) => {
       const hasOutput = String(row.JenisOutput || "").trim() !== "";
       const outputName = hasOutput ? escapeHtml(row.JenisOutput) : '<span class="empty-value">-</span>';
       const outputQty = hasOutput ? formatNumber(row.JumlahOutput, 2) : "";
-      const inputName = escapeHtml(row.JenisInput || "-");
       const inputQty = formatNumber(row.JlhInput, 0);
+
+      const inputCell = idx === 0
+        ? `<td class="input-cell" rowspan="${rowspan}">${escapedInput}<div class="jenisinput-total">Total: ${formatNumber(totalQty, 0)}</div></td>`
+        : "";
 
       return `
         <tr>
+          ${inputCell}
           <td class="center">${escapeHtml(formatDate(row.Tanggal))}</td>
-          <td class="input-cell">${inputName}</td>
           <td class="right input-cell">${inputQty}</td>
           <td class="center">Pcs</td>
           <td class="output-cell">${outputName}</td>
@@ -66,11 +73,31 @@ function buildSrKategoriRowsHtml(rows) {
         </tr>`;
     })
     .join("");
+
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th class="col-jenis">JENIS INPUT</th>
+          <th class="col-tgl center">TANGGAL</th>
+          <th class="col-qty right">QTY/BERAT IN</th>
+          <th class="col-sat center">SAT</th>
+          <th class="col-jenis">JENIS OUTPUT</th>
+          <th class="col-qty right">QTY/BERAT</th>
+          <th class="col-sat center">SAT</th>
+        </tr>
+      </thead>
+      <tbody>${detailRows}</tbody>
+    </table>`;
 }
 
 function buildSrKategoriSection(groupInput, rows) {
   const totalInput = rows.reduce((s, r) => s + (Number(r.JlhInput) || 0), 0);
   const totalOutput = rows.reduce((s, r) => s + (Number(r.JumlahOutput) || 0), 0);
+
+  const jenisInputGroups = Array.from(groupBy(rows, (row) => row.JenisInput || "TANPA JENIS INPUT").entries())
+    .map(([jenisInput, jenisRows]) => buildSrJenisInputGroup(jenisInput, jenisRows))
+    .join("");
 
   return `
     <div class="bs-card">
@@ -81,20 +108,7 @@ function buildSrKategoriSection(groupInput, rows) {
           <span class="total-output">OUT Kg: ${formatNumber(totalOutput, 2)}</span>
         </div>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th class="col-tgl center">TANGGAL</th>
-            <th class="col-jenis">JENIS INPUT</th>
-            <th class="col-qty right">QTY/BERAT IN</th>
-            <th class="col-sat center">SATUAN</th>
-            <th class="col-jenis">JENIS OUTPUT</th>
-            <th class="col-qty right">QTY/BERAT</th>
-            <th class="col-sat center">SATUAN</th>
-          </tr>
-        </thead>
-        <tbody>${buildSrKategoriRowsHtml(rows)}</tbody>
-      </table>
+      ${jenisInputGroups}
     </div>`;
 }
 
