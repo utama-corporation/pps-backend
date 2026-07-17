@@ -17,21 +17,21 @@ Dokumentasi endpoint `stock-opname-v2`. Semua route memerlukan header
 
 ## Daftar Endpoint
 
-| Method | Path                                                                                | Keterangan                                   |
-| ------ | ------------------------------------------------------------------------------------ | --------------------------------------------- |
-| GET    | `/api/stock-opname-v2/kategori`                                                      | List kategori + status stock opname           |
-| GET    | `/api/stock-opname-v2/kategori/:categoryId/jenis`                                    | List jenis dalam satu kategori                |
-| GET    | `/api/stock-opname-v2/kategori/:categoryId/riwayat`                                  | Riwayat stock opname per kategori             |
-| GET    | `/api/stock-opname-v2/transaksi/preview`                                             | Preview jumlah label sebelum generate         |
-| POST   | `/api/stock-opname-v2/transaksi`                                                     | Generate stock opname baru (snapshot label)   |
-| PATCH  | `/api/stock-opname-v2/transaksi/:stockOpnameNo/complete`                             | Tandai stock opname selesai                   |
-| DELETE | `/api/stock-opname-v2/transaksi/:stockOpnameNo`                                      | Hapus stock opname                            |
-| GET    | `/api/stock-opname-v2/transaksi/:stockOpnameNo/jenis`                                | List jenis label ter-snapshot dalam satu SO    |
-| GET    | `/api/stock-opname-v2/transaksi/:stockOpnameNo/jenis/:typeId/label`                  | List label snapshot per jenis                 |
-| POST   | `/api/stock-opname-v2/transaksi/:stockOpnameNo/hasil`                                | Input hasil scan (catat label sudah diopname)  |
-| GET    | `/api/stock-opname-v2/transaksi/:stockOpnameNo/blok`                                 | List blok yang ada pada satu SO                |
-| GET    | `/api/stock-opname-v2/transaksi/:stockOpnameNo/blok/:blok/lokasi`                    | List lokasi dalam satu blok                    |
-| GET    | `/api/stock-opname-v2/transaksi/:stockOpnameNo/blok/:blok/lokasi/:locationId/label`  | List label snapshot per lokasi                 |
+| Method | Path                                                                                | Keterangan                                    |
+| ------ | ----------------------------------------------------------------------------------- | --------------------------------------------- |
+| GET    | `/api/stock-opname-v2/kategori`                                                     | List kategori + status stock opname           |
+| GET    | `/api/stock-opname-v2/kategori/:categoryId/jenis`                                   | List jenis dalam satu kategori                |
+| GET    | `/api/stock-opname-v2/kategori/:categoryId/riwayat`                                 | Riwayat stock opname per kategori             |
+| GET    | `/api/stock-opname-v2/transaksi/preview`                                            | Preview jumlah label sebelum generate         |
+| POST   | `/api/stock-opname-v2/transaksi`                                                    | Generate stock opname baru (snapshot label)   |
+| PATCH  | `/api/stock-opname-v2/transaksi/:stockOpnameNo/complete`                            | Tandai stock opname selesai                   |
+| DELETE | `/api/stock-opname-v2/transaksi/:stockOpnameNo`                                     | Hapus stock opname                            |
+| GET    | `/api/stock-opname-v2/transaksi/:stockOpnameNo/jenis`                               | List jenis label ter-snapshot dalam satu SO   |
+| GET    | `/api/stock-opname-v2/transaksi/:stockOpnameNo/jenis/:typeId/label`                 | List label snapshot per jenis                 |
+| POST   | `/api/stock-opname-v2/transaksi/:stockOpnameNo/hasil`                               | Input hasil scan (catat label sudah diopname) |
+| GET    | `/api/stock-opname-v2/transaksi/:stockOpnameNo/blok`                                | List blok yang ada pada satu SO               |
+| GET    | `/api/stock-opname-v2/transaksi/:stockOpnameNo/blok/:blok/lokasi`                   | List lokasi dalam satu blok                   |
+| GET    | `/api/stock-opname-v2/transaksi/:stockOpnameNo/blok/:blok/lokasi/:locationId/label` | List label snapshot per lokasi                |
 
 **~~Path lama (deprecated)~~**: `no-stock-opname` — sudah dihapus, ganti dengan `transaksi`.
 
@@ -47,7 +47,9 @@ Response `200`:
 {
   "success": true,
   "message": "Data kategori berhasil diambil",
-  "data": [ /* kategori + status */ ],
+  "data": [
+    /* kategori + status */
+  ],
   "totalRecords": 0
 }
 ```
@@ -65,7 +67,9 @@ Response `200`:
   "success": true,
   "message": "Data jenis <namaKategori> berhasil diambil",
   "category": { "...": "..." },
-  "data": [ /* jenis */ ],
+  "data": [
+    /* jenis */
+  ],
   "totalRecords": 0
 }
 ```
@@ -80,7 +84,12 @@ Response `200`:
 {
   "success": true,
   "message": "Riwayat stock opname <categoryName> berhasil diambil",
-  "data": { "categoryName": "...", "data": [ /* riwayat */ ] }
+  "data": {
+    "categoryName": "...",
+    "data": [
+      /* riwayat */
+    ]
+  }
 }
 ```
 
@@ -150,7 +159,12 @@ Response `200` (`404` jika belum ada label ter-snapshot):
 {
   "success": true,
   "message": "Data jenis <stockOpnameNo> berhasil diambil",
-  "data": { "stockOpnameNo": "...", "data": [ /* jenis */ ] }
+  "data": {
+    "stockOpnameNo": "...",
+    "data": [
+      /* jenis */
+    ]
+  }
 }
 ```
 
@@ -248,6 +262,10 @@ Setiap item sudah menyertakan `locationCount` (jumlah lokasi berbeda dalam
 blok tersebut) supaya FE tidak perlu hit endpoint `blok/:blok/lokasi` hanya
 untuk mengetahui jumlah lokasinya.
 
+Daftar blok dan `locationCount` dihitung langsung dari tabel snapshot/acuan
+stock opname. Data historis tidak difilter berdasarkan `MstLokasi.Enable`
+atau mapping `MstLokasiJenis`.
+
 Response `200` (`404` jika kosong):
 
 ```json
@@ -275,6 +293,10 @@ Response `200` (`404` jika kosong):
 ```
 
 ## GET `/transaksi/:stockOpnameNo/blok/:blok/lokasi`
+
+Lokasi dikelompokkan berdasarkan `Blok` dan `IdLokasi` yang tersimpan di tabel
+snapshot. `MstLokasi` hanya di-`LEFT JOIN` untuk mengambil deskripsi, sehingga
+lokasi snapshot tetap ditampilkan walaupun master atau mapping kategori berubah.
 
 Response `200` (`404` jika belum ada lokasi):
 

@@ -749,7 +749,7 @@ async function getStockOpnameSnapshot({
 
 async function getAllBlok({ stockOpnameNo }) {
   const pool = await poolPromise;
-  const { no, header, categoryCode, cfg } =
+  const { no, categoryCode, cfg } =
     await resolveStockOpnameCategory(pool, stockOpnameNo);
 
   const scannedMatchSql = [
@@ -760,32 +760,20 @@ async function getAllBlok({ stockOpnameNo }) {
   // Furniture WIP dihitung per pcs, bukan berat.
   const showWeight = categoryCode !== "furniturewip";
 
-  // locationCount harus konsisten dengan getLocationsInBlok: hanya hitung
-  // IdLokasi yang benar-benar match MstLokasi (Blok sama, kategori cocok,
-  // Enable=1) — kalau tidak match (mis. lokasi discope untuk kategori lain),
-  // jangan ikut dihitung, sama seperti yang disaring diam-diam di
-  // getLocationsInBlok. Ditambah 1 kalau ada label dengan IdLokasi kosong
-  // (dihitung sebagai bucket "Lokasi Tidak Diketahui").
+  // Hitung lokasi langsung dari snapshot agar data historis tidak bergantung
+  // pada master lokasi atau mapping kategori yang dapat berubah. IdLokasi
+  // kosong tetap dihitung sebagai bucket "Lokasi Tidak Diketahui".
   const res = await pool
     .request()
-    .input("stockOpnameNo", sql.VarChar, no)
-    .input("categoryId", sql.Int, header.IdKategori).query(`
+    .input("stockOpnameNo", sql.VarChar, no).query(`
       SELECT
         src.Blok AS blok,
-        COUNT(DISTINCT CASE WHEN ml.IdLokasi IS NOT NULL THEN src.IdLokasi END)
+        COUNT(DISTINCT src.IdLokasi)
           + MAX(CASE WHEN src.IdLokasi IS NULL THEN 1 ELSE 0 END) AS locationCount,
         COUNT(*) AS labelCount,
         ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
         SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
       FROM dbo.${cfg.snapshotTable} AS src
-      LEFT JOIN dbo.MstLokasi AS ml
-        ON ml.IdLokasi = src.IdLokasi
-        AND ml.Blok = src.Blok
-        AND ISNULL(ml.Enable, 1) = 1
-        AND EXISTS (
-          SELECT 1 FROM dbo.MstLokasiJenis lj
-          WHERE lj.Blok = ml.Blok AND lj.IdLokasi = ml.IdLokasi AND lj.IdKategori = @categoryId
-        )
       LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
       WHERE src.NoSO = @stockOpnameNo
       GROUP BY src.Blok;
@@ -871,74 +859,45 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
     };
   }
 
-  const locationRes = await pool
-    .request()
-    .input("blok", sql.VarChar, blokTrim)
-    .input("categoryId", sql.Int, header.IdKategori).query(`
-      SELECT l.IdLokasi, l.Description
-      FROM dbo.MstLokasi l
-      WHERE l.Blok = @blok
-        AND ISNULL(l.Enable, 1) = 1
-        AND EXISTS (
-          SELECT 1 FROM dbo.MstLokasiJenis lj
-          WHERE lj.Blok = l.Blok AND lj.IdLokasi = l.IdLokasi AND lj.IdKategori = @categoryId
-        )
-      ORDER BY l.IdLokasi ASC;
-    `);
-
-  const locations = locationRes.recordset || [];
-
+  // Snapshot adalah sumber grouping lokasi. Master lokasi hanya digunakan
+  // untuk mengambil deskripsi dan tidak menentukan apakah snapshot ditampilkan.
   const summaryRes = await pool
     .request()
     .input("stockOpnameNo", sql.VarChar, no)
     .input("blok", sql.VarChar, blokTrim).query(`
       SELECT
         src.IdLokasi AS locationId,
+        MAX(ml.Description) AS description,
         COUNT(*) AS labelCount,
         ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
         SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
       FROM dbo.${cfg.snapshotTable} AS src
+      LEFT JOIN dbo.MstLokasi AS ml
+        ON ml.Blok = src.Blok
+        AND ml.IdLokasi = src.IdLokasi
       LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
       WHERE src.NoSO = @stockOpnameNo AND src.Blok = @blok
-      GROUP BY src.IdLokasi;
+      GROUP BY src.IdLokasi
+      ORDER BY
+        CASE WHEN src.IdLokasi IS NULL THEN 1 ELSE 0 END,
+        src.IdLokasi ASC;
     `);
 
   const summaryRows = summaryRes.recordset || [];
-  const summaryByLocationId = new Map(
-    summaryRows.filter((r) => r.locationId !== null).map((r) => [r.locationId, r]),
-  );
-  // Label dengan Blok diketahui tapi IdLokasi kosong ikut ditampilkan sebagai
-  // bucket "Lokasi Tidak Diketahui" di dalam blok ini.
-  const unknownLocationSummary =
-    summaryRows.find((r) => r.locationId === null) || null;
-
-  // Hanya lokasi yang punya data snapshot untuk stock opname ini yang ditampilkan.
-  const data = locations
-    .filter((loc) => summaryByLocationId.has(loc.IdLokasi))
-    .map((loc) => {
-      const summary = summaryByLocationId.get(loc.IdLokasi);
-      return {
-        locationId: loc.IdLokasi,
-        description: loc.Description,
-        labelCount: summary.labelCount,
-        scannedCount: summary.scannedCount,
-        ...(showWeight
-          ? { totalWeight: summary.totalWeight }
-          : { totalPcs: summary.totalPcs }),
-      };
-    });
-
-  if (unknownLocationSummary) {
-    data.push({
-      locationId: UNKNOWN_LOCATION_ID,
-      description: UNKNOWN_LOCATION_LABEL,
-      labelCount: unknownLocationSummary.labelCount,
-      scannedCount: unknownLocationSummary.scannedCount,
+  const data = summaryRows.map((summary) => {
+    const isUnknownLocation = summary.locationId === null;
+    return {
+      locationId: isUnknownLocation ? UNKNOWN_LOCATION_ID : summary.locationId,
+      description: isUnknownLocation
+        ? UNKNOWN_LOCATION_LABEL
+        : (summary.description ?? null),
+      labelCount: summary.labelCount,
+      scannedCount: summary.scannedCount,
       ...(showWeight
-        ? { totalWeight: unknownLocationSummary.totalWeight }
-        : { totalPcs: unknownLocationSummary.totalPcs }),
-    });
-  }
+        ? { totalWeight: summary.totalWeight }
+        : { totalPcs: summary.totalPcs }),
+    };
+  });
 
   return {
     stockOpnameNo: no,
