@@ -105,13 +105,20 @@
     .center { text-align: center; }
 
     .col-tgl { width: 12%; }
-    .col-jenis { width: 22%; }
+    .col-jenis { width: 20%; }
     .col-qty { width: 10%; }
     .col-sat { width: 6%; }
 
-    .input-cell { background: #f8fafc; }
+    .input-cell { background: #f8fafc; vertical-align: top; }
     .output-cell { background: #f0fdf4; font-weight: 600; }
     .empty-value { color: #94a3b8; font-style: italic; font-weight: normal; }
+
+    .jenisinput-total {
+      margin-top: 6px;
+      font-size: 9px;
+      font-weight: 700;
+      color: #1e3a5f;
+    }
 
     .no-data {
       text-align: center;
@@ -125,7 +132,7 @@
   <div class="report-header">
     <div>
       <div class="title">LAPORAN SORTIR REJECT</div>
-      <div class="subtitle">Input dan Output per Group Input</div>
+      <div class="subtitle">Per Group Input — Group per Jenis Input</div>
     </div>
     <div class="period-box">
       <div class="label">Periode</div>

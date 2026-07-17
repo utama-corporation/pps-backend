@@ -65,28 +65,30 @@ function nilaiDigits(row) {
   return isPcs(row) ? 0 : 2;
 }
 
-function buildKategoriRowsHtml(rows) {
-  return rows
-    .map((row) => {
-      const hasInput = Number(row.JmlInput || 0) > 0;
+function buildJenisInputGroup(jenisInput, rows) {
+  const totalQty = sumBy(rows, () => true, "NilaiInput");
+  const digits = rows.length > 0 ? nilaiDigits(rows[0]) : 2;
+  const rowspan = rows.length;
+  const escapedInput = escapeHtml(jenisInput || "-");
+
+  const detailRows = rows
+    .map((row, idx) => {
       const hasOutput = Number(row.JmlOutput || 0) > 0;
-
-      const inputName = hasInput
-        ? escapeHtml(row.JenisInput || row.Nama)
-        : '<span class="empty-value">-</span>';
-
       const outputName = hasOutput
         ? escapeHtml(row.JenisOutput || row.Nama)
         : '<span class="empty-value">-</span>';
-
-      const inputQty = hasInput ? formatNumber(row.NilaiInput, nilaiDigits(row)) : "";
       const outputQty = hasOutput ? formatNumber(row.NilaiOutput, nilaiDigits(row)) : "";
+      const inputQty = formatNumber(row.NilaiInput, nilaiDigits(row));
       const satuan = escapeHtml(row.Satuan || "");
+
+      const inputCell = idx === 0
+        ? `<td class="input-cell" rowspan="${rowspan}">${escapedInput}<div class="jenisinput-total">Total: ${formatNumber(totalQty, digits)}</div></td>`
+        : "";
 
       return `
         <tr>
+          ${inputCell}
           <td class="center">${escapeHtml(formatDate(row.Tanggal))}</td>
-          <td class="input-cell">${inputName}</td>
           <td class="right input-cell">${inputQty}</td>
           <td class="center">${satuan}</td>
           <td class="output-cell">${outputName}</td>
@@ -95,6 +97,22 @@ function buildKategoriRowsHtml(rows) {
         </tr>`;
     })
     .join("");
+
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th class="col-jenis">JENIS INPUT</th>
+          <th class="col-tgl center">TANGGAL</th>
+          <th class="col-qty right">QTY/BERAT IN</th>
+          <th class="col-sat center">SAT</th>
+          <th class="col-jenis">JENIS OUTPUT</th>
+          <th class="col-qty right">QTY/BERAT</th>
+          <th class="col-sat center">SAT</th>
+        </tr>
+      </thead>
+      <tbody>${detailRows}</tbody>
+    </table>`;
 }
 
 function buildKategoriSection(kategori, rows) {
@@ -110,6 +128,10 @@ function buildKategoriSection(kategori, rows) {
   const showKg = totalInputKg > 0 || totalOutputKg > 0;
   const showPcs = totalInputPcs > 0 || totalOutputPcs > 0;
 
+  const jenisInputGroups = Array.from(groupBy(rows, (row) => row.JenisInput || "TANPA JENIS INPUT").entries())
+    .map(([jenisInput, jenisRows]) => buildJenisInputGroup(jenisInput, jenisRows))
+    .join("");
+
   return `
     <div class="bs-card">
       <div class="kategori-header">
@@ -121,20 +143,7 @@ function buildKategoriSection(kategori, rows) {
           ${showPcs ? `<span class="pcs">OUT Pcs: ${formatNumber(totalOutputPcs, 0)}</span>` : ""}
         </div>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th class="col-tgl center">TANGGAL</th>
-            <th class="col-jenis">JENIS INPUT</th>
-            <th class="col-qty right">QTY/BERAT IN</th>
-            <th class="col-sat center">SATUAN</th>
-            <th class="col-jenis">JENIS OUTPUT</th>
-            <th class="col-qty right">QTY/BERAT</th>
-            <th class="col-sat center">SATUAN</th>
-          </tr>
-        </thead>
-        <tbody>${buildKategoriRowsHtml(rows)}</tbody>
-      </table>
+      ${jenisInputGroups}
       <div class="kategori-sum">
         Label IN: ${formatNumber(totalLabelIn, 0)} | Label OUT: ${formatNumber(totalLabelOut, 0)}
         ${totalSakIn > 0 || totalSakOut > 0 ? `&nbsp;&nbsp;—&nbsp;&nbsp;Sak IN: ${formatNumber(totalSakIn, 0)} | Sak OUT: ${formatNumber(totalSakOut, 0)}` : ""}
