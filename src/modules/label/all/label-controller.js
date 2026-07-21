@@ -47,6 +47,17 @@ async function getAllLabelsHandler(req, res) {
 }
 
 
+// Kode kegagalan dari service -> status HTTP yang sesuai
+const UPDATE_LOKASI_ERROR_STATUS = {
+  VALIDATION_ERROR: 400,
+  UNKNOWN_PREFIX: 400,
+  NOT_FOUND: 404,
+  ALREADY_USED: 409,
+  LOKASI_NOT_ALLOWED: 422,
+  CONFIG_ERROR: 422,
+  UPDATE_FAILED: 409,
+};
+
 // 🟢 Handler baru: Update lokasi berdasarkan NomorLabel
 async function updateLabelLocationHandler(req, res) {
   try {
@@ -65,7 +76,8 @@ async function updateLabelLocationHandler(req, res) {
     const result = await labelService.updateLabelLocation(labelCode, idLokasi, blok, idUsername);
 
     if (!result.success) {
-      return res.status(404).json(result);
+      const status = UPDATE_LOKASI_ERROR_STATUS[result.code] || 400;
+      return res.status(status).json(result);
     }
 
     return res.json(result);

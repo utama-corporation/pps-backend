@@ -8,7 +8,7 @@ router.get("/label/all", verifyToken, labelController.getAllLabelsHandler);
 router.get("/label/all/v2", verifyToken, labelController.getAllLabelsV2Handler);
 
 // 🔥 Update lokasi berdasarkan NomorLabel
-router.post(
+router.put(
   "/label/update-lokasi",
   verifyToken,
   labelController.updateLabelLocationHandler,

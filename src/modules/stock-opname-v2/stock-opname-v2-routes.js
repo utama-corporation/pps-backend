@@ -1,6 +1,8 @@
 const express = require("express");
 const router = express.Router();
 const verifyToken = require("../../core/middleware/verify-token");
+const attachPermissions = require("../../core/middleware/attach-permissions");
+const requireLokasiAccess = require("../user-lokasi-access/user-lokasi-access-middleware");
 const stockOpnameV2Controller = require("./stock-opname-v2-controller");
 
 router.get(
@@ -23,7 +25,7 @@ router.get(
 
 // ⚠️ Daftarkan SEBELUM POST "/stock-opname-v2/transaksi" (statis vs
 // dokumentasi urutan route, meski beda method tidak akan tabrakan) — dipakai
-// FE untuk menampilkan preview jumlah label sebelum benar-benar generate.
+// FE untuk menampilkan preview jumlah label sebelum benar-benar generate .
 router.get(
   "/stock-opname-v2/transaksi/preview",
   verifyToken,
@@ -72,6 +74,16 @@ router.get(
   stockOpnameV2Controller.listBlokHandler,
 );
 
+// Dipakai app scan: daftar lokasi (lintas blok) pada NoSO ini, discope
+// otomatis ke user yang login (berdasarkan MstUserLokasiAccess) — bukan
+// endpoint per-blok seperti ".../blok/:blok/lokasi" di bawah.
+router.get(
+  "/stock-opname-v2/transaksi/:stockOpnameNo/lokasi",
+  verifyToken,
+  attachPermissions,
+  stockOpnameV2Controller.getMyLokasiHandler,
+);
+
 router.get(
   "/stock-opname-v2/transaksi/:stockOpnameNo/blok/:blok/lokasi",
   verifyToken,
@@ -81,6 +93,8 @@ router.get(
 router.get(
   "/stock-opname-v2/transaksi/:stockOpnameNo/blok/:blok/lokasi/:locationId/label",
   verifyToken,
+  attachPermissions,
+  requireLokasiAccess,
   stockOpnameV2Controller.getSnapshotHandler,
 );
 

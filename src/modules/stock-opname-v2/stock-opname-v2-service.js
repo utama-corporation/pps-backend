@@ -14,6 +14,10 @@ const { badReq, notFound, conflict } = require("../../core/utils/http-error");
 const {
   STOCK_OPNAME_SNAPSHOT_CONFIG,
 } = require("../../core/config/stock-opname-snapshot.config");
+const {
+  listAllowedUsersGroupedByLokasi,
+  listLokasiByUser,
+} = require("../user-lokasi-access/user-lokasi-access-service");
 
 const STOCK_OPNAME_STATUS = {
   NOT_STARTED: "not_started",
@@ -760,32 +764,21 @@ async function getAllBlok({ stockOpnameNo }) {
   // Furniture WIP dihitung per pcs, bukan berat.
   const showWeight = categoryCode !== "furniturewip";
 
-  // locationCount harus konsisten dengan getLocationsInBlok: hanya hitung
-  // IdLokasi yang benar-benar match MstLokasi (Blok sama, kategori cocok,
-  // Enable=1) — kalau tidak match (mis. lokasi discope untuk kategori lain),
-  // jangan ikut dihitung, sama seperti yang disaring diam-diam di
-  // getLocationsInBlok. Ditambah 1 kalau ada label dengan IdLokasi kosong
-  // (dihitung sebagai bucket "Lokasi Tidak Diketahui").
+  // locationCount dihitung dari snapshot stock opname, bukan dari master lokasi.
+  // Ini menjaga daftar blok tetap mengikuti data acuan yang benar-benar
+  // ter-snapshot, termasuk lokasi yang belum punya mapping master.
   const res = await pool
     .request()
     .input("stockOpnameNo", sql.VarChar, no)
-    .input("categoryId", sql.Int, header.IdKategori).query(`
+    .query(`
       SELECT
         src.Blok AS blok,
-        COUNT(DISTINCT CASE WHEN ml.IdLokasi IS NOT NULL THEN src.IdLokasi END)
+        COUNT(DISTINCT CASE WHEN src.IdLokasi IS NOT NULL THEN src.IdLokasi END)
           + MAX(CASE WHEN src.IdLokasi IS NULL THEN 1 ELSE 0 END) AS locationCount,
         COUNT(*) AS labelCount,
         ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
         SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
       FROM dbo.${cfg.snapshotTable} AS src
-      LEFT JOIN dbo.MstLokasi AS ml
-        ON ml.IdLokasi = src.IdLokasi
-        AND ml.Blok = src.Blok
-        AND ISNULL(ml.Enable, 1) = 1
-        AND EXISTS (
-          SELECT 1 FROM dbo.MstLokasiJenis lj
-          WHERE lj.Blok = ml.Blok AND lj.IdLokasi = ml.IdLokasi AND lj.IdKategori = @categoryId
-        )
       LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
       WHERE src.NoSO = @stockOpnameNo
       GROUP BY src.Blok;
@@ -819,6 +812,11 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
 
   const isUnknownBlok = blokTrim === UNKNOWN_BLOK_CODE;
 
+  // Dipakai FE utk nampilin siapa saja user yang boleh akses tiap lokasi
+  // (lihat gating di stock-opname-v2-routes.js pada endpoint .../lokasi/:locationId/label).
+  const allowedUsersByLokasi = await listAllowedUsersGroupedByLokasi(blokTrim);
+  const getAllowedUsers = (locationId) => allowedUsersByLokasi.get(locationId) || [];
+
   const scannedMatchSql = [
     "h.NoSO = src.NoSO",
     ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
@@ -851,6 +849,7 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
               description: UNKNOWN_LOCATION_LABEL,
               labelCount: summary.labelCount,
               scannedCount: summary.scannedCount,
+              allowedUsers: getAllowedUsers(UNKNOWN_LOCATION_ID),
               ...(showWeight
                 ? { totalWeight: summary.totalWeight }
                 : { totalPcs: summary.totalPcs }),
@@ -873,72 +872,55 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
 
   const locationRes = await pool
     .request()
-    .input("blok", sql.VarChar, blokTrim)
-    .input("categoryId", sql.Int, header.IdKategori).query(`
-      SELECT l.IdLokasi, l.Description
-      FROM dbo.MstLokasi l
-      WHERE l.Blok = @blok
-        AND ISNULL(l.Enable, 1) = 1
-        AND EXISTS (
-          SELECT 1 FROM dbo.MstLokasiJenis lj
-          WHERE lj.Blok = l.Blok AND lj.IdLokasi = l.IdLokasi AND lj.IdKategori = @categoryId
-        )
-      ORDER BY l.IdLokasi ASC;
-    `);
-
-  const locations = locationRes.recordset || [];
-
-  const summaryRes = await pool
-    .request()
     .input("stockOpnameNo", sql.VarChar, no)
     .input("blok", sql.VarChar, blokTrim).query(`
       SELECT
         src.IdLokasi AS locationId,
+        MAX(l.Description) AS description,
         COUNT(*) AS labelCount,
         ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
         SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
       FROM dbo.${cfg.snapshotTable} AS src
+      LEFT JOIN dbo.MstLokasi AS l
+        ON l.Blok = src.Blok
+        AND l.IdLokasi = src.IdLokasi
       LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
       WHERE src.NoSO = @stockOpnameNo AND src.Blok = @blok
-      GROUP BY src.IdLokasi;
+      GROUP BY src.IdLokasi
+      ORDER BY src.IdLokasi ASC;
     `);
 
-  const summaryRows = summaryRes.recordset || [];
-  const summaryByLocationId = new Map(
-    summaryRows.filter((r) => r.locationId !== null).map((r) => [r.locationId, r]),
-  );
-  // Label dengan Blok diketahui tapi IdLokasi kosong ikut ditampilkan sebagai
-  // bucket "Lokasi Tidak Diketahui" di dalam blok ini.
-  const unknownLocationSummary =
-    summaryRows.find((r) => r.locationId === null) || null;
+  const summaryRows = locationRes.recordset || [];
+  const data = summaryRows
+    .filter((row) => row.locationId !== null)
+    .map((row) => ({
+      locationId: row.locationId,
+      description: row.description ?? `Lokasi ${row.locationId}`,
+      labelCount: row.labelCount,
+      scannedCount: row.scannedCount,
+      allowedUsers: getAllowedUsers(row.locationId),
+      ...(showWeight ? { totalWeight: row.totalWeight } : { totalPcs: row.totalPcs }),
+    }));
 
-  // Hanya lokasi yang punya data snapshot untuk stock opname ini yang ditampilkan.
-  const data = locations
-    .filter((loc) => summaryByLocationId.has(loc.IdLokasi))
-    .map((loc) => {
-      const summary = summaryByLocationId.get(loc.IdLokasi);
-      return {
-        locationId: loc.IdLokasi,
-        description: loc.Description,
-        labelCount: summary.labelCount,
-        scannedCount: summary.scannedCount,
-        ...(showWeight
-          ? { totalWeight: summary.totalWeight }
-          : { totalPcs: summary.totalPcs }),
-      };
-    });
-
+  const unknownLocationSummary = summaryRows.find((row) => row.locationId === null) || null;
   if (unknownLocationSummary) {
     data.push({
       locationId: UNKNOWN_LOCATION_ID,
       description: UNKNOWN_LOCATION_LABEL,
       labelCount: unknownLocationSummary.labelCount,
       scannedCount: unknownLocationSummary.scannedCount,
+      allowedUsers: getAllowedUsers(UNKNOWN_LOCATION_ID),
       ...(showWeight
         ? { totalWeight: unknownLocationSummary.totalWeight }
         : { totalPcs: unknownLocationSummary.totalPcs }),
     });
   }
+
+  data.sort((a, b) => {
+    if (a.locationId === UNKNOWN_LOCATION_ID) return 1;
+    if (b.locationId === UNKNOWN_LOCATION_ID) return -1;
+    return a.locationId - b.locationId;
+  });
 
   return {
     stockOpnameNo: no,
@@ -957,6 +939,76 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
 // normalizer yang sama dipakai modul stock-opname v1.
 function normBlokValue(value) {
   return (value ?? "").toString().trim().toUpperCase() || null;
+}
+
+// Dipakai app scan (field worker): daftar lokasi (lintas blok) pada satu NoSO
+// yang jadi tugas user yang login, berdasarkan MstUserLokasiAccess. User
+// dengan bypass (super admin / "stockopname:create", lihat
+// requireLokasiAccess) melihat seluruh lokasi pada NoSO tsb tanpa filter.
+async function getMyLokasiForStockOpname({ stockOpnameNo, idUsername, isBypass }) {
+  const pool = await poolPromise;
+  const { no, header, categoryRow, categoryCode, cfg } =
+    await resolveStockOpnameCategory(pool, stockOpnameNo);
+
+  const scannedMatchSql = [
+    "h.NoSO = src.NoSO",
+    ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
+  ].join(" AND ");
+
+  // Furniture WIP dihitung per pcs, bukan berat.
+  const showWeight = categoryCode !== "furniturewip";
+
+  const locationRes = await pool
+    .request()
+    .input("stockOpnameNo", sql.VarChar, no).query(`
+      SELECT
+        src.Blok AS blok,
+        src.IdLokasi AS locationId,
+        MAX(l.Description) AS description,
+        COUNT(*) AS labelCount,
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+        SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
+      FROM dbo.${cfg.snapshotTable} AS src
+      LEFT JOIN dbo.MstLokasi AS l
+        ON l.Blok = src.Blok
+        AND l.IdLokasi = src.IdLokasi
+      LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
+      WHERE src.NoSO = @stockOpnameNo AND src.Blok IS NOT NULL AND src.IdLokasi IS NOT NULL
+      GROUP BY src.Blok, src.IdLokasi
+      ORDER BY src.Blok ASC, src.IdLokasi ASC;
+    `);
+
+  let rows = locationRes.recordset || [];
+
+  if (!isBypass) {
+    const assigned = await listLokasiByUser(idUsername);
+    const allowedKeys = new Set(
+      assigned.map((r) => `${normBlokValue(r.Blok)}|${r.IdLokasi}`),
+    );
+    rows = rows.filter((row) =>
+      allowedKeys.has(`${normBlokValue(row.blok)}|${row.locationId}`),
+    );
+  }
+
+  const data = rows.map((row) => ({
+    blok: row.blok,
+    locationId: row.locationId,
+    description: row.description ?? `Lokasi ${row.locationId}`,
+    labelCount: row.labelCount,
+    scannedCount: row.scannedCount,
+    ...(showWeight ? { totalWeight: row.totalWeight } : { totalPcs: row.totalPcs }),
+  }));
+
+  return {
+    stockOpnameNo: no,
+    categoryId: header.IdKategori,
+    categoryCode,
+    categoryName: categoryRow.NamaKategori,
+    isComplete: !!header.IsComplete,
+    completedAt: header.DateComplete ?? null,
+    data,
+    totalRecords: data.length,
+  };
 }
 
 async function insertStockOpnameHasil({
@@ -1221,4 +1273,5 @@ module.exports = {
   deleteStockOpname,
   getAllBlok,
   getLocationsInBlok,
+  getMyLokasiForStockOpname,
 };

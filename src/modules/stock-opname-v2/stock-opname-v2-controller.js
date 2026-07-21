@@ -501,6 +501,52 @@ async function getLocationsHandler(req, res) {
   }
 }
 
+async function getMyLokasiHandler(req, res) {
+  const { stockOpnameNo } = req.params;
+  const isBypass =
+    req.userPermissions?.has("*") ||
+    req.userPermissions?.has("stockopname:create") ||
+    false;
+
+  console.log(
+    "Fetching my lokasi (stock-opname-v2) | Username:",
+    req.username,
+    "| stockOpnameNo:",
+    stockOpnameNo,
+    "| isBypass:",
+    isBypass,
+  );
+
+  try {
+    const result = await stockOpnameV2Service.getMyLokasiForStockOpname({
+      stockOpnameNo,
+      idUsername: req.idUsername,
+      isBypass,
+    });
+
+    if (!result.data.length) {
+      return res.status(404).json({
+        success: false,
+        message: `Belum ada lokasi yang ditugaskan untuk Anda pada stock opname ${stockOpnameNo}`,
+        data: result,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `Data lokasi tugas berhasil diambil`,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error fetching my lokasi:", error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+      code: error.code,
+    });
+  }
+}
+
 module.exports = {
   listKategoriHandler,
   listJenisHandler,
@@ -514,4 +560,5 @@ module.exports = {
   insertHasilHandler,
   listBlokHandler,
   getLocationsHandler,
+  getMyLokasiHandler,
 };
