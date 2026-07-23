@@ -669,6 +669,53 @@ async function submitBatch(req, res) {
   }
 }
 
+// Operator pilih "ikuti pcsPerLabel standar saja" — batalkan permanen target
+// pcs-per-label awal (pending) yang sedang menggantung untuk NoProduksi ini.
+async function discardPcsPerLabelPending(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const idJenis = toInt(body.idJenis);
+  if (!idJenis) {
+    return res
+      .status(400)
+      .json({ success: false, message: "idJenis is required" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res
+      .status(401)
+      .json({ success: false, message: "Unauthorized (idUsername missing)" });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await injectProduksiService.discardInjectPcsPerLabelPending(
+      noProduksi,
+      idJenis,
+      { actorId, actorUsername, requestId },
+    );
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[inject.discardPcsPerLabelPending]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
 // ------------------------------------------------------------
 // ✅ POST Terminate InjectProduksi
 //    - Update HourEnd produksi ke hourEnd input user
@@ -1072,6 +1119,66 @@ async function updateProduksi(req, res) {
     });
   } catch (err) {
     console.error("[Inject][updateProduksi]", err);
+    const status = err.statusCode || err.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : err.message,
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      },
+    });
+  }
+}
+
+// ------------------------------------------------------------
+// ✅ PATCH tanggal produksi (khusus) — dipakai saat input/output
+//    sudah ada, cascade ke DateUsage (input) & DateCreate (output).
+//    Endpoint terpisah dari updateProduksi/PUT agar platform lain
+//    yang memakai PUT tidak terpengaruh.
+// ------------------------------------------------------------
+async function updateTanggalProduksi(req, res) {
+  try {
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Unauthorized (idUsername missing)" });
+    }
+
+    const actorUsername =
+      getActorUsername(req) || req.username || req.user?.username || "system";
+    const requestId = String(makeRequestId(req) || "").trim();
+    if (requestId) res.setHeader("x-request-id", requestId);
+
+    const noProduksi = String(req.params.noProduksi || "").trim();
+    if (!noProduksi) {
+      return res
+        .status(400)
+        .json({ success: false, message: "noProduksi wajib" });
+    }
+
+    const tglProduksi = req.body?.tglProduksi;
+    if (!tglProduksi) {
+      return res
+        .status(400)
+        .json({ success: false, message: "tglProduksi wajib" });
+    }
+
+    const result = await injectProduksiService.updateInjectProduksiTanggal(
+      noProduksi,
+      tglProduksi,
+      { actorId, actorUsername, requestId },
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "TglProduksi InjectProduksi_h updated",
+      data: result.header,
+      meta: { audit: result.audit },
+    });
+  } catch (err) {
+    console.error("[Inject][updateTanggalProduksi]", err);
     const status = err.statusCode || err.status || 500;
     return res.status(status).json({
       success: false,
@@ -1820,6 +1927,7 @@ module.exports = {
   resetQcCounter,
   createProduksi,
   updateProduksi,
+  updateTanggalProduksi,
   deleteProduksi,
   getInputsByNoProduksi,
   getOutputsByNoProduksi,
@@ -1830,6 +1938,7 @@ module.exports = {
   validateLabel,
   validateInputLabelForNoProduksi,
   submitBatch,
+  discardPcsPerLabelPending,
   terminateInjectProduksi,
   completeProduksi,
   approveCompleteProduksi,

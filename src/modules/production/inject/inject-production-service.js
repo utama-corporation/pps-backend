@@ -1050,6 +1050,30 @@ async function getInjectPcsPerLabelListByNoProduksi(noProduksi) {
   if (rows.length === 0)
     throw notFound(`Pcs per label tidak ditemukan untuk NoProduksi ${no}`);
 
+  // Pending target awal (defisit dari sesi sebelumnya) per idJenis, kalau ada
+  // dan belum terpakai, untuk mesin+outputCategory NoProduksi ini.
+  const pendingByIdJenis = new Map();
+  if (header.IdMesin) {
+    const pendingReq = pool.request();
+    pendingReq.input("IdMesin", sql.Int, header.IdMesin);
+    pendingReq.input(
+      "OutputCategory",
+      sql.VarChar(20),
+      normalizeOutputCategoryForPending(outputCategory),
+    );
+    const pendingRes = await pendingReq.query(`
+      SELECT IdJenis, PcsPending
+      FROM dbo.InjectPcsPerLabelPending WITH (NOLOCK)
+      WHERE IdMesin = @IdMesin
+        AND OutputCategory = @OutputCategory
+        AND IsConsumed = 0
+        AND IsDiscarded = 0;
+    `);
+    for (const row of pendingRes.recordset ?? []) {
+      pendingByIdJenis.set(Number(row.IdJenis), Number(row.PcsPending));
+    }
+  }
+
   return {
     outputCategory,
     idWarna: header.IdWarna ?? null,
@@ -1065,6 +1089,10 @@ async function getInjectPcsPerLabelListByNoProduksi(noProduksi) {
       idJenis: row.IdJenis ?? null,
       namaBarang: row.NamaBarang ?? null,
       pcsPerLabel: row.PcsPerLabel == null ? null : Number(row.PcsPerLabel),
+      pcsPerLabelAwal:
+        row.IdJenis != null && pendingByIdJenis.has(Number(row.IdJenis))
+          ? pendingByIdJenis.get(Number(row.IdJenis))
+          : null,
     })),
   };
 }
@@ -1920,6 +1948,122 @@ async function createInjectRejectLabel(
   return noReject;
 }
 
+function normalizeOutputCategoryForPending(outputCategory) {
+  return String(outputCategory || "").toLowerCase() === "barangjadi"
+    ? "barangjadi"
+    : "furnitureWip";
+}
+
+async function getPendingPcsPerLabelRow(
+  tx,
+  { idMesin, idJenis, outputCategory },
+) {
+  if (!idMesin || idJenis == null) return null;
+  const res = await new sql.Request(tx)
+    .input("IdMesin", sql.Int, idMesin)
+    .input("IdJenis", sql.Int, idJenis)
+    .input("OutputCategory", sql.VarChar(20), outputCategory).query(`
+      SELECT PcsPending
+      FROM dbo.InjectPcsPerLabelPending WITH (UPDLOCK, HOLDLOCK)
+      WHERE IdMesin = @IdMesin
+        AND IdJenis = @IdJenis
+        AND OutputCategory = @OutputCategory
+        AND IsConsumed = 0
+        AND IsDiscarded = 0;
+    `);
+  return res.recordset?.[0] || null;
+}
+
+async function consumePendingPcsPerLabel(
+  tx,
+  { idMesin, idJenis, outputCategory },
+  noProduksi,
+  nowDateTime,
+) {
+  await new sql.Request(tx)
+    .input("IdMesin", sql.Int, idMesin)
+    .input("IdJenis", sql.Int, idJenis)
+    .input("OutputCategory", sql.VarChar(20), outputCategory)
+    .input("ConsumedBy", sql.VarChar(50), noProduksi)
+    .input("Now", sql.DateTime, nowDateTime).query(`
+      UPDATE dbo.InjectPcsPerLabelPending
+      SET IsConsumed = 1,
+          ConsumedByNoProduksi = @ConsumedBy,
+          DateTimeConsumed = @Now
+      WHERE IdMesin = @IdMesin
+        AND IdJenis = @IdJenis
+        AND OutputCategory = @OutputCategory
+        AND IsConsumed = 0
+        AND IsDiscarded = 0;
+    `);
+}
+
+// Operator memilih "ikuti standar saja" — batalkan defisit pending secara
+// permanen (bukan cuma dilewati). Tidak membuat label apa pun; setelah ini
+// pending tidak akan ditawarkan lagi ke sesi manapun.
+async function discardPendingPcsPerLabel(
+  tx,
+  { idMesin, idJenis, outputCategory },
+  noProduksi,
+  nowDateTime,
+) {
+  const res = await new sql.Request(tx)
+    .input("IdMesin", sql.Int, idMesin)
+    .input("IdJenis", sql.Int, idJenis)
+    .input("OutputCategory", sql.VarChar(20), outputCategory)
+    .input("DiscardedBy", sql.VarChar(50), noProduksi)
+    .input("Now", sql.DateTime, nowDateTime).query(`
+      UPDATE dbo.InjectPcsPerLabelPending
+      SET IsDiscarded = 1,
+          DiscardedByNoProduksi = @DiscardedBy,
+          DateTimeDiscarded = @Now
+      OUTPUT INSERTED.PcsPending
+      WHERE IdMesin = @IdMesin
+        AND IdJenis = @IdJenis
+        AND OutputCategory = @OutputCategory
+        AND IsConsumed = 0
+        AND IsDiscarded = 0;
+    `);
+  return res.recordset?.[0] || null;
+}
+
+// Upsert defisit baru. Hanya dipanggil kalau tidak ada pending unconsumed
+// yang masih menggantung untuk kombinasi ini (lihat submitInjectBatch) —
+// supaya defisit lama yang belum sempat terpakai tidak tertimpa begitu saja.
+async function upsertPendingPcsPerLabelDeficit(
+  tx,
+  { idMesin, idJenis, outputCategory },
+  pcsPending,
+  noProduksi,
+  nowDateTime,
+) {
+  await new sql.Request(tx)
+    .input("IdMesin", sql.Int, idMesin)
+    .input("IdJenis", sql.Int, idJenis)
+    .input("OutputCategory", sql.VarChar(20), outputCategory)
+    .input("PcsPending", sql.Int, pcsPending)
+    .input("SourceNoProduksi", sql.VarChar(50), noProduksi)
+    .input("Now", sql.DateTime, nowDateTime).query(`
+      MERGE dbo.InjectPcsPerLabelPending AS tgt
+      USING (
+        SELECT @IdMesin AS IdMesin, @IdJenis AS IdJenis, @OutputCategory AS OutputCategory
+      ) AS src
+        ON tgt.IdMesin = src.IdMesin
+       AND tgt.IdJenis = src.IdJenis
+       AND tgt.OutputCategory = src.OutputCategory
+      WHEN MATCHED THEN UPDATE SET
+        PcsPending = @PcsPending,
+        SourceNoProduksi = @SourceNoProduksi,
+        IsConsumed = 0,
+        ConsumedByNoProduksi = NULL,
+        DateTimeCreate = @Now,
+        DateTimeConsumed = NULL
+      WHEN NOT MATCHED THEN
+        INSERT (IdMesin, IdJenis, OutputCategory, PcsPending, SourceNoProduksi, IsConsumed, DateTimeCreate)
+        VALUES (@IdMesin, @IdJenis, @OutputCategory, @PcsPending, @SourceNoProduksi, 0, @Now);
+    `);
+}
+
 async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
   const noProduksi = String(payload?.noProduksi || "").trim();
   if (!noProduksi) throw badReq("noProduksi wajib");
@@ -2204,19 +2348,58 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
       const outputCategory = String(
         pcsInfo.outputCategory || header.OutputCategory || "",
       ).toLowerCase();
+      const outputCategoryDb = normalizeOutputCategoryForPending(
+        outputCategory,
+      );
 
-      const pcsPerLabel = Number(pcsInfo.pcsPerLabel);
-      if (!Number.isFinite(pcsPerLabel) || pcsPerLabel <= 0) {
+      const pcsPerLabelStandar = Number(pcsInfo.pcsPerLabel);
+      if (!Number.isFinite(pcsPerLabelStandar) || pcsPerLabelStandar <= 0) {
         throw conflict(
           `PcsPerLabel tidak valid untuk NoProduksi ${noProduksi}`,
         );
       }
 
-      const totalPcs = item.carryOverIn + item.pcsInput;
-      const jumlahLabel = Math.floor(totalPcs / pcsPerLabel);
-      const sisaPcs = totalPcs % pcsPerLabel;
+      // Target pcs-per-label awal yang tersisa (defisit) dari sesi
+      // sebelumnya di mesin+jenis yang sama, kalau ada dan belum terpakai.
+      const pendingRow =
+        item.idJenis != null
+          ? await getPendingPcsPerLabelRow(tx, {
+              idMesin,
+              idJenis: item.idJenis,
+              outputCategory: outputCategoryDb,
+            })
+          : null;
+      const pcsPerLabelAwal = pendingRow
+        ? Number(pendingRow.PcsPending)
+        : null;
 
-      if (jumlahLabel > 0 && item.idJenis == null) {
+      const totalPcs = item.carryOverIn + item.pcsInput;
+
+      // Fase 1: kalau ada target awal (defisit) yang belum terpakai, target
+      // itu harus terpenuhi lebih dulu sebagai 1 label terpisah (tidak
+      // digabung dengan siklus standar). Sisanya baru lanjut siklus normal.
+      const labelSizes = [];
+      let remainingPcs = totalPcs;
+      let pendingConsumedThisCall = false;
+      if (pcsPerLabelAwal != null) {
+        if (remainingPcs >= pcsPerLabelAwal) {
+          labelSizes.push(pcsPerLabelAwal);
+          remainingPcs -= pcsPerLabelAwal;
+          pendingConsumedThisCall = true;
+        }
+      }
+      if (pcsPerLabelAwal == null || pendingConsumedThisCall) {
+        const jumlahLabelStandar = Math.floor(
+          remainingPcs / pcsPerLabelStandar,
+        );
+        for (let i = 0; i < jumlahLabelStandar; i += 1) {
+          labelSizes.push(pcsPerLabelStandar);
+        }
+        remainingPcs %= pcsPerLabelStandar;
+      }
+      const sisaPcs = remainingPcs;
+
+      if (labelSizes.length > 0 && item.idJenis == null) {
         throw badReq(
           "idJenis wajib diisi jika totalPcs sudah cukup minimal 1 label",
         );
@@ -2230,11 +2413,7 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
       await new sql.Request(tx)
         .input("IdBatch", sql.Int, idBatch)
         .input("IdJenis", sql.Int, item.idJenis)
-        .input(
-          "OutputCategory",
-          sql.VarChar(20),
-          outputCategory === "barangjadi" ? "barangjadi" : "furnitureWip",
-        )
+        .input("OutputCategory", sql.VarChar(20), outputCategoryDb)
         .input("CarryOverIn", sql.Int, item.carryOverIn)
         .input("PcsInput", sql.Int, item.pcsInput)
         .input("CarryOverOut", sql.Int, item.carryOverOut).query(`
@@ -2242,12 +2421,12 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
           VALUES (@IdBatch, @IdJenis, @OutputCategory, @CarryOverIn, @PcsInput, @CarryOverOut);
         `);
 
-      for (let index = 0; index < jumlahLabel; index += 1) {
+      const createLabel = async (pcs) => {
         if (outputCategory === "barangjadi") {
           const code = await createInjectBarangJadiLabel(tx, {
             noProduksi,
             idBJ: item.idJenis,
-            pcs: pcsPerLabel,
+            pcs,
             hourStart,
             dateCreate: docDateOnly,
             nowDateTime,
@@ -2261,7 +2440,7 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
           const code = await createInjectFurnitureWipLabel(tx, {
             noProduksi,
             idFurnitureWIP: item.idJenis,
-            pcs: pcsPerLabel,
+            pcs,
             hourStart,
             idWarna: pcsInfo.idWarna,
             dateCreate: docDateOnly,
@@ -2273,41 +2452,41 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
           });
           furnitureWIP.push(code);
         }
+      };
+
+      for (const pcs of labelSizes) {
+        await createLabel(pcs);
+      }
+
+      if (pendingConsumedThisCall) {
+        await consumePendingPcsPerLabel(
+          tx,
+          { idMesin, idJenis: item.idJenis, outputCategory: outputCategoryDb },
+          noProduksi,
+          nowDateTime,
+        );
       }
 
       // Pada forceClose (terminate): pakai carryOverOut sebagai pcs sisa label
       // Pada batch biasa (isLastBatch via bonggolan/reject): pakai sisaPcs
       const partialPcs = forceClose ? item.carryOverOut : sisaPcs;
       if (isLastBatch && partialPcs > 0) {
-        if (outputCategory === "barangjadi") {
-          const partialCode = await createInjectBarangJadiLabel(tx, {
+        await createLabel(partialPcs);
+
+        // Simpan defisit label partial terakhir ini sebagai target awal
+        // sesi berikutnya di mesin+jenis yang sama — tapi jangan timpa
+        // defisit lama yang masih menggantung (belum sempat terpakai sesi
+        // ini, mis. totalPcs sesi ini tidak pernah mencapai target awal).
+        const defisit = pcsPerLabelStandar - partialPcs;
+        const hasUntouchedPending = pcsPerLabelAwal != null && !pendingConsumedThisCall;
+        if (idMesin && item.idJenis != null && defisit > 0 && !hasUntouchedPending) {
+          await upsertPendingPcsPerLabelDeficit(
+            tx,
+            { idMesin, idJenis: item.idJenis, outputCategory: outputCategoryDb },
+            defisit,
             noProduksi,
-            idBJ: item.idJenis,
-            pcs: partialPcs,
-            hourStart,
-            dateCreate: docDateOnly,
             nowDateTime,
-            createBy: actorUsername,
-            blok: lokasi?.Blok ?? null,
-            idLokasi: lokasi?.IdLokasi ?? null,
-            idWarehouse: null,
-          });
-          barangJadi.push(partialCode);
-        } else {
-          const partialCode = await createInjectFurnitureWipLabel(tx, {
-            noProduksi,
-            idFurnitureWIP: item.idJenis,
-            pcs: partialPcs,
-            hourStart,
-            idWarna: pcsInfo.idWarna,
-            dateCreate: docDateOnly,
-            nowDateTime,
-            createBy: actorUsername,
-            blok: lokasi?.Blok ?? null,
-            idLokasi: lokasi?.IdLokasi ?? null,
-            idWarehouse: null,
-          });
-          furnitureWIP.push(partialCode);
+          );
         }
       }
     }
@@ -2453,6 +2632,120 @@ async function terminateInjectProduksi(payload, hourEnd, ctx) {
 
   // Submit batch + forceClose dalam transaksi terpisah via submitInjectBatch
   return submitInjectBatch(payload, ctx, { forceClose: true });
+}
+
+// Operator pilih "ikuti pcsPerLabel standar saja" — batalkan permanen target
+// awal (pending) yang sedang menggantung untuk NoProduksi+idJenis ini.
+async function discardInjectPcsPerLabelPending(noProduksi, idJenis, ctx) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+  const idJenisNum = Number(idJenis);
+  if (!Number.isInteger(idJenisNum) || idJenisNum <= 0) {
+    throw badReq("idJenis harus integer positif");
+  }
+
+  const actorId = Number(ctx?.actorId);
+  if (!Number.isInteger(actorId) || actorId <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId,
+      actorUsername,
+      requestId,
+    });
+
+    const headerRes = await new sql.Request(tx).input(
+      "NoProduksi",
+      sql.VarChar(50),
+      no,
+    ).query(`
+        SELECT TOP 1
+          h.IdMesin,
+          CASE
+            WHEN fwCount.TotalCount > 0 THEN 'furnitureWip'
+            WHEN bjCount.TotalCount > 0 THEN 'barangjadi'
+            ELSE NULL
+          END AS OutputCategory
+        FROM dbo.InjectProduksi_h h WITH (NOLOCK)
+        OUTER APPLY (
+          SELECT COUNT(1) AS TotalCount
+          FROM (
+            SELECT DISTINCT dFw.IdFurnitureWIP
+            FROM dbo.CetakanWarnaToFurnitureWIP_d dFw WITH (NOLOCK)
+            WHERE dFw.IdCetakan = h.IdCetakan
+              AND dFw.IdWarna = h.IdWarna
+              AND (
+                (dFw.IdFurnitureMaterial IS NULL
+                  AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+                OR dFw.IdFurnitureMaterial = h.IdFurnitureMaterial
+              )
+          ) x
+        ) fwCount
+        OUTER APPLY (
+          SELECT COUNT(1) AS TotalCount
+          FROM (
+            SELECT DISTINCT dBj.IdBarangJadi
+            FROM dbo.CetakanWarnaToProduk_d dBj WITH (NOLOCK)
+            WHERE dBj.IdCetakan = h.IdCetakan
+              AND dBj.IdWarna = h.IdWarna
+              AND (
+                (dBj.IdFurnitureMaterial IS NULL
+                  AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+                OR dBj.IdFurnitureMaterial = h.IdFurnitureMaterial
+              )
+          ) x
+        ) bjCount
+        WHERE h.NoProduksi = @NoProduksi;
+      `);
+
+    const header = headerRes.recordset?.[0];
+    if (!header) throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+    if (!header.IdMesin) {
+      throw badReq(`NoProduksi ${no} tidak memiliki IdMesin.`);
+    }
+
+    const outputCategoryDb = normalizeOutputCategoryForPending(
+      header.OutputCategory,
+    );
+
+    const discarded = await discardPendingPcsPerLabel(
+      tx,
+      {
+        idMesin: header.IdMesin,
+        idJenis: idJenisNum,
+        outputCategory: outputCategoryDb,
+      },
+      no,
+      new Date(),
+    );
+    if (!discarded) {
+      throw notFound(
+        `Tidak ada target pcs-per-label awal yang pending untuk NoProduksi ${no} / idJenis ${idJenisNum}.`,
+      );
+    }
+
+    await tx.commit();
+
+    return {
+      idMesin: header.IdMesin,
+      idJenis: idJenisNum,
+      outputCategory: outputCategoryDb,
+      discardedPcs: Number(discarded.PcsPending),
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
 }
 
 function requireActorId(ctx) {
@@ -3364,6 +3657,207 @@ async function updateInjectProduksi(noProduksi, payload, ctx) {
             : {}),
         }
       : null;
+
+    await tx.commit();
+    return { header: updatedHeader, audit: auditCtx };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
+}
+
+// ============================================================
+// ✅ UPDATE TglProduksi khusus (endpoint terpisah) + cascade DateUsage
+//    (input) & DateCreate (output) — dipakai saat input/output sudah ada.
+//    TIDAK memanggil assertNoReferencedInjectInputs: endpoint ini justru
+//    dibuat untuk kasus tersebut. PUT /inject/:noProduksi (updateInjectProduksi)
+//    tidak disentuh agar platform lain yang memakainya tidak terpengaruh.
+// ============================================================
+async function updateInjectProduksiTanggal(noProduksi, tglProduksi, ctx) {
+  if (!noProduksi) throw badReq("noProduksi wajib");
+  if (!tglProduksi) throw badReq("tglProduksi tidak boleh kosong");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
+  };
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    const auditReq = new sql.Request(tx);
+    await applyAuditContext(auditReq, auditCtx);
+
+    const { docDateOnly: oldDocDateOnly } = await loadDocDateOnlyFromConfig({
+      entityKey: "injectProduksi",
+      codeValue: noProduksi,
+      runner: tx,
+      useLock: true,
+      throwIfNotFound: true,
+    });
+
+    const newDocDateOnly = resolveEffectiveDateForCreate(tglProduksi);
+
+    await assertNotLocked({
+      date: oldDocDateOnly,
+      runner: tx,
+      action: "update InjectProduksi tanggal (current date)",
+      useLock: true,
+    });
+    await assertNotLocked({
+      date: newDocDateOnly,
+      runner: tx,
+      action: "update InjectProduksi tanggal (new date)",
+      useLock: true,
+    });
+
+    const rqUpd = new sql.Request(tx);
+    rqUpd
+      .input("NoProduksi", sql.VarChar(50), noProduksi)
+      .input("TglProduksi", sql.Date, newDocDateOnly);
+    await applyAuditContext(rqUpd, auditCtx);
+
+    const updRes = await rqUpd.query(`
+      UPDATE dbo.InjectProduksi_h
+      SET TglProduksi = @TglProduksi
+      WHERE NoProduksi = @NoProduksi;
+
+      SELECT * FROM dbo.InjectProduksi_h WHERE NoProduksi = @NoProduksi;
+    `);
+    const updatedHeader = updRes.recordset?.[0] || null;
+    if (!updatedHeader) throw notFound(`NoProduksi tidak ditemukan: ${noProduksi}`);
+
+    const rqCascade = new sql.Request(tx);
+    rqCascade
+      .input("NoProduksi", sql.VarChar(50), noProduksi)
+      .input("TglProduksi", sql.Date, newDocDateOnly);
+
+    await rqCascade.query(`
+      -------------------------------------------------------
+      -- INPUT: DateUsage (full + partial), hanya baris yang
+      -- sudah dipakai (DateUsage IS NOT NULL) untuk NoProduksi ini
+      -------------------------------------------------------
+      UPDATE b SET b.DateUsage = @TglProduksi
+      FROM dbo.Broker_d AS b
+      WHERE b.DateUsage IS NOT NULL
+        AND (
+          EXISTS (
+            SELECT 1 FROM dbo.InjectProduksiInputBroker map
+            WHERE map.NoProduksi = @NoProduksi
+              AND map.NoBroker = b.NoBroker AND map.NoSak = b.NoSak
+          )
+          OR EXISTS (
+            SELECT 1 FROM dbo.InjectProduksiInputBrokerPartial mp
+            JOIN dbo.BrokerPartial bp ON bp.NoBrokerPartial = mp.NoBrokerPartial
+            WHERE mp.NoProduksi = @NoProduksi
+              AND bp.NoBroker = b.NoBroker AND bp.NoSak = b.NoSak
+          )
+        );
+
+      UPDATE g SET g.DateUsage = @TglProduksi
+      FROM dbo.Gilingan AS g
+      WHERE g.DateUsage IS NOT NULL
+        AND (
+          EXISTS (
+            SELECT 1 FROM dbo.InjectProduksiInputGilingan map
+            WHERE map.NoProduksi = @NoProduksi AND map.NoGilingan = g.NoGilingan
+          )
+          OR EXISTS (
+            SELECT 1 FROM dbo.InjectProduksiInputGilinganPartial mp
+            JOIN dbo.GilinganPartial gp ON gp.NoGilinganPartial = mp.NoGilinganPartial
+            WHERE mp.NoProduksi = @NoProduksi AND gp.NoGilingan = g.NoGilingan
+          )
+        );
+
+      UPDATE m SET m.DateUsage = @TglProduksi
+      FROM dbo.Mixer_d AS m
+      WHERE m.DateUsage IS NOT NULL
+        AND (
+          EXISTS (
+            SELECT 1 FROM dbo.InjectProduksiInputMixer map
+            WHERE map.NoProduksi = @NoProduksi
+              AND map.NoMixer = m.NoMixer AND map.NoSak = m.NoSak
+          )
+          OR EXISTS (
+            SELECT 1 FROM dbo.InjectProduksiInputMixerPartial mp
+            JOIN dbo.MixerPartial mpp ON mpp.NoMixerPartial = mp.NoMixerPartial
+            WHERE mp.NoProduksi = @NoProduksi
+              AND mpp.NoMixer = m.NoMixer AND mpp.NoSak = m.NoSak
+          )
+        );
+
+      UPDATE f SET f.DateUsage = @TglProduksi
+      FROM dbo.FurnitureWIP AS f
+      WHERE f.DateUsage IS NOT NULL
+        AND (
+          EXISTS (
+            SELECT 1 FROM dbo.InjectProduksiInputFurnitureWIP map
+            WHERE map.NoProduksi = @NoProduksi AND map.NoFurnitureWIP = f.NoFurnitureWIP
+          )
+          OR EXISTS (
+            SELECT 1 FROM dbo.InjectProduksiInputFurnitureWIPPartial mp
+            JOIN dbo.FurnitureWIPPartial fp ON fp.NoFurnitureWIPPartial = mp.NoFurnitureWIPPartial
+            WHERE mp.NoProduksi = @NoProduksi AND fp.NoFurnitureWIP = f.NoFurnitureWIP
+          )
+        );
+
+      -------------------------------------------------------
+      -- OUTPUT: DateCreate (label yang dihasilkan NoProduksi ini),
+      -- termasuk Mixer_h walau dibuat lewat modul mixer terpisah.
+      -- DateTimeCreate SENGAJA tidak disentuh (timestamp fisik).
+      -------------------------------------------------------
+      UPDATE f SET f.DateCreate = @TglProduksi
+      FROM dbo.FurnitureWIP AS f
+      WHERE f.DateCreate IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM dbo.InjectProduksiOutputFurnitureWIP o
+          WHERE o.NoProduksi = @NoProduksi AND o.NoFurnitureWIP = f.NoFurnitureWIP
+        );
+
+      UPDATE bj SET bj.DateCreate = @TglProduksi
+      FROM dbo.BarangJadi AS bj
+      WHERE bj.DateCreate IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM dbo.InjectProduksiOutputBarangJadi o
+          WHERE o.NoProduksi = @NoProduksi AND o.NoBJ = bj.NoBJ
+        );
+
+      UPDATE bg SET bg.DateCreate = @TglProduksi
+      FROM dbo.Bonggolan AS bg
+      WHERE bg.DateCreate IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM dbo.InjectProduksiOutputBonggolan o
+          WHERE o.NoProduksi = @NoProduksi AND o.NoBonggolan = bg.NoBonggolan
+        );
+
+      UPDATE rj SET rj.DateCreate = @TglProduksi
+      FROM dbo.RejectV2 AS rj
+      WHERE rj.DateCreate IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM dbo.InjectProduksiOutputRejectV2 o
+          WHERE o.NoProduksi = @NoProduksi AND o.NoReject = rj.NoReject
+        );
+
+      UPDATE mh SET mh.DateCreate = @TglProduksi
+      FROM dbo.Mixer_h AS mh
+      WHERE mh.DateCreate IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM dbo.InjectProduksiOutputMixer o
+          WHERE o.NoProduksi = @NoProduksi AND o.NoMixer = mh.NoMixer
+        );
+    `);
 
     await tx.commit();
     return { header: updatedHeader, audit: auditCtx };
@@ -5259,6 +5753,7 @@ module.exports = {
   getFormulaInputsByNoProduksi,
   createInjectProduksi,
   updateInjectProduksi,
+  updateInjectProduksiTanggal,
   deleteInjectProduksi,
   fetchInputs,
   fetchOutputs,
@@ -5269,6 +5764,7 @@ module.exports = {
   validateLabel,
   validateInputLabelForNoProduksi,
   submitInjectBatch,
+  discardInjectPcsPerLabelPending,
   terminateInjectProduksi,
   requestCompleteInjectProduksi,
   approveCompleteInjectProduksi,

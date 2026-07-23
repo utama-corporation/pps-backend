@@ -1,9 +1,19 @@
-jest.mock("../user-lokasi-access-service", () => ({
+jest.mock("../stock-opname-v2-service", () => ({
   isUserAllowedForLokasi: jest.fn(),
 }));
 
-const requireLokasiAccess = require("../user-lokasi-access-middleware");
-const { isUserAllowedForLokasi } = require("../user-lokasi-access-service");
+// stock-opname-v2-routes.js meng-import attachPermissions, yang transitif
+// meng-import get-user-permissions.js -> core/config/db. Tanpa mock ini,
+// require() module tsb memicu koneksi mssql sungguhan saat file di-load,
+// walau tidak pernah dipanggil di test (bocor jadi unhandled connection
+// error setelah proses Jest selesai).
+jest.mock("../../../core/config/db", () => ({
+  sql: { Int: jest.fn(() => "Int"), VarChar: jest.fn(() => "VarChar") },
+  poolPromise: Promise.resolve({ request: () => ({ input: () => ({ query: jest.fn() }) }) }),
+}));
+
+const { requireLokasiAccess } = require("../stock-opname-v2-routes");
+const { isUserAllowedForLokasi } = require("../stock-opname-v2-service");
 
 function makeRes() {
   const res = {};
@@ -19,7 +29,7 @@ beforeEach(() => {
 it("bypasses the DB check for super admin (wildcard permission)", async () => {
   const req = {
     idUsername: 7,
-    params: { blok: "A", locationId: "25" },
+    params: { stockOpnameNo: "SO.01", blok: "A", locationId: "25" },
     userPermissions: new Set(["*"]),
   };
   const res = makeRes();
@@ -34,7 +44,7 @@ it("bypasses the DB check for super admin (wildcard permission)", async () => {
 it("bypasses the DB check when the user has stockopname:create permission", async () => {
   const req = {
     idUsername: 7,
-    params: { blok: "A", locationId: "25" },
+    params: { stockOpnameNo: "SO.01", blok: "A", locationId: "25" },
     userPermissions: new Set(["stockopname:create"]),
   };
   const res = makeRes();
@@ -46,11 +56,11 @@ it("bypasses the DB check when the user has stockopname:create permission", asyn
   expect(next).toHaveBeenCalled();
 });
 
-it("calls next when the user is assigned to the lokasi", async () => {
+it("calls next when the user is assigned to the lokasi for that NoSO", async () => {
   isUserAllowedForLokasi.mockResolvedValueOnce(true);
   const req = {
     idUsername: 7,
-    params: { blok: "A", locationId: "25" },
+    params: { stockOpnameNo: "SO.01", blok: "A", locationId: "25" },
     userPermissions: new Set(),
   };
   const res = makeRes();
@@ -62,15 +72,16 @@ it("calls next when the user is assigned to the lokasi", async () => {
     blok: "A",
     idLokasi: 25,
     idUsername: 7,
+    stockOpnameNo: "SO.01",
   });
   expect(next).toHaveBeenCalled();
 });
 
-it("returns 403 when the user is not assigned to the lokasi", async () => {
+it("returns 403 when the user is not assigned to the lokasi for that NoSO", async () => {
   isUserAllowedForLokasi.mockResolvedValueOnce(false);
   const req = {
     idUsername: 7,
-    params: { blok: "A", locationId: "25" },
+    params: { stockOpnameNo: "SO.01", blok: "A", locationId: "25" },
     userPermissions: new Set(),
   };
   const res = makeRes();

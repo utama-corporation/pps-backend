@@ -93,6 +93,14 @@ router.post("/inject", verifyToken, injectProduksiController.createProduksi);
 
 router.post("/inject/batch", verifyToken, injectProduksiController.submitBatch);
 
+// Operator pilih "ikuti pcsPerLabel standar saja" — batalkan permanen target
+// pcs-per-label awal (pending) untuk NoProduksi + idJenis (di body) ini.
+router.post(
+  "/inject/:noProduksi/pcs-per-label/discard",
+  verifyToken,
+  injectProduksiController.discardPcsPerLabelPending,
+);
+
 router.post(
   "/inject/:noProduksi/terminate",
   verifyToken,
@@ -123,6 +131,15 @@ router.patch(
   attachPermissions,
   requirePermission("produksi_inject:approve"),
   injectProduksiController.approveCompleteProduksi,
+);
+
+// Endpoint khusus ubah TglProduksi (cascade ke DateUsage input & DateCreate
+// output). Terpisah dari PUT /inject/:noProduksi karena PUT dipakai platform
+// lain dan tidak boleh berubah perilakunya.
+router.patch(
+  "/inject/:noProduksi/tanggal-produksi",
+  verifyToken,
+  injectProduksiController.updateTanggalProduksi,
 );
 
 router.post("/inject/qc", verifyToken, injectProduksiController.createQc);

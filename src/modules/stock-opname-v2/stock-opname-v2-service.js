@@ -14,10 +14,7 @@ const { badReq, notFound, conflict } = require("../../core/utils/http-error");
 const {
   STOCK_OPNAME_SNAPSHOT_CONFIG,
 } = require("../../core/config/stock-opname-snapshot.config");
-const {
-  listAllowedUsersGroupedByLokasi,
-  listLokasiByUser,
-} = require("../user-lokasi-access/user-lokasi-access-service");
+const MAX_LOKASI_PER_USER = 2;
 
 const STOCK_OPNAME_STATUS = {
   NOT_STARTED: "not_started",
@@ -31,6 +28,200 @@ const STOCK_OPNAME_STATUS = {
 const UNKNOWN_BLOK_CODE = "TIDAK_DIKETAHUI";
 const UNKNOWN_LOCATION_ID = 0;
 const UNKNOWN_LOCATION_LABEL = "Lokasi Tidak Diketahui";
+
+// ================================================================
+// Penugasan lokasi (MstUserLokasiAccess) — kepala gudang menugaskan user ke
+// lokasi UNTUK SATU SESI STOCK OPNAME tertentu (di-scope NoSO). Begitu NoSO
+// selesai, baris terkait dihapus (lihat revokeAccessByStockOpname, dipanggil
+// dari completeStockOpname di bawah).
+// ================================================================
+
+async function listAllUsers() {
+  const pool = await poolPromise;
+  const result = await pool.request().query(`
+    SELECT TOP (1000)
+      IdUsername,
+      Username,
+      FName,
+      LName,
+      DefaultPage,
+      Status,
+      IsEnable,
+      EmployeeID,
+      CompanyID,
+      Nik
+    FROM [dbo].[MstUsername]
+    WHERE IsEnable = 1
+    ORDER BY Username ASC;
+  `);
+  return result.recordset || [];
+}
+
+async function listUsersByLokasi(blok, idLokasi, stockOpnameNo) {
+  const pool = await poolPromise;
+  const noso = String(stockOpnameNo || "").trim();
+  const request = pool
+    .request()
+    .input("blok", sql.VarChar(100), blok)
+    .input("idLokasi", sql.Int, idLokasi);
+  if (noso) request.input("noso", sql.VarChar(20), noso);
+
+  const result = await request.query(`
+      SELECT a.NoSO, a.Blok, a.IdLokasi, a.IdUsername, u.Username, u.FName, u.LName, a.CreatedAt
+      FROM [dbo].[MstUserLokasiAccess] a
+      LEFT JOIN [dbo].[MstUsername] u ON u.IdUsername = a.IdUsername
+      WHERE a.Blok = @blok AND a.IdLokasi = @idLokasi
+      ${noso ? "AND a.NoSO = @noso" : ""}
+      ORDER BY u.Username ASC;
+    `);
+  return result.recordset || [];
+}
+
+// Semua baris milik user yang MASIH ADA di tabel ini otomatis berarti
+// "masih berjalan" — begitu NoSO-nya complete, baris dihapus.
+async function listLokasiByUser(idUsername) {
+  const pool = await poolPromise;
+  const result = await pool
+    .request()
+    .input("idUsername", sql.Int, idUsername).query(`
+      SELECT a.NoSO, a.Blok, a.IdLokasi, a.IdUsername, a.CreatedAt, l.Description AS description
+      FROM [dbo].[MstUserLokasiAccess] a
+      LEFT JOIN [dbo].[MstLokasi] l
+        ON l.Blok = a.Blok AND l.IdLokasi = a.IdLokasi
+      WHERE a.IdUsername = @idUsername
+      ORDER BY a.Blok ASC, a.IdLokasi ASC;
+    `);
+  return result.recordset || [];
+}
+
+async function assignAccess({ blok, idLokasi, idUsername, stockOpnameNo }) {
+  const noso = String(stockOpnameNo || "").trim();
+  if (!noso) throw badReq("stockOpnameNo wajib diisi");
+
+  const pool = await poolPromise;
+
+  const existingRes = await pool
+    .request()
+    .input("blok", sql.VarChar(100), blok)
+    .input("idLokasi", sql.Int, idLokasi)
+    .input("idUsername", sql.Int, idUsername).query(`
+      SELECT DISTINCT a.Blok, a.IdLokasi, u.Username
+      FROM [dbo].[MstUserLokasiAccess] a
+      LEFT JOIN [dbo].[MstUsername] u ON u.IdUsername = a.IdUsername
+      WHERE a.IdUsername = @idUsername
+        AND NOT (a.Blok = @blok AND a.IdLokasi = @idLokasi);
+    `);
+
+  const otherLokasi = existingRes.recordset || [];
+  if (otherLokasi.length >= MAX_LOKASI_PER_USER) {
+    const username = otherLokasi[0]?.Username || `#${idUsername}`;
+    const lokasiList = otherLokasi
+      .map((r) => `${r.Blok}${r.IdLokasi}`)
+      .join(", ");
+    throw conflict(
+      `User ${username} sudah memiliki ${MAX_LOKASI_PER_USER} lokasi (${lokasiList}), tidak bisa menambah lokasi baru`,
+    );
+  }
+
+  await pool
+    .request()
+    .input("noso", sql.VarChar(20), noso)
+    .input("blok", sql.VarChar(100), blok)
+    .input("idLokasi", sql.Int, idLokasi)
+    .input("idUsername", sql.Int, idUsername).query(`
+      IF NOT EXISTS (
+        SELECT 1 FROM [dbo].[MstUserLokasiAccess]
+        WHERE NoSO = @noso AND Blok = @blok AND IdLokasi = @idLokasi AND IdUsername = @idUsername
+      )
+      INSERT INTO [dbo].[MstUserLokasiAccess] (NoSO, Blok, IdLokasi, IdUsername)
+      VALUES (@noso, @blok, @idLokasi, @idUsername);
+    `);
+  return { stockOpnameNo: noso, blok, idLokasi, idUsername };
+}
+
+async function revokeAccess({ blok, idLokasi, idUsername, stockOpnameNo }) {
+  const noso = String(stockOpnameNo || "").trim();
+  if (!noso) throw badReq("stockOpnameNo wajib diisi");
+
+  const pool = await poolPromise;
+  const result = await pool
+    .request()
+    .input("noso", sql.VarChar(20), noso)
+    .input("blok", sql.VarChar(100), blok)
+    .input("idLokasi", sql.Int, idLokasi)
+    .input("idUsername", sql.Int, idUsername).query(`
+      DELETE FROM [dbo].[MstUserLokasiAccess]
+      WHERE NoSO = @noso AND Blok = @blok AND IdLokasi = @idLokasi AND IdUsername = @idUsername;
+    `);
+
+  if (result.rowsAffected[0] === 0) {
+    throw notFound(
+      `Assignment untuk user ${idUsername} pada lokasi ${blok}/${idLokasi} (NoSO ${noso}) tidak ditemukan`,
+    );
+  }
+
+  return { stockOpnameNo: noso, blok, idLokasi, idUsername };
+}
+
+// Dipanggil dari completeStockOpname (di bawah) saat NoSO ditandai selesai —
+// semua penugasan lokasi utk NoSO tsb sudah tidak relevan. `tx` opsional:
+// kalau dikirim (sql.Transaction), DELETE ikut transaksi yang sama supaya
+// atomic dengan proses complete.
+async function revokeAccessByStockOpname(stockOpnameNo, tx) {
+  const noso = String(stockOpnameNo || "").trim();
+  if (!noso) return;
+
+  const request = tx ? new sql.Request(tx) : (await poolPromise).request();
+  await request.input("noso", sql.VarChar(20), noso).query(`
+    DELETE FROM [dbo].[MstUserLokasiAccess] WHERE NoSO = @noso;
+  `);
+}
+
+async function listAllowedUsersGroupedByLokasi(blok, stockOpnameNo) {
+  const pool = await poolPromise;
+  const noso = String(stockOpnameNo || "").trim();
+  const request = pool.request().input("blok", sql.VarChar(100), blok);
+  if (noso) request.input("noso", sql.VarChar(20), noso);
+
+  const result = await request.query(`
+      SELECT a.IdLokasi, a.IdUsername, u.Username, u.FName, u.LName
+      FROM [dbo].[MstUserLokasiAccess] a
+      LEFT JOIN [dbo].[MstUsername] u ON u.IdUsername = a.IdUsername
+      WHERE a.Blok = @blok
+      ${noso ? "AND a.NoSO = @noso" : ""}
+      ORDER BY a.IdLokasi ASC, u.Username ASC;
+    `);
+
+  const map = new Map();
+  for (const row of result.recordset || []) {
+    if (!map.has(row.IdLokasi)) map.set(row.IdLokasi, []);
+    map.get(row.IdLokasi).push({
+      idUsername: row.IdUsername,
+      username: row.Username,
+      fullName: [row.FName, row.LName].filter(Boolean).join(" ") || null,
+    });
+  }
+  return map;
+}
+
+async function isUserAllowedForLokasi({ blok, idLokasi, idUsername, stockOpnameNo }) {
+  const pool = await poolPromise;
+  const noso = String(stockOpnameNo || "").trim();
+  const request = pool
+    .request()
+    .input("blok", sql.VarChar(100), blok)
+    .input("idLokasi", sql.Int, idLokasi)
+    .input("idUsername", sql.Int, idUsername);
+  if (noso) request.input("noso", sql.VarChar(20), noso);
+
+  const result = await request.query(`
+      SELECT TOP 1 1 AS found
+      FROM [dbo].[MstUserLokasiAccess]
+      WHERE Blok = @blok AND IdLokasi = @idLokasi AND IdUsername = @idUsername
+      ${noso ? "AND NoSO = @noso" : ""};
+    `);
+  return (result.recordset || []).length > 0;
+}
 
 async function getAllKategoriWithStatus({ year, month } = {}) {
   const kategoriList = await getAllKategori();
@@ -496,6 +687,10 @@ async function completeStockOpname({ stockOpnameNo, ctx }) {
       WHERE NoSO = @stockOpnameNo;
     `);
 
+    // Penugasan lokasi (MstUserLokasiAccess) sifatnya per-sesi — begitu NoSO
+    // ini selesai, semua penugasannya sudah tidak relevan dan dihapus.
+    await revokeAccessByStockOpname(no, tx);
+
     await tx.commit();
 
     return {
@@ -814,7 +1009,7 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
 
   // Dipakai FE utk nampilin siapa saja user yang boleh akses tiap lokasi
   // (lihat gating di stock-opname-v2-routes.js pada endpoint .../lokasi/:locationId/label).
-  const allowedUsersByLokasi = await listAllowedUsersGroupedByLokasi(blokTrim);
+  const allowedUsersByLokasi = await listAllowedUsersGroupedByLokasi(blokTrim, no);
   const getAllowedUsers = (locationId) => allowedUsersByLokasi.get(locationId) || [];
 
   const scannedMatchSql = [
@@ -983,7 +1178,9 @@ async function getMyLokasiForStockOpname({ stockOpnameNo, idUsername, isBypass }
   if (!isBypass) {
     const assigned = await listLokasiByUser(idUsername);
     const allowedKeys = new Set(
-      assigned.map((r) => `${normBlokValue(r.Blok)}|${r.IdLokasi}`),
+      assigned
+        .filter((r) => r.NoSO === no)
+        .map((r) => `${normBlokValue(r.Blok)}|${r.IdLokasi}`),
     );
     rows = rows.filter((row) =>
       allowedKeys.has(`${normBlokValue(row.blok)}|${row.locationId}`),
@@ -1009,6 +1206,98 @@ async function getMyLokasiForStockOpname({ stockOpnameNo, idUsername, isBypass }
     data,
     totalRecords: data.length,
   };
+}
+
+// Lokasi milik user (lintas NoSO/kategori), digabung dengan
+// labelCount/scannedCount dari NoSO yang tersimpan di masing-masing baris
+// assignment MstUserLokasiAccess (bukan auto-resolve "NoSO aktif" —
+// assignment sekarang SUDAH menyimpan NoSO-nya sendiri per baris).
+// Dipakai FE utk "lokasi tugas saya"
+// tanpa perlu tahu NoSO-nya lebih dulu.
+async function listMyLokasiWithLabelCount(idUsername) {
+  const myLokasi = await listLokasiByUser(idUsername);
+  if (!myLokasi.length) return [];
+
+  const pool = await poolPromise;
+  const nosoList = [...new Set(myLokasi.map((r) => r.NoSO))];
+
+  const catReq = pool.request();
+  nosoList.forEach((noso, i) => catReq.input(`noso${i}`, sql.VarChar, noso));
+  const catRes = await catReq.query(`
+    SELECT h.NoSO, k.KodeKategori
+    FROM [dbo].[StockOpname_h] h
+    INNER JOIN [dbo].[MstKategori] k ON k.IdKategori = h.IdKategori
+    WHERE h.NoSO IN (${nosoList.map((_, i) => `@noso${i}`).join(", ")});
+  `);
+  const categoryByNoso = new Map(
+    (catRes.recordset || []).map((r) => [
+      r.NoSO,
+      String(r.KodeKategori || "").trim().toLowerCase(),
+    ]),
+  );
+
+  const rowsByNoso = new Map();
+  for (const loc of myLokasi) {
+    if (!rowsByNoso.has(loc.NoSO)) rowsByNoso.set(loc.NoSO, []);
+    rowsByNoso.get(loc.NoSO).push(loc);
+  }
+
+  const data = [];
+
+  for (const [noso, rowsForNoso] of rowsByNoso) {
+    const categoryCode = categoryByNoso.get(noso) || null;
+    const cfg = categoryCode && STOCK_OPNAME_SNAPSHOT_CONFIG[categoryCode];
+    const showWeight = categoryCode !== "furniturewip";
+
+    const snapshotByKey = new Map();
+    if (cfg) {
+      const scannedMatchSql = [
+        "h.NoSO = src.NoSO",
+        ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
+      ].join(" AND ");
+
+      const snapshotRes = await pool
+        .request()
+        .input("stockOpnameNo", sql.VarChar, noso).query(`
+          SELECT
+            src.Blok AS blok,
+            src.IdLokasi AS locationId,
+            COUNT(*) AS labelCount,
+            ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+            SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
+          FROM dbo.${cfg.snapshotTable} AS src
+          LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
+          WHERE src.NoSO = @stockOpnameNo AND src.Blok IS NOT NULL AND src.IdLokasi IS NOT NULL
+          GROUP BY src.Blok, src.IdLokasi;
+        `);
+
+      for (const row of snapshotRes.recordset || []) {
+        snapshotByKey.set(`${normBlokValue(row.blok)}|${row.locationId}`, row);
+      }
+    }
+
+    // Selalu tampilkan NoSO yang di-assign, walau belum/tidak ada label
+    // (labelCount 0) di lokasi tsb — supaya user tetap tahu sedang
+    // ditugaskan ke NoSO mana, bukan cuma saat ada datanya saja.
+    for (const assignedRow of rowsForNoso) {
+      const key = `${normBlokValue(assignedRow.Blok)}|${assignedRow.IdLokasi}`;
+      const snap = snapshotByKey.get(key);
+      data.push({
+        stockOpnameNo: noso,
+        categoryCode,
+        blok: assignedRow.Blok,
+        locationId: assignedRow.IdLokasi,
+        description: assignedRow.description ?? `Lokasi ${assignedRow.IdLokasi}`,
+        labelCount: snap?.labelCount ?? 0,
+        scannedCount: snap?.scannedCount ?? 0,
+        ...(showWeight
+          ? { totalWeight: snap?.totalWeight ?? 0 }
+          : { totalPcs: snap?.totalPcs ?? 0 }),
+      });
+    }
+  }
+
+  return data;
 }
 
 async function insertStockOpnameHasil({
@@ -1274,4 +1563,13 @@ module.exports = {
   getAllBlok,
   getLocationsInBlok,
   getMyLokasiForStockOpname,
+  listMyLokasiWithLabelCount,
+  listAllUsers,
+  listUsersByLokasi,
+  listLokasiByUser,
+  assignAccess,
+  revokeAccess,
+  revokeAccessByStockOpname,
+  listAllowedUsersGroupedByLokasi,
+  isUserAllowedForLokasi,
 };

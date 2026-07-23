@@ -30,10 +30,20 @@ Dokumentasi endpoint `stock-opname-v2`. Semua route memerlukan header
 | GET    | `/api/stock-opname-v2/transaksi/:stockOpnameNo/jenis/:typeId/label`                  | List label snapshot per jenis                 |
 | POST   | `/api/stock-opname-v2/transaksi/:stockOpnameNo/hasil`                                | Input hasil scan (catat label sudah diopname)  |
 | GET    | `/api/stock-opname-v2/transaksi/:stockOpnameNo/blok`                                 | List blok yang ada pada satu SO                |
+| GET    | `/api/stock-opname-v2/transaksi/:stockOpnameNo/lokasi`                               | Lokasi tugas user (app scan), scoped 1 NoSO    |
 | GET    | `/api/stock-opname-v2/transaksi/:stockOpnameNo/blok/:blok/lokasi`                    | List lokasi dalam satu blok                    |
 | GET    | `/api/stock-opname-v2/transaksi/:stockOpnameNo/blok/:blok/lokasi/:locationId/label`  | List label snapshot per lokasi                 |
+| GET    | `/api/stock-opname-v2/my-lokasi`                                                     | Lokasi tugas user, lintas NoSO/kategori sekaligus |
+| GET    | `/api/stock-opname-v2/lokasi-access/users`                                           | List semua user (buat FE picker assign lokasi) |
+| GET    | `/api/stock-opname-v2/lokasi-access/blok/:blok/lokasi/:idLokasi`                     | List user yang ditugaskan ke satu lokasi       |
+| GET    | `/api/stock-opname-v2/lokasi-access/user/:idUsername`                                | List lokasi yang ditugaskan ke satu user       |
+| POST   | `/api/stock-opname-v2/lokasi-access`                                                 | Tugaskan user ke lokasi untuk satu NoSO         |
+| DELETE | `/api/stock-opname-v2/lokasi-access/:stockOpnameNo/:blok/:idLokasi/:idUsername`      | Cabut penugasan lokasi                          |
 
-**~~Path lama (deprecated)~~**: `no-stock-opname` — sudah dihapus, ganti dengan `transaksi`.
+**~~Path lama (deprecated)~~**: `no-stock-opname` — sudah dihapus, ganti dengan `transaksi`. Endpoint
+`/api/user-lokasi-access/...` juga sudah **dihapus** — semua fungsinya pindah
+ke `/api/stock-opname-v2/lokasi-access/...` (lihat bagian
+[Lokasi Access](#lokasi-access-penugasan-lokasi-per-noso) di bawah).
 
 ---
 
@@ -274,6 +284,48 @@ Response `200` (`404` jika kosong):
 }
 ```
 
+## GET `/transaksi/:stockOpnameNo/lokasi`
+
+Dipakai app scan (field worker): daftar lokasi (lintas blok) pada **satu
+NoSO** yang jadi tugas user yang login, berdasarkan penugasan
+`MstUserLokasiAccess` (lihat [Lokasi Access](#lokasi-access-penugasan-lokasi-per-noso)).
+User dengan permission `*` atau `stockopname:create` (bypass admin) melihat
+seluruh lokasi pada NoSO tsb tanpa filter penugasan.
+
+Butuh `verifyToken` + `attachPermissions` (bukan `requirePermission` — semua
+user login boleh akses, hasilnya yang di-scope).
+
+Response `200` (`404` jika kosong — termasuk kalau user non-bypass belum
+ditugaskan ke lokasi manapun pada NoSO ini):
+
+```json
+{
+  "success": true,
+  "message": "Data lokasi tugas berhasil diambil",
+  "data": {
+    "stockOpnameNo": "...",
+    "categoryId": 1,
+    "categoryCode": "washing",
+    "categoryName": "...",
+    "isComplete": false,
+    "completedAt": null,
+    "data": [
+      {
+        "blok": "A",
+        "locationId": 10,
+        "description": "...",
+        "labelCount": 5,
+        "scannedCount": 2,
+        "totalWeight": 100
+      }
+    ],
+    "totalRecords": 1
+  }
+}
+```
+
+`totalPcs` menggantikan `totalWeight` untuk kategori `furniturewip`.
+
 ## GET `/transaksi/:stockOpnameNo/blok/:blok/lokasi`
 
 Response `200` (`404` jika belum ada lokasi):
@@ -295,6 +347,135 @@ lihat contoh response `data` (array group per jenis) di bagian
 `jenis/:typeId/label` di atas.
 
 Query: `page`, `pageSize`, `search` (opsional).
+
+**Digating** oleh middleware `requireLokasiAccess`: user harus ditugaskan
+(`MstUserLokasiAccess`) ke `Blok`/`IdLokasi`/`stockOpnameNo` ini, kecuali
+permission `*` atau `stockopname:create`. Response `403` kalau tidak
+ditugaskan, `400` kalau `blok`/`locationId` tidak valid.
+
+---
+
+## GET `/my-lokasi`
+
+Lokasi tugas user yang login, **lintas NoSO/kategori sekaligus** — tidak
+perlu tahu NoSO-nya lebih dulu (beda dengan `/transaksi/:stockOpnameNo/lokasi`
+di atas yang scoped ke satu NoSO). Satu item = satu pasangan
+(lokasi, NoSO) yang ditugaskan; kalau satu lokasi ditugaskan di 2 NoSO
+berbeda (kategori berbeda), muncul sebagai 2 item terpisah. `labelCount`
+tetap 0 kalau memang belum/tidak ada label di lokasi tsb untuk NoSO itu
+(item tetap ditampilkan, tidak disembunyikan).
+
+Response `200`:
+
+```json
+{
+  "success": true,
+  "message": "Data lokasi Anda berhasil diambil",
+  "data": [
+    {
+      "stockOpnameNo": "SO.0000000003",
+      "categoryCode": "crusher",
+      "blok": "A",
+      "locationId": 1,
+      "description": "Lokasi 1",
+      "labelCount": 0,
+      "scannedCount": 0,
+      "totalWeight": 0
+    }
+  ],
+  "totalRecords": 1
+}
+```
+
+`totalPcs` menggantikan `totalWeight` untuk kategori `furniturewip`.
+`categoryCode` bisa `null` kalau NoSO-nya sudah tidak ditemukan/kategorinya
+tidak dikenali (mis. data assignment basi dari sebelum NoSO tsb complete).
+
+---
+
+## Lokasi Access (penugasan lokasi per NoSO)
+
+Kepala gudang menugaskan user ke lokasi **untuk satu sesi stock opname
+tertentu** (`MstUserLokasiAccess`, di-scope kolom `NoSO`). Begitu NoSO
+tsb ditandai selesai (`PATCH /transaksi/:stockOpnameNo/complete`), semua
+baris penugasan untuk NoSO itu **otomatis dihapus** — assignment ini
+bukan permanen, cuma berlaku selama sesi SO berjalan.
+
+Semua endpoint di bawah butuh `verifyToken` + `attachPermissions` +
+`requirePermission("stockopname:create")`.
+
+**Aturan: maksimal 2 lokasi per user.** Dihitung dari lokasi *distinct*
+(`Blok`+`IdLokasi`) yang masih ada baris assignment-nya (NoSO manapun,
+karena baris yang NoSO-nya sudah complete otomatis terhapus). Assign ke
+lokasi ke-3 akan gagal `409` sebelum baris ke-3 sempat masuk.
+
+### GET `/lokasi-access/users`
+
+List semua user (dari `MstUsername`, tanpa kolom password) — dipakai FE
+untuk picker saat assign.
+
+```json
+{ "success": true, "message": "Data user berhasil diambil", "data": [ /* ... */ ], "totalRecords": 0 }
+```
+
+### GET `/lokasi-access/blok/:blok/lokasi/:idLokasi`
+
+Query opsional: `stockOpnameNo` — kalau diisi, hasil difilter ke assignment
+NoSO tsb saja; kalau kosong, semua assignment (lintas NoSO) untuk
+lokasi itu.
+
+```json
+{ "success": true, "message": "Data user lokasi berhasil diambil", "data": [ /* ... */ ], "totalRecords": 0 }
+```
+
+### GET `/lokasi-access/user/:idUsername`
+
+Semua lokasi yang saat ini ditugaskan ke user tsb (lintas NoSO).
+
+```json
+{ "success": true, "message": "Data lokasi user berhasil diambil", "data": [ /* ... */ ], "totalRecords": 0 }
+```
+
+### POST `/lokasi-access`
+
+Body:
+
+```json
+{
+  "blok": "A",
+  "idLokasi": 10,
+  "idUsername": 81,
+  "stockOpnameNo": "SO.0000000006"
+}
+```
+
+`stockOpnameNo` **wajib** (`400` kalau kosong). Response `201`:
+
+```json
+{
+  "success": true,
+  "message": "User 81 berhasil ditugaskan ke lokasi A/10 untuk SO.0000000006",
+  "data": { "stockOpnameNo": "SO.0000000006", "blok": "A", "idLokasi": 10, "idUsername": 81 }
+}
+```
+
+`409` kalau user sudah punya 2 lokasi lain yang masih aktif, pesannya
+menyebutkan nama user + daftar lokasinya, mis.:
+`"User budi sudah memiliki 2 lokasi (A10, B20), tidak bisa menambah lokasi baru"`.
+
+### DELETE `/lokasi-access/:stockOpnameNo/:blok/:idLokasi/:idUsername`
+
+Cabut satu penugasan spesifik. Response `200`:
+
+```json
+{
+  "success": true,
+  "message": "Akses user 81 ke lokasi A/10 untuk SO.0000000006 berhasil dicabut",
+  "data": { "stockOpnameNo": "SO.0000000006", "blok": "A", "idLokasi": 10, "idUsername": 81 }
+}
+```
+
+`404` kalau assignment dengan kombinasi NoSO/blok/lokasi/user itu tidak ada.
 
 ---
 
