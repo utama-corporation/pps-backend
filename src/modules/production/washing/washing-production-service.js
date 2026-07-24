@@ -86,6 +86,8 @@ async function getAllProduksi(
   idMesin = null,
   tanggal = null,
   shift = null,
+  complete = null,
+  verified = null,
 ) {
   const pool = await poolPromise;
 
@@ -100,6 +102,11 @@ async function getAllProduksi(
       AND (@idMesin IS NULL OR h.IdMesin = @idMesin)
       AND (@tanggal IS NULL OR CONVERT(date, h.TglProduksi) = @tanggal)
       AND (@shift IS NULL OR h.Shift = @shift)
+      AND (@complete IS NULL OR h.IsComplete = @complete)
+      AND (
+        @verified IS NULL
+        OR (CASE WHEN h.VerifiedAt IS NOT NULL THEN 1 ELSE 0 END) = @verified
+      )
   `;
 
   // 1) Total baris (tetap sederhana)
@@ -114,6 +121,8 @@ async function getAllProduksi(
   countReq.input("idMesin", sql.Int, idMesin);
   countReq.input("tanggal", sql.Date, tanggal);
   countReq.input("shift", sql.Int, shift);
+  countReq.input("complete", sql.Bit, complete);
+  countReq.input("verified", sql.Bit, verified);
 
   const countRes = await countReq.query(countQry);
   const total = countRes.recordset?.[0]?.total || 0;
@@ -175,6 +184,10 @@ async function getAllProduksi(
       h.JamKerja,
       h.Shift,
       h.IsComplete,
+      CASE WHEN h.VerifiedAt IS NOT NULL THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Verified,
+      h.VerifiedBy,
+      h.VerifiedAt,
+      h.VerifiedNote,
       h.CreateBy,
       h.CheckBy1,
       h.CheckBy2,
@@ -221,6 +234,8 @@ async function getAllProduksi(
   dataReq.input("idMesin", sql.Int, idMesin);
   dataReq.input("tanggal", sql.Date, tanggal);
   dataReq.input("shift", sql.Int, shift);
+  dataReq.input("complete", sql.Bit, complete);
+  dataReq.input("verified", sql.Bit, verified);
   dataReq.input("offset", sql.Int, offset);
   dataReq.input("limit", sql.Int, ps);
 
@@ -1215,6 +1230,146 @@ async function completeWashingProduksi(noProduksi, ctx) {
   }
 }
 
+async function verifyWashingProduksi(noProduksi, ctx, note) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+  const verifyNote = String(note || "").trim() || null;
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const checkRes = await new sql.Request(tx).input(
+      "NoProduksi",
+      sql.VarChar(50),
+      no,
+    ).query(`
+        SELECT TOP 1 NoProduksi, IsComplete, VerifiedAt
+        FROM dbo.WashingProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    if (!checkRes.recordset?.length) {
+      throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+    }
+
+    if (!checkRes.recordset[0].IsComplete) {
+      throw conflict(`Produksi ${no} belum complete, tidak bisa diverifikasi.`);
+    }
+
+    if (checkRes.recordset[0].VerifiedAt) {
+      throw conflict(`Produksi ${no} sudah diverifikasi.`);
+    }
+
+    await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), no)
+      .input("ActorId", sql.Int, Math.trunc(actorIdNum))
+      .input("Note", sql.NVarChar(500), verifyNote).query(`
+        UPDATE dbo.WashingProduksi_h
+        SET VerifiedBy = @ActorId,
+            VerifiedAt = SYSUTCDATETIME(),
+            VerifiedNote = @Note
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    await tx.commit();
+
+    return {
+      noProduksi: no,
+      verified: true,
+      verifiedBy: Math.trunc(actorIdNum),
+      verifiedNote: verifyNote,
+    };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
+  }
+}
+
+async function unverifyWashingProduksi(noProduksi, ctx, note) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+  const unverifyNote = String(note || "").trim() || null;
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const checkRes = await new sql.Request(tx).input(
+      "NoProduksi",
+      sql.VarChar(50),
+      no,
+    ).query(`
+        SELECT TOP 1 NoProduksi, VerifiedAt
+        FROM dbo.WashingProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    if (!checkRes.recordset?.length) {
+      throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+    }
+
+    if (!checkRes.recordset[0].VerifiedAt) {
+      throw conflict(`Produksi ${no} belum diverifikasi.`);
+    }
+
+    await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), no)
+      .input("Note", sql.NVarChar(500), unverifyNote).query(`
+        UPDATE dbo.WashingProduksi_h
+        SET VerifiedBy = NULL,
+            VerifiedAt = NULL,
+            VerifiedNote = @Note
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    await tx.commit();
+
+    return {
+      noProduksi: no,
+      verified: false,
+      verifiedNote: unverifyNote,
+    };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
+  }
+}
+
 /**
  * Ambil semua input untuk produksi Washing:
  * - Washing (full)
@@ -1223,7 +1378,7 @@ async function completeWashingProduksi(noProduksi, ctx) {
  * - Bahan Baku Partial
  * - Gilingan Partial
  */
-async function fetchInputs(noProduksi) {
+async function queryRawInputs(noProduksi) {
   const pool = await poolPromise;
   const req = pool.request();
   req.input("no", sql.VarChar(50), noProduksi);
@@ -1338,9 +1493,15 @@ async function fetchInputs(noProduksi) {
 
   const rs = await req.query(q);
 
-  const mainRows = rs.recordsets?.[0] || [];
-  const bbPart = rs.recordsets?.[1] || [];
-  const gilPart = rs.recordsets?.[2] || [];
+  return {
+    mainRows: rs.recordsets?.[0] || [],
+    bbPart: rs.recordsets?.[1] || [],
+    gilPart: rs.recordsets?.[2] || [],
+  };
+}
+
+async function fetchInputs(noProduksi) {
+  const { mainRows, bbPart, gilPart } = await queryRawInputs(noProduksi);
 
   const out = {
     washing: [],
@@ -1418,6 +1579,119 @@ async function fetchInputs(noProduksi) {
   return out;
 }
 
+/**
+ * Sama seperti fetchInputs, tapi digrup per label (mirip shape fetchOutputs:
+ * header + DetailSak[]) supaya frontend tidak perlu grouping manual lagi.
+ */
+async function fetchInputsV2(noProduksi) {
+  const { mainRows, bbPart, gilPart } = await queryRawInputs(noProduksi);
+
+  const washingMap = new Map();
+  const bbMap = new Map();
+  const gilinganMap = new Map();
+
+  // ===================== MAIN ROWS =====================
+  for (const r of mainRows) {
+    if (r.Src === "washing") {
+      if (!washingMap.has(r.Ref1)) {
+        washingMap.set(r.Ref1, {
+          NoProduksi: r.NoProduksi,
+          NoWashing: r.Ref1,
+          IdJenis: r.IdJenis ?? null,
+          NamaJenis: r.NamaJenis ?? null,
+          DetailSak: [],
+        });
+      }
+      washingMap.get(r.Ref1).DetailSak.push({
+        NoSak: r.Ref2 ?? null,
+        Berat: r.Berat ?? null,
+        BeratAct: r.BeratAct ?? null,
+        IsPartial: r.IsPartial ?? null,
+      });
+    } else if (r.Src === "bb") {
+      const key = `${r.Ref1}::${r.Ref2}`;
+      if (!bbMap.has(key)) {
+        bbMap.set(key, {
+          NoProduksi: r.NoProduksi,
+          NoBahanBaku: r.Ref1,
+          NoPallet: r.Ref2,
+          IdJenis: r.IdJenis ?? null,
+          NamaJenis: r.NamaJenis ?? null,
+          DetailSak: [],
+        });
+      }
+      bbMap.get(key).DetailSak.push({
+        NoSak: r.Ref3 ?? null,
+        NoBBPartial: null,
+        Berat: r.Berat ?? null,
+        BeratAct: r.BeratAct ?? null,
+        IsPartial: r.IsPartial ?? null,
+      });
+    } else if (r.Src === "gilingan") {
+      if (!gilinganMap.has(r.Ref1)) {
+        gilinganMap.set(r.Ref1, {
+          NoProduksi: r.NoProduksi,
+          NoGilingan: r.Ref1,
+          IdJenis: r.IdJenis ?? null,
+          NamaJenis: r.NamaJenis ?? null,
+          DetailSak: [],
+        });
+      }
+      gilinganMap.get(r.Ref1).DetailSak.push({
+        NoGilinganPartial: null,
+        Berat: r.Berat ?? null,
+        IsPartial: r.IsPartial ?? null,
+      });
+    }
+  }
+
+  // ===================== PARTIAL BB =====================
+  for (const p of bbPart) {
+    const key = `${p.NoBahanBaku}::${p.NoPallet}`;
+    if (!bbMap.has(key)) {
+      bbMap.set(key, {
+        NoProduksi: noProduksi,
+        NoBahanBaku: p.NoBahanBaku ?? null,
+        NoPallet: p.NoPallet ?? null,
+        IdJenis: p.IdJenis ?? null,
+        NamaJenis: p.NamaJenis ?? null,
+        DetailSak: [],
+      });
+    }
+    bbMap.get(key).DetailSak.push({
+      NoSak: p.NoSak ?? null,
+      NoBBPartial: p.NoBBPartial ?? null,
+      Berat: p.Berat ?? null,
+      BeratAct: null,
+      IsPartial: true,
+    });
+  }
+
+  // ===================== PARTIAL GILINGAN =====================
+  for (const p of gilPart) {
+    if (!gilinganMap.has(p.NoGilingan)) {
+      gilinganMap.set(p.NoGilingan, {
+        NoProduksi: noProduksi,
+        NoGilingan: p.NoGilingan ?? null,
+        IdJenis: p.IdJenis ?? null,
+        NamaJenis: p.NamaJenis ?? null,
+        DetailSak: [],
+      });
+    }
+    gilinganMap.get(p.NoGilingan).DetailSak.push({
+      NoGilinganPartial: p.NoGilinganPartial ?? null,
+      Berat: p.Berat ?? null,
+      IsPartial: true,
+    });
+  }
+
+  return {
+    washing: Array.from(washingMap.values()),
+    bb: Array.from(bbMap.values()),
+    gilingan: Array.from(gilinganMap.values()),
+  };
+}
+
 async function fetchOutputs(noProduksi) {
   const pool = await poolPromise;
   const req = pool.request();
@@ -1473,6 +1747,15 @@ async function fetchOutputs(noProduksi) {
   }
 
   return Array.from(byWashing.values());
+}
+
+/**
+ * Sama seperti fetchOutputs, tapi dibungkus per kategori sumber (saat ini
+ * hanya "washing") supaya shape-nya konsisten dengan fetchInputsV2.
+ */
+async function fetchOutputsV2(noProduksi) {
+  const washing = await fetchOutputs(noProduksi);
+  return { washing };
 }
 
 async function getFormulaInputsByNoProduksi(noProduksi) {
@@ -2137,10 +2420,14 @@ module.exports = {
   getAllProduksi,
   createWashingProduksi,
   completeWashingProduksi,
+  verifyWashingProduksi,
+  unverifyWashingProduksi,
   updateWashingProduksi,
   deleteWashingProduksi,
   fetchInputs,
+  fetchInputsV2,
   fetchOutputs,
+  fetchOutputsV2,
   getFormulaInputsByNoProduksi,
   validateLabel,
   upsertInputsAndPartials,

@@ -69,6 +69,9 @@ async function getAllProduksi(req, res) {
     shift = parsedShift;
   }
 
+  const complete = toBitUndef(req.query.complete) ?? null;
+  const verified = toBitUndef(req.query.verified) ?? null;
+
   try {
     const { data, total } = await washingProduksiService.getAllProduksi(
       page,
@@ -77,6 +80,8 @@ async function getAllProduksi(req, res) {
       idMesin,
       tanggalRaw || null,
       shift,
+      complete,
+      verified,
     );
 
     return res.status(200).json({
@@ -94,6 +99,8 @@ async function getAllProduksi(req, res) {
         idMesin,
         tanggal: tanggalRaw || null,
         shift,
+        complete,
+        verified,
       },
     });
   } catch (error) {
@@ -521,6 +528,88 @@ async function completeProduksi(req, res) {
   }
 }
 
+async function verifyProduksi(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi wajib" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized (idUsername missing)",
+    });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  const note = String(req.body?.note || "").trim() || null;
+
+  try {
+    const data = await washingProduksiService.verifyWashingProduksi(
+      noProduksi,
+      { actorId, actorUsername, requestId },
+      note,
+    );
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[washing.verifyProduksi]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
+async function unverifyProduksi(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi wajib" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized (idUsername missing)",
+    });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  const note = String(req.body?.note || "").trim() || null;
+
+  try {
+    const data = await washingProduksiService.unverifyWashingProduksi(
+      noProduksi,
+      { actorId, actorUsername, requestId },
+      note,
+    );
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[washing.unverifyProduksi]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
 async function getInputsByNoProduksi(req, res) {
   const noProduksi = (req.params.noProduksi || "").trim();
 
@@ -545,6 +634,30 @@ async function getInputsByNoProduksi(req, res) {
   }
 }
 
+async function getInputsByNoProduksiV2(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+
+  try {
+    const data = await washingProduksiService.fetchInputsV2(noProduksi);
+    return res
+      .status(200)
+      .json({ success: true, message: "Inputs retrieved", data });
+  } catch (e) {
+    console.error("[washing.getInputsByNoProduksiV2]", e);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
+  }
+}
+
 async function getOutputsByNoProduksi(req, res) {
   const noProduksi = (req.params.noProduksi || "").trim();
 
@@ -561,6 +674,30 @@ async function getOutputsByNoProduksi(req, res) {
       .json({ success: true, message: "Outputs retrieved", data });
   } catch (e) {
     console.error("[washing.getOutputsByNoProduksi]", e);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
+  }
+}
+
+async function getOutputsByNoProduksiV2(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+
+  try {
+    const data = await washingProduksiService.fetchOutputsV2(noProduksi);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error("[washing.getOutputsByNoProduksiV2]", e);
     return res.status(500).json({
       success: false,
       message: "Internal Server Error",
@@ -1011,10 +1148,14 @@ module.exports = {
   getAllProduksi,
   createProduksi,
   completeProduksi,
+  verifyProduksi,
+  unverifyProduksi,
   updateProduksi,
   deleteProduksi,
   getInputsByNoProduksi,
+  getInputsByNoProduksiV2,
   getOutputsByNoProduksi,
+  getOutputsByNoProduksiV2,
   getFormulaInputsByNoProduksi,
   validateLabel,
   upsertInputsAndPartials,

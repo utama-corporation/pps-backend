@@ -31,6 +31,18 @@ router.patch(
   washingProduksiController.completeProduksi,
 );
 
+router.patch(
+  "/washing/:noProduksi/verify",
+  verifyToken,
+  washingProduksiController.verifyProduksi,
+);
+
+router.patch(
+  "/washing/:noProduksi/unverify",
+  verifyToken,
+  washingProduksiController.unverifyProduksi,
+);
+
 // req.body support: { ..., isBlower: 1 | 0 }
 router.put(
   "/washing/:noProduksi",
@@ -51,11 +63,29 @@ router.get(
   washingProduksiController.getInputsByNoProduksi,
 );
 
+// GET /api/production/washing/:noProduksi/inputs/v2
+// Sama seperti /inputs, tapi digrup per label (header + DetailSak[])
+// mengikuti format response endpoint /outputs.
+router.get(
+  "/washing/:noProduksi/inputs/v2",
+  verifyToken,
+  washingProduksiController.getInputsByNoProduksiV2,
+);
+
 // GET /api/production/washing/:noProduksi/outputs
 router.get(
   "/washing/:noProduksi/outputs",
   verifyToken,
   washingProduksiController.getOutputsByNoProduksi,
+);
+
+// GET /api/production/washing/:noProduksi/outputs/v2
+// Sama seperti /outputs, tapi dibungkus per kategori sumber (mis. "washing")
+// mengikuti format response endpoint /inputs/v2.
+router.get(
+  "/washing/:noProduksi/outputs/v2",
+  verifyToken,
+  washingProduksiController.getOutputsByNoProduksiV2,
 );
 
 router.get(
