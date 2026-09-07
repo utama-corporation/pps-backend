@@ -3049,6 +3049,72 @@ async function requestCompleteOnTx(tx, noProduksi, actorIdNum) {
     `);
 }
 
+/**
+ * Buka kunci produksi: IsComplete 1 -> 0 + reset kolom Complete request.
+ * Kebalikan dari requestCompleteInjectProduksi.
+ */
+async function uncompleteInjectProduksi(noProduksi, ctx) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const actorIdNum = requireActorId(ctx);
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: actorIdNum,
+      actorUsername,
+      requestId,
+    });
+
+    const checkRes = await new sql.Request(tx).input(
+      "NoProduksi",
+      sql.VarChar(50),
+      no,
+    ).query(`
+        SELECT TOP 1 NoProduksi, IsComplete
+        FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    if (!checkRes.recordset?.length) {
+      throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+    }
+    if (!checkRes.recordset[0].IsComplete) {
+      throw conflict(`Produksi ${no} belum complete.`);
+    }
+
+    await new sql.Request(tx).input("NoProduksi", sql.VarChar(50), no).query(`
+        UPDATE dbo.InjectProduksi_h
+        SET IsComplete = 0,
+            CompleteRequestStatus = NULL,
+            CompleteRequestedBy = NULL,
+            CompleteRequestedAt = NULL,
+            CompleteDecisionBy = NULL,
+            CompleteDecisionAt = NULL
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    await tx.commit();
+
+    return {
+      noProduksi: no,
+      isComplete: false,
+      status: "incomplete",
+    };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
+  }
+}
+
 async function requestCompleteInjectProduksi(noProduksi, ctx) {
   const no = String(noProduksi || "").trim();
   if (!no) throw badReq("noProduksi wajib");
@@ -5968,6 +6034,7 @@ module.exports = {
   discardInjectPcsPerLabelPending,
   terminateInjectProduksi,
   requestCompleteInjectProduksi,
+  uncompleteInjectProduksi,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
   splitProduksiTime,

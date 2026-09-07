@@ -29,6 +29,13 @@ router.patch(
   hotStampingController.completeProduksi,
 );
 
+// Buka kunci: IsComplete 1 -> 0 (produksi bisa diedit lagi).
+router.patch(
+  "/hot-stamp/:noProduksi/uncomplete",
+  verifyToken,
+  hotStampingController.uncompleteProduksi,
+);
+
 router.put(
   "/hot-stamp/:noProduksi",
   verifyToken,

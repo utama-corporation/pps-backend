@@ -31,6 +31,13 @@ router.patch(
   packingController.completeProduksi,
 );
 
+// Buka kunci: IsComplete 1 -> 0 (produksi bisa diedit lagi).
+router.patch(
+  "/packing/:noPacking/uncomplete",
+  verifyToken,
+  packingController.uncompleteProduksi,
+);
+
 router.put(
   "/packing/:noPacking",
   verifyToken,
