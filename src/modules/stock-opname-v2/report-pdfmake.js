@@ -95,6 +95,7 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
   const scanned = isFWIP ? (totalVal - unscanned) : Math.round((totalVal - unscanned) * 100) / 100;
   const unscannedData = unscannedLabels?.data || [];
   const unscannedTotalRecords = unscannedLabels?.totalRecords ?? unscannedData.length;
+  const unscannedGroups = unscannedLabels?.groups || [];
   const unitLabel = isFWIP ? "pcs" : "kg";
 
   const content = [];
@@ -121,24 +122,32 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
   });
 
   // === LABEL BELUM DITEMUKAN (dikelompokkan per jenis) ===
-  if (unscannedData.length > 0) {
+  if (unscannedTotalRecords > 0) {
     content.push({ text: "Label Belum Ditemukan", style: "h2" });
     content.push({
       text: `${fmtNum(tot.unscannedCount)} dari ${fmtNum(tot.labelCount)} label tidak ditemukan, setara ${fmtNum(unscanned, dig)} ${unitLabel}`,
       style: "callout",
     });
 
-    // Kelompokkan per typeId (idjenis sama digabung), sort by nama
-    const grouped = new Map();
-    for (const r of unscannedData) {
-      const key = r.typeId ?? r.typeName ?? "-";
-      if (!grouped.has(key)) grouped.set(key, { typeName: r.typeName || "-", count: 0, metric: 0 });
-      const g = grouped.get(key);
-      g.count += 1;
-      g.metric += isFWIP ? (r.pcs ?? 0) : (r.weight ?? 0);
-    }
+    const grouped = unscannedGroups.length > 0
+      ? unscannedGroups.map((r) => ({
+          typeName: r.typeName || "-",
+          count: r.labelCount || 0,
+          metric: isFWIP ? (r.totalPcs ?? 0) : (r.totalWeight ?? 0),
+        }))
+      : [...unscannedData.reduce((map, r) => {
+          const key = r.typeId ?? r.typeName ?? "-";
+          if (!map.has(key)) map.set(key, { typeName: r.typeName || "-", count: 0, metric: 0 });
+          const g = map.get(key);
+          g.count += 1;
+          g.metric += isFWIP ? (r.pcs ?? 0) : (r.weight ?? 0);
+          return map;
+        }, new Map()).values()];
 
-    const sorted = [...grouped.entries()].sort((a, b) => a[1].typeName.localeCompare(b[1].typeName));
+    const sorted = grouped.sort((a, b) => a.typeName.localeCompare(b.typeName));
+    const tableTotalMetric = unscannedGroups.length > 0
+      ? grouped.reduce((sum, g) => sum + g.metric, 0)
+      : unscanned;
 
     let no = 0;
     const hdr = [
@@ -149,7 +158,7 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
     ];
 
     const bodyRows = [];
-    for (const [, g] of sorted) {
+    for (const g of sorted) {
       no += 1;
       bodyRows.push([
         { text: fmtNum(no, 0), style: "cellC" },
@@ -163,7 +172,7 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
       { text: "", style: "cell" },
       { text: `TOTAL (${fmtNum(unscannedTotalRecords)} label)`, style: "cell" },
       { text: "", style: "cell" },
-      { text: fmtNum(unscanned, dig), style: "cellR" },
+      { text: fmtNum(tableTotalMetric, dig), style: "cellR" },
     ]);
 
     content.push({
