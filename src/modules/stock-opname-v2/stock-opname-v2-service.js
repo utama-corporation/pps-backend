@@ -2226,6 +2226,15 @@ async function getLaporanStockOpnameData({
       LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
       WHERE src.NoSO = @stockOpnameNo AND h.${cfg.labelColumns[0]} IS NULL;
 
+      SELECT
+        src.${cfg.jenisColumn} AS typeId,
+        COUNT(*) AS labelCount,
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalMetric" : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalMetric"}
+      FROM dbo.${cfg.snapshotTable} AS src
+      LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
+      WHERE src.NoSO = @stockOpnameNo AND h.${cfg.labelColumns[0]} IS NULL
+      GROUP BY src.${cfg.jenisColumn};
+
       SELECT ${unscannedTopSql} ${labelColumnsSql}, src.Blok, src.IdLokasi, src.${cfg.jenisColumn} AS typeId,
         src.${metricColumn} AS metricValue,
         ${labelDateSql}
@@ -2266,6 +2275,7 @@ async function getLaporanStockOpnameData({
     blokRows = [],
     scanRows = [],
     unscannedTotalRows = [],
+    unscannedGroupRows = [],
     unscannedRows = [],
     locationTotalRows = [],
     mismatchRows = [],
@@ -2358,10 +2368,19 @@ async function getLaporanStockOpnameData({
   }));
   const unscannedTotal = unscannedTotalRows[0] || {};
   const totalUnscannedMetric = unscannedTotal.totalUnscannedMetric ?? 0;
+  const unscannedGroups = (unscannedGroupRows || []).map((row) => ({
+    typeId: row.typeId,
+    typeName: typeNameById.get(row.typeId) ?? null,
+    labelCount: row.labelCount,
+    ...(showWeight
+      ? { totalWeight: row.totalMetric ?? 0 }
+      : { totalPcs: row.totalMetric ?? 0 }),
+  }));
   const unscannedLabels = {
     stockOpnameNo: no,
     categoryCode,
     data: unscannedData,
+    groups: unscannedGroups,
     totalRecords: unscannedTotal.totalRecords ?? unscannedData.length,
     ...(showWeight
       ? { totalUnscannedWeight: Math.round(totalUnscannedMetric * 100) / 100 }

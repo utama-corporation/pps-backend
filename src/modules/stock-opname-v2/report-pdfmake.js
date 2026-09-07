@@ -95,6 +95,7 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
   const scanned = isFWIP ? (totalVal - unscanned) : Math.round((totalVal - unscanned) * 100) / 100;
   const unscannedData = unscannedLabels?.data || [];
   const unscannedTotalRecords = unscannedLabels?.totalRecords ?? unscannedData.length;
+  const unscannedGroups = unscannedLabels?.groups || [];
   const unitLabel = isFWIP ? "pcs" : "kg";
 
   const content = [];
@@ -120,39 +121,58 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
     style: "summaryTbl",
   });
 
-  // === LABEL BELUM DITEMUKAN ===
-  if (unscannedData.length > 0) {
+  // === LABEL BELUM DITEMUKAN (dikelompokkan per jenis) ===
+  if (unscannedTotalRecords > 0) {
     content.push({ text: "Label Belum Ditemukan", style: "h2" });
     content.push({
       text: `${fmtNum(tot.unscannedCount)} dari ${fmtNum(tot.labelCount)} label tidak ditemukan, setara ${fmtNum(unscanned, dig)} ${unitLabel}`,
       style: "callout",
     });
 
+    const grouped = unscannedGroups.length > 0
+      ? unscannedGroups.map((r) => ({
+          typeName: r.typeName || "-",
+          count: r.labelCount || 0,
+          metric: isFWIP ? (r.totalPcs ?? 0) : (r.totalWeight ?? 0),
+        }))
+      : [...unscannedData.reduce((map, r) => {
+          const key = r.typeId ?? r.typeName ?? "-";
+          if (!map.has(key)) map.set(key, { typeName: r.typeName || "-", count: 0, metric: 0 });
+          const g = map.get(key);
+          g.count += 1;
+          g.metric += isFWIP ? (r.pcs ?? 0) : (r.weight ?? 0);
+          return map;
+        }, new Map()).values()];
+
+    const sorted = grouped.sort((a, b) => a.typeName.localeCompare(b.typeName));
+    const tableTotalMetric = unscannedGroups.length > 0
+      ? grouped.reduce((sum, g) => sum + g.metric, 0)
+      : unscanned;
+
+    let no = 0;
     const hdr = [
-      { text: "No. Label / Tgl", style: "hdrCell" },
-      { text: "Jenis", style: "hdrCell" },
-      { text: "Lokasi", style: "hdrCellC" },
+      { text: "No", style: "hdrCell" },
+      { text: "Keterangan", style: "hdrCell" },
+      { text: "Jmlh Label", style: "hdrCellR" },
       { text: unitH, style: "hdrCellR" },
     ];
 
-    const truncated = unscannedTotalRecords > unscannedData.length;
-    const rows = unscannedData;
-
-    const bodyRows = rows.map((r) => {
-      const met = isFWIP ? (r.pcs ?? 0) : (r.weight ?? 0);
-      return [
-        labelCell(r),
-        { text: r.typeName || "-", style: "cell" },
-        { text: locLabel(r.blok, r.locationId), style: "cellC" },
-        { text: fmtNum(met, dig), style: "cellR" },
-      ];
-    });
+    const bodyRows = [];
+    for (const g of sorted) {
+      no += 1;
+      bodyRows.push([
+        { text: fmtNum(no, 0), style: "cellC" },
+        { text: g.typeName, style: "cell" },
+        { text: fmtNum(g.count, 0), style: "cellR" },
+        { text: fmtNum(g.metric, dig), style: "cellR" },
+      ]);
+    }
 
     bodyRows.push([
+      { text: "", style: "cell" },
       { text: `TOTAL (${fmtNum(unscannedTotalRecords)} label)`, style: "cell" },
       { text: "", style: "cell" },
-      { text: "", style: "cell" },
-      { text: fmtNum(unscanned, dig), style: "cellR" },
+      { text: fmtNum(tableTotalMetric, dig), style: "cellR" },
     ]);
 
     content.push({
@@ -164,13 +184,6 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
       layout: tblLayout(true),
       style: "summaryTbl",
     });
-
-    if (truncated) {
-      content.push({
-        text: `Menampilkan ${fmtNum(unscannedData.length)} dari ${fmtNum(unscannedTotalRecords)} label belum ditemukan.`,
-        style: "note",
-      });
-    }
   } else {
     content.push({ text: "Label Belum Ditemukan", style: "h2" });
     content.push({ text: "Seluruh label ditemukan saat opname.", style: "callout" });
