@@ -30,6 +30,13 @@ router.patch(
   brokerProduksiController.completeProduksi,
 );
 
+// Buka kunci: IsComplete 1 -> 0 (produksi bisa diedit lagi).
+router.patch(
+  "/broker/:noProduksi/uncomplete",
+  verifyToken,
+  brokerProduksiController.uncompleteProduksi,
+);
+
 router.patch(
   "/broker/:noProduksi/verify",
   verifyToken,

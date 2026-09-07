@@ -27,6 +27,13 @@ router.patch(
   gilinganProduksiController.completeProduksi,
 );
 
+// Buka kunci: IsComplete 1 -> 0 (produksi bisa diedit lagi).
+router.patch(
+  "/gilingan/:noProduksi/uncomplete",
+  verifyToken,
+  gilinganProduksiController.uncompleteProduksi,
+);
+
 // UPDATE
 router.put(
   "/gilingan/:noProduksi",

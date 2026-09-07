@@ -33,6 +33,13 @@ router.patch(
   spannerController.completeProduksi,
 );
 
+// Buka kunci: IsComplete 1 -> 0 (produksi bisa diedit lagi).
+router.patch(
+  "/spanner/:noProduksi/uncomplete",
+  verifyToken,
+  spannerController.uncompleteProduksi,
+);
+
 router.put(
   "/spanner/:noProduksi",
   verifyToken,

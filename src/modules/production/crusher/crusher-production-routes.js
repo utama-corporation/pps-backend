@@ -31,6 +31,13 @@ router.patch(
   ctrl.completeProduksi,
 );
 
+// Buka kunci: IsComplete 1 -> 0 (produksi bisa diedit lagi).
+router.patch(
+  "/crusher/:noCrusherProduksi/uncomplete",
+  verifyToken,
+  ctrl.uncompleteProduksi,
+);
+
 router.put("/crusher/:noCrusherProduksi", verifyToken, ctrl.updateProduksi); // ⬅️ NEW
 
 router.delete("/crusher/:noCrusherProduksi", verifyToken, ctrl.deleteProduksi); // ⬅️ NEW

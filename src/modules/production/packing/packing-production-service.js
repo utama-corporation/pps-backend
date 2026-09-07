@@ -1373,6 +1373,65 @@ async function splitProduksiTime(selector, payload, ctx) {
   }
 }
 
+/**
+ * Buka kunci produksi: IsComplete 1 -> 0. Kebalikan dari completePackingProduksi.
+ */
+async function uncompletePackingProduksi(noPacking, ctx) {
+  const no = String(noPacking || "").trim();
+  if (!no) throw badReq("noPacking wajib");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const checkRes = await new sql.Request(tx)
+      .input("NoPacking", sql.VarChar(50), no)
+      .query(`
+        SELECT TOP 1 NoPacking, IsComplete
+        FROM dbo.PackingProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoPacking = @NoPacking;
+      `);
+
+    if (!checkRes.recordset?.length) {
+      throw notFound(`NoPacking tidak ditemukan: ${no}`);
+    }
+    if (!checkRes.recordset[0].IsComplete) {
+      throw conflict(`Produksi ${no} belum complete.`);
+    }
+
+    await new sql.Request(tx)
+      .input("NoPacking", sql.VarChar(50), no)
+      .query(`
+        UPDATE dbo.PackingProduksi_h
+        SET IsComplete = 0
+        WHERE NoPacking = @NoPacking;
+      `);
+
+    await tx.commit();
+    return { noPacking: no, isComplete: false, status: "incomplete" };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
+  }
+}
+
 async function completePackingProduksi(noPacking, ctx) {
   const no = String(noPacking || "").trim();
   if (!no) throw badReq("noPacking wajib");
@@ -1436,6 +1495,7 @@ module.exports = {
   updatePackingProduksi,
   deletePackingProduksi,
   completePackingProduksi,
+  uncompletePackingProduksi,
   fetchInputs,
   fetchOutputs,
   upsertInputsAndPartials,

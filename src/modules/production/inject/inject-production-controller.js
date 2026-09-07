@@ -842,6 +842,44 @@ async function completeProduksi(req, res) {
   }
 }
 
+async function uncompleteProduksi(req, res) {
+  const noProduksi = String(req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi wajib" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized (idUsername missing)",
+    });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const data = await injectProduksiService.uncompleteInjectProduksi(
+      noProduksi,
+      { actorId, actorUsername, requestId },
+    );
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[inject.uncompleteProduksi]", error);
+    const status = error.statusCode || error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : error.message,
+    });
+  }
+}
+
 // ------------------------------------------------------------
 // ✅ POST Create InjectProduksi_h
 // ------------------------------------------------------------
@@ -1908,6 +1946,7 @@ module.exports = {
   discardPcsPerLabelPending,
   terminateInjectProduksi,
   completeProduksi,
+  uncompleteProduksi,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
   splitProduksiTime,
