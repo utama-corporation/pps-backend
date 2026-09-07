@@ -692,17 +692,19 @@ function getAvailabilityCheckSQL(prefix, tableName) {
 }
 
 // =====================
-// Helper: cek apakah label sedang berstatus IN_TRANSIT di Goods Transfer
+// Helper: cek apakah label sedang IN_TRANSIT di Goods Transfer, yaitu ada scan
+// di dbo.GoodsTransferItemScan_d dengan IsReceived = 0 (sudah discan pengirim,
+// belum diterima penerima).
 // (dipakai untuk mengunci label agar tidak bisa di-mapping/dipakai produksi lain)
 // =====================
 async function isLabelInTransit(labelCode, runner) {
   const pool = runner || (await poolPromise);
   const res = await pool
     .request()
-    .input("LabelCode", sql.NVarChar(50), labelCode).query(`
+    .input("LabelCode", sql.VarChar(50), labelCode).query(`
       SELECT TOP 1 1 AS Found
-      FROM dbo.GoodsTransferItem
-      WHERE LabelCode = @LabelCode AND StatusItem = 'IN_TRANSIT'
+      FROM dbo.GoodsTransferItemScan_d
+      WHERE LabelCode = @LabelCode AND IsReceived = 0
     `);
   return res.recordset.length > 0;
 }

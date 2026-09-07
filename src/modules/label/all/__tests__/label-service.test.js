@@ -34,7 +34,7 @@ const { updateLabelLocation } = require("../label-service");
 // ENABLE_KATEGORI_JENIS_PRECONDITION = false (kondisi kode saat ini):
 //   1. availability check (DateUsage) di tabel header kategori
 //   2. dbo.MstBlok  -> IdWarehouse asal   (beforeIdWarehouse)
-//   3. isLabelInTransit -> dbo.GoodsTransferItem (StatusItem='IN_TRANSIT')
+//   3. isLabelInTransit -> dbo.GoodsTransferItemScan_d (IsReceived = 0)
 //   4. dbo.MstBlok  -> IdWarehouse tujuan (targetIdWarehouse)
 //   5. [BARU] dbo.MstWarehouse -> IdWarehouseGroup utk kedua warehouse
 //   6. UPDATE lokasi
