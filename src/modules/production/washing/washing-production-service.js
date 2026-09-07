@@ -1260,6 +1260,72 @@ async function completeWashingProduksi(noProduksi, ctx) {
   }
 }
 
+/**
+ * Buka kunci produksi: IsComplete 1 -> 0 sehingga produksi bisa diubah lagi.
+ * Kebalikan dari completeWashingProduksi.
+ */
+async function uncompleteWashingProduksi(noProduksi, ctx) {
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const checkRes = await new sql.Request(tx).input(
+      "NoProduksi",
+      sql.VarChar(50),
+      no,
+    ).query(`
+        SELECT TOP 1 NoProduksi, IsComplete
+        FROM dbo.WashingProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    if (!checkRes.recordset?.length) {
+      throw notFound(`NoProduksi tidak ditemukan: ${no}`);
+    }
+
+    if (!checkRes.recordset[0].IsComplete) {
+      throw conflict(`Produksi ${no} belum complete.`);
+    }
+
+    await new sql.Request(tx).input("NoProduksi", sql.VarChar(50), no).query(`
+        UPDATE dbo.WashingProduksi_h
+        SET IsComplete = 0
+        WHERE NoProduksi = @NoProduksi;
+      `);
+
+    await tx.commit();
+
+    return {
+      noProduksi: no,
+      isComplete: false,
+      status: "incomplete",
+    };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw error;
+  }
+}
+
 async function verifyWashingProduksi(noProduksi, ctx, note) {
   const no = String(noProduksi || "").trim();
   if (!no) throw badReq("noProduksi wajib");
@@ -2450,6 +2516,7 @@ module.exports = {
   getAllProduksi,
   createWashingProduksi,
   completeWashingProduksi,
+  uncompleteWashingProduksi,
   verifyWashingProduksi,
   unverifyWashingProduksi,
   updateWashingProduksi,

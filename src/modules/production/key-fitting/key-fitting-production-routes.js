@@ -32,6 +32,13 @@ router.patch(
   keyFittingController.completeProduksi,
 );
 
+// Buka kunci: IsComplete 1 -> 0 (produksi bisa diedit lagi).
+router.patch(
+  "/key-fitting/:noProduksi/uncomplete",
+  verifyToken,
+  keyFittingController.uncompleteProduksi,
+);
+
 router.put(
   "/key-fitting/:noProduksi",
   verifyToken,

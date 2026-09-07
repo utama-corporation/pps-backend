@@ -113,6 +113,13 @@ router.patch(
   injectProduksiController.completeProduksi,
 );
 
+// Buka kunci: IsComplete 1 -> 0 + reset kolom Complete request.
+router.patch(
+  "/inject/:noProduksi/uncomplete",
+  verifyToken,
+  injectProduksiController.uncompleteProduksi,
+);
+
 // Endpoint khusus ubah TglProduksi (cascade ke DateUsage input & DateCreate
 // output). Terpisah dari PUT /inject/:noProduksi karena PUT dipakai platform
 // lain dan tidak boleh berubah perilakunya.

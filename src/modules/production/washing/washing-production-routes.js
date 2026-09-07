@@ -31,6 +31,13 @@ router.patch(
   washingProduksiController.completeProduksi,
 );
 
+// Buka kunci: IsComplete 1 -> 0 (produksi bisa diedit lagi).
+router.patch(
+  "/washing/:noProduksi/uncomplete",
+  verifyToken,
+  washingProduksiController.uncompleteProduksi,
+);
+
 router.patch(
   "/washing/:noProduksi/verify",
   verifyToken,
