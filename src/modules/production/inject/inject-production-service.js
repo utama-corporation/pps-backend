@@ -364,14 +364,6 @@ async function getAllProduksi(
 
       h.IsComplete,
 
-      h.CompleteRequestStatus,
-      h.CompleteRequestedBy,
-      reqUser.Username AS CompleteRequestedByUsername,
-      h.CompleteRequestedAt,
-      h.CompleteDecisionBy,
-      decUser.Username AS CompleteDecisionByUsername,
-      h.CompleteDecisionAt,
-
       h.CreatedAt
 
     FROM dbo.InjectProduksi_h h WITH (NOLOCK)
@@ -381,10 +373,6 @@ async function getAllProduksi(
     LEFT JOIN dbo.MstWarna    wr WITH (NOLOCK) ON wr.IdWarna    = h.IdWarna
     LEFT JOIN dbo.MstCabinetMaterial mm WITH (NOLOCK)
       ON mm.IdCabinetMaterial = h.IdFurnitureMaterial
-    LEFT JOIN dbo.MstUsername reqUser WITH (NOLOCK)
-      ON reqUser.IdUsername = h.CompleteRequestedBy
-    LEFT JOIN dbo.MstUsername decUser WITH (NOLOCK)
-      ON decUser.IdUsername = h.CompleteDecisionBy
     OUTER APPLY (
       SELECT
         (
@@ -3033,25 +3021,20 @@ function requireActorId(ctx) {
 // (bypass PENDING) alih-alih menunggu approval atasan.
 // TODO(next-dev): kembalikan ke alur PENDING begitu approval flow siap.
 // No-op kalau produksi sudah IsComplete=1.
-async function requestCompleteOnTx(tx, noProduksi, actorIdNum) {
+// eslint-disable-next-line no-unused-vars
+async function requestCompleteOnTx(tx, noProduksi, _actorIdNum) {
   await new sql.Request(tx)
-    .input("NoProduksi", sql.VarChar(50), noProduksi)
-    .input("ActorId", sql.Int, actorIdNum).query(`
+    .input("NoProduksi", sql.VarChar(50), noProduksi).query(`
       UPDATE dbo.InjectProduksi_h
-      SET IsComplete = 1,
-          CompleteRequestStatus = 'APPROVED',
-          CompleteRequestedBy = @ActorId,
-          CompleteRequestedAt = SYSUTCDATETIME(),
-          CompleteDecisionBy = @ActorId,
-          CompleteDecisionAt = SYSUTCDATETIME()
+      SET IsComplete = 1
       WHERE NoProduksi = @NoProduksi
         AND IsComplete = 0;
     `);
 }
 
 /**
- * Buka kunci produksi: IsComplete 1 -> 0 + reset kolom Complete request.
- * Kebalikan dari requestCompleteInjectProduksi.
+ * Buka kunci produksi: IsComplete 1 -> 0. Kebalikan dari
+ * requestCompleteInjectProduksi.
  */
 async function uncompleteInjectProduksi(noProduksi, ctx) {
   const no = String(noProduksi || "").trim();
@@ -3091,12 +3074,7 @@ async function uncompleteInjectProduksi(noProduksi, ctx) {
 
     await new sql.Request(tx).input("NoProduksi", sql.VarChar(50), no).query(`
         UPDATE dbo.InjectProduksi_h
-        SET IsComplete = 0,
-            CompleteRequestStatus = NULL,
-            CompleteRequestedBy = NULL,
-            CompleteRequestedAt = NULL,
-            CompleteDecisionBy = NULL,
-            CompleteDecisionAt = NULL
+        SET IsComplete = 0
         WHERE NoProduksi = @NoProduksi;
       `);
 
@@ -3139,7 +3117,7 @@ async function requestCompleteInjectProduksi(noProduksi, ctx) {
       sql.VarChar(50),
       no,
     ).query(`
-        SELECT TOP 1 NoProduksi, IsComplete, CompleteRequestStatus
+        SELECT TOP 1 NoProduksi, IsComplete
         FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoProduksi = @NoProduksi;
       `);
@@ -3153,18 +3131,9 @@ async function requestCompleteInjectProduksi(noProduksi, ctx) {
       throw conflict(`Produksi ${no} sudah complete.`);
     }
 
-    // IsComplete langsung 1 saat operator menekan "Selesaikan Produksi" —
-    // tidak ada alur approval terpisah.
-    await new sql.Request(tx)
-      .input("NoProduksi", sql.VarChar(50), no)
-      .input("ActorId", sql.Int, actorIdNum).query(`
+    await new sql.Request(tx).input("NoProduksi", sql.VarChar(50), no).query(`
         UPDATE dbo.InjectProduksi_h
-        SET IsComplete = 1,
-            CompleteRequestStatus = 'APPROVED',
-            CompleteRequestedBy = @ActorId,
-            CompleteRequestedAt = SYSUTCDATETIME(),
-            CompleteDecisionBy = @ActorId,
-            CompleteDecisionAt = SYSUTCDATETIME()
+        SET IsComplete = 1
         WHERE NoProduksi = @NoProduksi;
       `);
 
