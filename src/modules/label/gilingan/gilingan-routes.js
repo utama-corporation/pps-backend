@@ -12,48 +12,48 @@ router.use(verifyToken, attachPermissions);
 // GET all (pagination + search ?page=&limit=&search=)
 router.get(
   "/labels/gilingan",
-  requirePermission("label_crusher:read"),
+  requirePermission("label_gilingan:read"),
   ctrl.getAll,
 );
 
 // CREATE Gilingan
 router.post(
   "/labels/gilingan",
-  requirePermission("label_crusher:create"),
+  requirePermission("label_gilingan:create"),
   ctrl.create,
 );
 
 // UPDATE Gilingan
 router.put(
   "/labels/gilingan/:noGilingan",
-  requirePermission("label_crusher:update"),
+  requirePermission("label_gilingan:update"),
   ctrl.update,
 );
 
 router.patch(
   "/labels/gilingan/:noGilingan/print",
-  requirePermission("label_crusher:update"),
+  requirePermission("label_gilingan:update"),
   ctrl.incrementHasBeenPrinted,
 );
 
 // DELETE Gilingan
 router.delete(
   "/labels/gilingan/:noGilingan",
-  requirePermission("label_crusher:delete"),
+  requirePermission("label_gilingan:delete"),
   ctrl.delete,
 );
 
 // Example: GET /api/labels/gilingan/partials/V.0000003626
 router.get(
   "/labels/gilingan/partials/:nogilingan",
-  requirePermission("label_crusher:read"), // atau label_gilingan:read kalau kamu punya
+  requirePermission("label_gilingan:read"), // atau label_gilingan:read kalau kamu punya
   ctrl.getGilinganPartialInfo,
 );
 
 // GET /labels/gilingan/:noGilingan/pdf
 router.get(
   "/labels/gilingan/:noGilingan/pdf",
-  requirePermission("label_crusher:read"),
+  requirePermission("label_gilingan:read"),
   ctrl.generatePdf,
 );
 
