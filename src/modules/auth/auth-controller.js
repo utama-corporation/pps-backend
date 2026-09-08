@@ -66,6 +66,11 @@ async function login(req, res) {
     // 🔒 GATE NIK — wajib sebelum token dikeluarkan
     // ================================================================
     let resolvedNik = normalizeNik(user.Nik);
+    // CompanyID (nama database Ascend) + EmployeeID dipakai untuk ambil
+    // FullName dari HRM_Employees. Untuk user yang NIK-nya baru diikat di
+    // bawah, nilai di `user` masih basi -> pakai hasil lookup Ascend.
+    let resolvedCompanyId = user.CompanyID;
+    let resolvedEmployeeId = user.EmployeeID;
 
     if (!resolvedNik) {
       const providedNik = String(nik ?? "").trim();
@@ -133,12 +138,25 @@ async function login(req, res) {
       }
 
       resolvedNik = providedNik;
+      resolvedCompanyId = employee.CompanyID;
+      resolvedEmployeeId = employee.EmployeeID;
     }
 
     // ================================================================
     // ✅ NIK sudah ada / baru saja disimpan -> keluarkan token
     // ================================================================
     const permissions = await getUserPermissions(user.IdUsername);
+    const group = await authService.getUserGroup(user.IdUsername);
+
+    // FullName diambil dari HRM_Employees pada database sesuai CompanyID.
+    // Fallback ke FName + LName di MstUsername kalau tidak ketemu.
+    const hrmFullName = await authService.getEmployeeFullName({
+      companyId: resolvedCompanyId,
+      employeeId: resolvedEmployeeId,
+      nik: resolvedNik,
+    });
+    const fullName =
+      hrmFullName || `${user.FName ?? ""} ${user.LName ?? ""}`.trim();
 
     const token = jwt.sign(
       {
@@ -156,8 +174,11 @@ async function login(req, res) {
       user: {
         idUsername: user.IdUsername,
         username: user.Username,
-        fullName: `${user.FName ?? ""} ${user.LName ?? ""}`.trim(),
+        fullName,
         nik: resolvedNik,
+        companyId: resolvedCompanyId ?? null,
+        idUGroup: group?.idUGroup ?? null,
+        uGroupName: group?.uGroupName ?? null,
         permissions,
       },
     });

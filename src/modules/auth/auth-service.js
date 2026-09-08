@@ -139,4 +139,67 @@ async function bindUserNik({ username, nik, employeeId, companyId }) {
   return result.rowsAffected[0] > 0;
 }
 
-module.exports = { verifyUser, findEmployeeByCode, bindUserNik };
+/**
+ * ✅ Ambil FullName karyawan dari HRM_Employees pada database Ascend yang
+ * sesuai CompanyID user (AS_GSU / AS_UC_2017 / AS_RU). Match utama pakai
+ * EmployeeID, fallback ke EmployeeCode (NIK).
+ *
+ * `companyId` di-whitelist ke NIK_LOOKUP_DATABASES supaya nama database yang
+ * di-interpolasi ke query tidak bisa disisipi nilai sembarang.
+ * @returns {Promise<string | null>}
+ */
+async function getEmployeeFullName({ companyId, employeeId, nik }) {
+  const db = String(companyId ?? "").trim();
+  if (!NIK_LOOKUP_DATABASES.includes(db)) return null;
+
+  const empId = Number(employeeId);
+  const code = String(nik ?? "").trim();
+  if ((!Number.isInteger(empId) || empId <= 0) && !code) return null;
+
+  const pool = await poolPromise;
+  const result = await pool
+    .request()
+    .input("employeeId", sql.Int, Number.isInteger(empId) ? empId : null)
+    .input("nik", sql.VarChar, code || null).query(`
+      SELECT TOP 1 e.FullName
+      FROM [${db}].[dbo].[HRM_Employees] e
+      WHERE (@employeeId IS NOT NULL AND e.EmployeeID = @employeeId)
+         OR (@nik IS NOT NULL AND e.EmployeeCode = @nik)
+      ORDER BY CASE WHEN e.EmployeeID = @employeeId THEN 0 ELSE 1 END
+    `);
+
+  const row = result.recordset[0];
+  const fullName = row?.FullName ? String(row.FullName).trim() : "";
+  return fullName || null;
+}
+
+/**
+ * ✅ Ambil user group milik user (1 user = 1 group di MstUserGroupMember).
+ * @returns {Promise<{idUGroup:number, uGroupName:string} | null>}
+ */
+async function getUserGroup(idUsername) {
+  if (!idUsername) return null;
+
+  const pool = await poolPromise;
+  const result = await pool
+    .request()
+    .input("IdUsername", sql.Int, idUsername).query(`
+      SELECT TOP 1 g.IdUGroup, g.UGroupName
+      FROM dbo.MstUserGroupMember gm
+      INNER JOIN dbo.MstUserGroup g ON g.IdUGroup = gm.IdUGroup
+      WHERE gm.IdUsername = @IdUsername
+      ORDER BY g.IdUGroup
+    `);
+
+  const row = result.recordset[0];
+  if (!row) return null;
+  return { idUGroup: row.IdUGroup, uGroupName: row.UGroupName };
+}
+
+module.exports = {
+  verifyUser,
+  findEmployeeByCode,
+  bindUserNik,
+  getUserGroup,
+  getEmployeeFullName,
+};
