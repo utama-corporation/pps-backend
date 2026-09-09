@@ -31,12 +31,8 @@ router.post("/:noRetur/export-gsu", ctrl.exportGsu);
 
 router.post("/:noRetur/items/:idItem/generate-label", ctrl.generateLabel);
 
-// Target pengganti (item + pcs) adalah bagian dari keputusan penggantian,
-// jadi wewenangnya ikut retur:decide (Sales) — bukan retur:update.
-router.post("/:noRetur/items/:idItem/targets", ctrl.addTurnoverTargets);
-router.put("/:noRetur/targets/:idTarget", ctrl.updateTurnoverTarget);
-router.delete("/:noRetur/targets/:idTarget", ctrl.deleteTurnoverTarget);
-
+// Turnover ("Item yang Dipickup", DIGANTI): scan dicocokkan langsung ke
+// BJReturV3Item_d — tidak ada endpoint target pengganti terpisah lagi.
 router.post("/:noRetur/scan", ctrl.scanAuto);
 router.delete("/:noRetur/turnover/:idTurnover", ctrl.undoScan);
 

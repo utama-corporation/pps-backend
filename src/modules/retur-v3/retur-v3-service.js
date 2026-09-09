@@ -8,6 +8,13 @@ const {
 } = require("../../core/shared/tutup-transaksi-guard");
 const { badReq, conflict, notFound } = require("../../core/utils/http-error");
 const { applyAuditContext } = require("../../core/utils/db-audit-context");
+// Mesin "partial consumption" label fisik — dipakai bareng dengan penjualan.
+const {
+  PARTIAL_CONFIG,
+  lockParentAndAvailablePcs,
+  markParentFullyUsed,
+  createPartial,
+} = require("../../core/shared/label-partial.helper");
 
 const {
   generateBarangJadiLabel,
@@ -110,7 +117,11 @@ exports.getAllRetur = async ({
       h.StatusRetur,
       h.IsComplete,
       (SELECT COUNT(1) FROM dbo.BJReturV3Item_d it WHERE it.NoRetur = h.NoRetur) AS ItemCount,
-      (SELECT ISNULL(SUM(t.Pcs), 0) FROM dbo.BJReturV3TurnoverTarget_d t WHERE t.NoRetur = h.NoRetur) AS TurnoverTargetPcs,
+      -- Target turnover = pcs item retur itu sendiri (like-for-like); hanya
+      -- relevan saat DIGANTI supaya kartu non-DIGANTI tetap '-' (target = 0).
+      CASE WHEN h.StatusRetur = 'DIGANTI'
+        THEN (SELECT ISNULL(SUM(it.Pcs), 0) FROM dbo.BJReturV3Item_d it WHERE it.NoRetur = h.NoRetur)
+        ELSE 0 END AS TurnoverTargetPcs,
       (SELECT ISNULL(SUM(tv.Pcs), 0) FROM dbo.BJReturV3Turnover_d tv WHERE tv.NoRetur = h.NoRetur) AS TurnoverScannedPcs,
       CASE
         WHEN lc.LastClosedDate IS NOT NULL AND CONVERT(date, h.Tanggal) <= lc.LastClosedDate
@@ -172,25 +183,20 @@ exports.getDetail = async (noRetur) => {
   let itemsWithExtra = items;
 
   if (header.StatusRetur === "DIGANTI" && items.length > 0) {
-    // Diagregasi per item lewat target penggantinya (bisa 0..N target per
-    // item, kategori/jenis/pcs bebas beda dari item aslinya) — bukan lagi
-    // dibandingkan langsung ke it.Pcs seperti sebelum ada tabel target.
+    // Turnover dicocokkan langsung ke item retur (like-for-like): target =
+    // it.Pcs, scanned = SUM(BJReturV3Turnover_d.Pcs) untuk IdItem itu.
     const turnoverRes = await pool
       .request()
       .input("No", sql.VarChar(50), no).query(`
         SELECT
-          t.IdItem,
-          SUM(t.Pcs) AS TargetPcs,
-          ISNULL(SUM(s.ScannedPcs), 0) AS ScannedPcs
-        FROM dbo.BJReturV3TurnoverTarget_d t
-        LEFT JOIN (
-          SELECT IdTarget, SUM(Pcs) AS ScannedPcs
-          FROM dbo.BJReturV3Turnover_d
-          WHERE NoRetur = @No
-          GROUP BY IdTarget
-        ) s ON s.IdTarget = t.IdTarget
-        WHERE t.NoRetur = @No
-        GROUP BY t.IdItem
+          it.IdItem,
+          it.Pcs AS TargetPcs,
+          ISNULL(SUM(tv.Pcs), 0) AS ScannedPcs
+        FROM dbo.BJReturV3Item_d it
+        LEFT JOIN dbo.BJReturV3Turnover_d tv
+          ON tv.IdItem = it.IdItem AND tv.NoRetur = @No
+        WHERE it.NoRetur = @No
+        GROUP BY it.IdItem, it.Pcs
       `);
     const aggByItem = new Map(
       (turnoverRes.recordset || []).map((r) => [
@@ -728,236 +734,6 @@ exports.deleteItem = async (noRetur, idItem, ctx) => {
 };
 
 // ---------------------------------------------------------------------------
-// TURNOVER TARGETS (DIGANTI path) — apa yang akan dikirim sebagai
-// pengganti item yang kembali. Diisi Admin setelah keputusan DIGANTI,
-// terpisah dari BJReturV3Item_d karena barang pengganti bisa beda
-// kategori/jenis dari barang yang kembali, dan 1 item retur bisa punya
-// beberapa target (kombinasi jenis pengganti). Tidak ada aturan total pcs
-// target harus sama dengan pcs item retur asalnya — bebas ditentukan Admin.
-// ---------------------------------------------------------------------------
-
-async function selectTargetsWithNamaJenis(tx, idTargets) {
-  if (idTargets.length === 0) return [];
-  const idsJson = JSON.stringify(idTargets.map((id) => ({ id })));
-  const res = await new sql.Request(tx).input(
-    "IdsJson",
-    sql.NVarChar(sql.MAX),
-    idsJson,
-  ).query(`
-    SELECT
-      t.IdTarget, t.NoRetur, t.IdItem, t.KodeKategori, t.IdJenis, t.Pcs,
-      CASE
-        WHEN t.KodeKategori = 'barangjadi' THEN mbj.NamaBJ
-        WHEN t.KodeKategori = 'furniturewip' THEN mcw.Nama
-      END AS NamaJenis
-    FROM dbo.BJReturV3TurnoverTarget_d t
-    LEFT JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = t.IdJenis AND t.KodeKategori = 'barangjadi'
-    LEFT JOIN dbo.MstCabinetWIP mcw ON mcw.IdCabinetWIP = t.IdJenis AND t.KodeKategori = 'furniturewip'
-    WHERE t.IdTarget IN (
-      SELECT j.id FROM OPENJSON(@IdsJson) WITH (id int '$.id') AS j
-    )
-    ORDER BY t.IdTarget ASC
-  `);
-  return res.recordset || [];
-}
-
-exports.addTurnoverTargets = async (noRetur, idItem, targets, ctx) => {
-  const no = String(noRetur || "").trim();
-  const idItemNum = Number(idItem);
-  if (!no) throw badReq("noRetur wajib diisi");
-  if (!Number.isFinite(idItemNum)) throw badReq("idItem tidak valid");
-  if (!Array.isArray(targets) || targets.length === 0) {
-    throw badReq("targets wajib berisi minimal 1 target");
-  }
-
-  for (let i = 0; i < targets.length; i++) {
-    const t = targets[i] || {};
-    assertKodeKategori(t.kodeKategori, `targets[${i}].kodeKategori`);
-    const pcsNum = Number(t.pcs);
-    if (!Number.isFinite(pcsNum) || pcsNum <= 0 || !Number.isInteger(pcsNum)) {
-      throw badReq(`targets[${i}].pcs wajib bilangan bulat positif`);
-    }
-    const idJenisNum = Number(t.idJenis);
-    if (!Number.isFinite(idJenisNum) || idJenisNum <= 0) {
-      throw badReq(`targets[${i}].idJenis wajib diisi`);
-    }
-  }
-
-  const pool = await poolPromise;
-  const tx = new sql.Transaction(pool);
-  const { actorId, actorUsername, requestId } = ctx;
-
-  try {
-    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-    await applyAuditContext(new sql.Request(tx), { actorId, actorUsername, requestId });
-
-    const headerRes = await new sql.Request(tx)
-      .input("No", sql.VarChar(50), no)
-      .query(
-        `SELECT StatusRetur FROM dbo.BJReturV3_h WITH (UPDLOCK,HOLDLOCK) WHERE NoRetur=@No`,
-      );
-    const header = headerRes.recordset[0];
-    if (!header) throw notFound(`NoRetur ${no} tidak ditemukan`);
-    if (header.StatusRetur !== "DIGANTI") {
-      throw conflict("Target pengganti hanya bisa ditambahkan saat StatusRetur=DIGANTI");
-    }
-
-    const itemRes = await new sql.Request(tx)
-      .input("Id", sql.Int, idItemNum)
-      .input("No", sql.VarChar(50), no)
-      .query(`SELECT IdItem FROM dbo.BJReturV3Item_d WHERE IdItem=@Id AND NoRetur=@No`);
-    if (!itemRes.recordset[0]) {
-      throw notFound(`Item ${idItemNum} tidak ditemukan pada retur ${no}`);
-    }
-
-    const createdIds = [];
-    for (const t of targets) {
-      const ok = await jenisExists(tx, t.kodeKategori, Number(t.idJenis));
-      if (!ok) {
-        throw badReq(
-          `idJenis ${t.idJenis} tidak ditemukan untuk kategori ${t.kodeKategori}`,
-        );
-      }
-
-      const ins = await new sql.Request(tx)
-        .input("NoRetur", sql.VarChar(50), no)
-        .input("IdItem", sql.Int, idItemNum)
-        .input("KodeKategori", sql.VarChar(20), t.kodeKategori)
-        .input("IdJenis", sql.Int, Number(t.idJenis))
-        .input("Pcs", sql.Int, Math.trunc(Number(t.pcs)))
-        .input("CreateBy", sql.VarChar(50), actorUsername).query(`
-          INSERT INTO dbo.BJReturV3TurnoverTarget_d (NoRetur, IdItem, KodeKategori, IdJenis, Pcs, CreateBy)
-          OUTPUT INSERTED.IdTarget
-          VALUES (@NoRetur, @IdItem, @KodeKategori, @IdJenis, @Pcs, @CreateBy)
-        `);
-      createdIds.push(ins.recordset[0].IdTarget);
-    }
-
-    const created = await selectTargetsWithNamaJenis(tx, createdIds);
-
-    await tx.commit();
-    return { noRetur: no, idItem: idItemNum, targets: created, audit: { actorId, requestId } };
-  } catch (e) {
-    try {
-      await tx.rollback();
-    } catch (_) {}
-    throw e;
-  }
-};
-
-exports.updateTurnoverTarget = async (noRetur, idTarget, payload, ctx) => {
-  const no = String(noRetur || "").trim();
-  const idTargetNum = Number(idTarget);
-  if (!no) throw badReq("noRetur wajib diisi");
-  if (!Number.isFinite(idTargetNum)) throw badReq("idTarget tidak valid");
-
-  const pool = await poolPromise;
-  const tx = new sql.Transaction(pool);
-  const { actorId, actorUsername, requestId } = ctx;
-
-  try {
-    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-    await applyAuditContext(new sql.Request(tx), { actorId, actorUsername, requestId });
-
-    const targetRes = await new sql.Request(tx)
-      .input("Id", sql.Int, idTargetNum)
-      .input("No", sql.VarChar(50), no)
-      .query(
-        `SELECT * FROM dbo.BJReturV3TurnoverTarget_d WITH (UPDLOCK,HOLDLOCK) WHERE IdTarget=@Id AND NoRetur=@No`,
-      );
-    const target = targetRes.recordset[0];
-    if (!target) throw notFound(`Target ${idTargetNum} tidak ditemukan pada retur ${no}`);
-
-    const scannedRes = await new sql.Request(tx)
-      .input("Id", sql.Int, idTargetNum)
-      .query(`SELECT 1 FROM dbo.BJReturV3Turnover_d WHERE IdTarget=@Id`);
-    if (scannedRes.recordset.length > 0) {
-      throw conflict("Target sudah punya scan, tidak bisa diubah");
-    }
-
-    const kodeKategori = payload?.kodeKategori !== undefined ? payload.kodeKategori : target.KodeKategori;
-    const idJenis = payload?.idJenis !== undefined ? Number(payload.idJenis) : target.IdJenis;
-    const pcs = payload?.pcs !== undefined ? Number(payload.pcs) : target.Pcs;
-
-    assertKodeKategori(kodeKategori);
-    if (!Number.isFinite(pcs) || pcs <= 0 || !Number.isInteger(pcs)) {
-      throw badReq("pcs wajib bilangan bulat positif");
-    }
-    if (!Number.isFinite(idJenis) || idJenis <= 0) {
-      throw badReq("idJenis wajib diisi");
-    }
-
-    const ok = await jenisExists(tx, kodeKategori, idJenis);
-    if (!ok) throw badReq(`idJenis ${idJenis} tidak ditemukan untuk kategori ${kodeKategori}`);
-
-    await new sql.Request(tx)
-      .input("Id", sql.Int, idTargetNum)
-      .input("KodeKategori", sql.VarChar(20), kodeKategori)
-      .input("IdJenis", sql.Int, idJenis)
-      .input("Pcs", sql.Int, Math.trunc(pcs)).query(`
-        UPDATE dbo.BJReturV3TurnoverTarget_d
-        SET KodeKategori=@KodeKategori, IdJenis=@IdJenis, Pcs=@Pcs
-        WHERE IdTarget=@Id
-      `);
-
-    const [updated] = await selectTargetsWithNamaJenis(tx, [idTargetNum]);
-
-    await tx.commit();
-    return updated;
-  } catch (e) {
-    try {
-      await tx.rollback();
-    } catch (_) {}
-    throw e;
-  }
-};
-
-exports.deleteTurnoverTarget = async (noRetur, idTarget, ctx) => {
-  const no = String(noRetur || "").trim();
-  const idTargetNum = Number(idTarget);
-  if (!no) throw badReq("noRetur wajib diisi");
-  if (!Number.isFinite(idTargetNum)) throw badReq("idTarget tidak valid");
-
-  const pool = await poolPromise;
-  const tx = new sql.Transaction(pool);
-  const { actorId, actorUsername, requestId } = ctx;
-
-  try {
-    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-    await applyAuditContext(new sql.Request(tx), { actorId, actorUsername, requestId });
-
-    const targetRes = await new sql.Request(tx)
-      .input("Id", sql.Int, idTargetNum)
-      .input("No", sql.VarChar(50), no)
-      .query(
-        `SELECT IdTarget FROM dbo.BJReturV3TurnoverTarget_d WITH (UPDLOCK,HOLDLOCK) WHERE IdTarget=@Id AND NoRetur=@No`,
-      );
-    if (!targetRes.recordset[0]) {
-      throw notFound(`Target ${idTargetNum} tidak ditemukan pada retur ${no}`);
-    }
-
-    const scannedRes = await new sql.Request(tx)
-      .input("Id", sql.Int, idTargetNum)
-      .query(`SELECT 1 FROM dbo.BJReturV3Turnover_d WHERE IdTarget=@Id`);
-    if (scannedRes.recordset.length > 0) {
-      throw conflict("Target sudah punya scan, tidak bisa dihapus");
-    }
-
-    await new sql.Request(tx)
-      .input("Id", sql.Int, idTargetNum)
-      .query(`DELETE FROM dbo.BJReturV3TurnoverTarget_d WHERE IdTarget=@Id`);
-
-    await tx.commit();
-    return { idTarget: idTargetNum, noRetur: no, audit: { actorId, requestId } };
-  } catch (e) {
-    try {
-      await tx.rollback();
-    } catch (_) {}
-    throw e;
-  }
-};
-
-// ---------------------------------------------------------------------------
 // EXPORT KE AS_GSU (AR_SalesReturnTransit + AR_SalesReturnTransitDetails)
 // Dipanggil otomatis saat keputusan sales disimpan (decide), atau manual via
 // POST /:noRetur/export-gsu. Idempotent-guard: jika NoRetur sudah pernah
@@ -1159,26 +935,9 @@ exports.decide = async (noRetur, decision, body = {}, ctx) => {
         WHERE NoRetur=@No
       `);
 
-    // DIGANTI → buat target pengganti OTOMATIS, satu per item retur,
-    // like-for-like: KodeKategori / IdJenis / Pcs mengikuti item retur
-    // asalnya. Tidak ada input target manual dari frontend. Idempoten
-    // (NOT EXISTS) supaya aman kalau logika ini pernah dijalankan ulang.
-    if (decision === "DIGANTI") {
-      await new sql.Request(tx)
-        .input("No", sql.VarChar(50), no)
-        .input("CreateBy", sql.VarChar(50), actorUsername).query(`
-          INSERT INTO dbo.BJReturV3TurnoverTarget_d
-            (NoRetur, IdItem, KodeKategori, IdJenis, Pcs, CreateBy)
-          SELECT it.NoRetur, it.IdItem, it.KodeKategori, it.IdJenis, it.Pcs, @CreateBy
-          FROM dbo.BJReturV3Item_d it
-          WHERE it.NoRetur = @No
-            AND it.Pcs > 0
-            AND NOT EXISTS (
-              SELECT 1 FROM dbo.BJReturV3TurnoverTarget_d t
-              WHERE t.NoRetur = it.NoRetur AND t.IdItem = it.IdItem
-            );
-        `);
-    }
+    // DIGANTI: turnover ("Item yang Dipickup") dicocokkan langsung ke
+    // BJReturV3Item_d — like-for-like KodeKategori/IdJenis/Pcs. Tidak ada
+    // tabel/seed target pengganti terpisah lagi.
 
     // Otomatis ekspor ke AS_GSU saat keputusan disimpan.
     // Jika retur ini sudah pernah diekspor, akan conflict (rollback).
@@ -1282,20 +1041,22 @@ exports.getOutputs = async (noRetur) => {
 };
 
 // ---------------------------------------------------------------------------
-// TURNOVER (DIGANTI path) — scan mencocokkan ke BJReturV3TurnoverTarget_d
-// (target pengganti), bukan ke BJReturV3Item_d (barang yang kembali) lagi.
+// TURNOVER (DIGANTI path) — scan mencocokkan LANGSUNG ke BJReturV3Item_d
+// (barang yang kembali dipilih), like-for-like: KodeKategori + IdJenis,
+// target pcs = it.Pcs. Tidak ada tabel target pengganti terpisah.
 // ---------------------------------------------------------------------------
 
 // Auto-detect: deteksi kategori+jenis label yang discan (cek BarangJadi lalu
-// FurnitureWIP), lalu cari target pengganti yang KodeKategori+IdJenis-nya
-// cocok dan masih punya sisa (Pcs - ScannedPcs > 0). Kalau ada beberapa
-// target yang cocok, pilih yang IdTarget paling kecil (ditambahkan paling
-// awal) supaya deterministik.
-exports.scanTurnoverAuto = async (noRetur, labelCode, ctx) => {
+// FurnitureWIP), lalu cari item retur yang KodeKategori+IdJenis-nya cocok dan
+// masih punya sisa (Pcs - ScannedPcs > 0). Kalau ada beberapa item yang
+// cocok, pilih IdItem paling kecil (ditambahkan paling awal) supaya
+// deterministik.
+exports.scanTurnoverAuto = async (noRetur, labelCode, ctx, options = {}) => {
   const no = String(noRetur || "").trim();
   const code = String(labelCode || "").trim();
   if (!no) throw badReq("noRetur wajib diisi");
   if (!code) throw badReq("labelCode wajib diisi");
+  const confirmPartial = options.confirmPartial === true;
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -1316,23 +1077,6 @@ exports.scanTurnoverAuto = async (noRetur, labelCode, ctx) => {
       throw conflict("Scan turnover hanya bisa dilakukan saat StatusRetur=DIGANTI");
     }
 
-    // Safety-net untuk retur DIGANTI lama yang diputuskan sebelum target
-    // pengganti dibuat otomatis: seed like-for-like dari item retur (idempoten).
-    await new sql.Request(tx)
-      .input("No", sql.VarChar(50), no)
-      .input("CreateBy", sql.VarChar(50), actorUsername).query(`
-        INSERT INTO dbo.BJReturV3TurnoverTarget_d
-          (NoRetur, IdItem, KodeKategori, IdJenis, Pcs, CreateBy)
-        SELECT it.NoRetur, it.IdItem, it.KodeKategori, it.IdJenis, it.Pcs, @CreateBy
-        FROM dbo.BJReturV3Item_d it
-        WHERE it.NoRetur = @No
-          AND it.Pcs > 0
-          AND NOT EXISTS (
-            SELECT 1 FROM dbo.BJReturV3TurnoverTarget_d t
-            WHERE t.NoRetur = it.NoRetur AND t.IdItem = it.IdItem
-          );
-    `);
-
     const bjRes = await new sql.Request(tx).input("Code", sql.VarChar(50), code)
       .query(`
         SELECT NoBJ AS Code, IdBJ AS IdJenis, ISNULL(Pcs, 0) AS Pcs, DateUsage
@@ -1341,14 +1085,10 @@ exports.scanTurnoverAuto = async (noRetur, labelCode, ctx) => {
       `);
 
     let kodeKategori = null;
-    let table = null;
-    let codeCol = null;
     let label = null;
 
     if (bjRes.recordset.length > 0) {
       kodeKategori = "barangjadi";
-      table = "dbo.BarangJadi";
-      codeCol = "NoBJ";
       label = bjRes.recordset[0];
     } else {
       const fwRes = await new sql.Request(tx).input("Code", sql.VarChar(50), code)
@@ -1359,8 +1099,6 @@ exports.scanTurnoverAuto = async (noRetur, labelCode, ctx) => {
         `);
       if (fwRes.recordset.length > 0) {
         kodeKategori = "furniturewip";
-        table = "dbo.FurnitureWIP";
-        codeCol = "NoFurnitureWIP";
         label = fwRes.recordset[0];
       }
     }
@@ -1368,15 +1106,25 @@ exports.scanTurnoverAuto = async (noRetur, labelCode, ctx) => {
     if (!label) throw badReq(`Label ${code} tidak ditemukan`);
     if (label.DateUsage != null) throw badReq(`Label ${code} sudah terpakai`);
 
+    // Sisa pcs label yang masih tersedia (Pcs parent dikurangi partial yang
+    // sudah pernah dipecah dari label ini) — sama seperti penjualan.
+    const parentAvail = await lockParentAndAvailablePcs(tx, kodeKategori, code);
+    if (!parentAvail) {
+      throw badReq(`Label ${code} tidak ditemukan atau sudah terpakai`);
+    }
+    if (parentAvail.availablePcs <= 0) {
+      throw badReq(`Label ${code} sudah habis pcs-nya (sudah terpakai semua)`);
+    }
+
     const candidatesRes = await new sql.Request(tx)
       .input("No", sql.VarChar(50), no)
       .input("KodeKategori", sql.VarChar(20), kodeKategori)
       .input("IdJenis", sql.Int, Number(label.IdJenis)).query(`
-        SELECT t.IdTarget, t.IdItem, t.Pcs,
-          ISNULL((SELECT SUM(tv.Pcs) FROM dbo.BJReturV3Turnover_d tv WHERE tv.IdTarget = t.IdTarget), 0) AS ScannedPcs
-        FROM dbo.BJReturV3TurnoverTarget_d t WITH (UPDLOCK, HOLDLOCK)
-        WHERE t.NoRetur = @No AND t.KodeKategori = @KodeKategori AND t.IdJenis = @IdJenis
-        ORDER BY t.IdTarget ASC
+        SELECT it.IdItem, it.Pcs,
+          ISNULL((SELECT SUM(tv.Pcs) FROM dbo.BJReturV3Turnover_d tv WHERE tv.IdItem = it.IdItem), 0) AS ScannedPcs
+        FROM dbo.BJReturV3Item_d it WITH (UPDLOCK, HOLDLOCK)
+        WHERE it.NoRetur = @No AND it.KodeKategori = @KodeKategori AND it.IdJenis = @IdJenis
+        ORDER BY it.IdItem ASC
       `);
 
     const candidate = (candidatesRes.recordset || []).find(
@@ -1385,44 +1133,79 @@ exports.scanTurnoverAuto = async (noRetur, labelCode, ctx) => {
 
     if (!candidate) {
       throw badReq(
-        `Tidak ada target pengganti di retur ini yang cocok dengan label ${code} (jenis tidak ditemukan, atau target sudah terpenuhi semua)`,
+        `Tidak ada item retur yang cocok dengan label ${code} (jenis tidak ditemukan, atau kebutuhan sudah terpenuhi semua)`,
       );
     }
 
     const remaining = Number(candidate.Pcs) - Number(candidate.ScannedPcs || 0);
-    const labelPcs = Number(label.Pcs || 0);
 
-    if (labelPcs > remaining) {
-      throw badReq(
-        `Pcs label (${labelPcs}) melebihi sisa target (${remaining}). Scan ditolak seluruhnya (tidak ada partial consumption).`,
-      );
+    let consumedPcs;
+    let noPartial = null;
+    let wasPartialSplit = false;
+
+    if (parentAvail.availablePcs <= remaining) {
+      // Pcs label pas atau kurang dari sisa kebutuhan item — pakai semua sisa
+      // pcs label ini, tandai parent fully-consumed.
+      consumedPcs = parentAvail.availablePcs;
+      await markParentFullyUsed(tx, kodeKategori, code);
+      // Kalau label ini SUDAH pernah dipecah sebelumnya, sisa terakhirnya
+      // pun dicatat sebagai baris partial — supaya SETIAP konsumsi atas
+      // label ber-partial punya NoPartial (paritas dengan penjualan).
+      if (parentAvail.parentPcs > parentAvail.availablePcs) {
+        noPartial = await createPartial(tx, kodeKategori, code, consumedPcs);
+        wasPartialSplit = true;
+      }
+    } else if (!confirmPartial) {
+      // Pcs label melebihi sisa kebutuhan item — jangan langsung tolak, minta
+      // konfirmasi user dulu apakah mau dipecah (partial) sejumlah sisa
+      // kebutuhan. Tidak ada perubahan data, rollback transaksi ini.
+      await tx.rollback();
+      return {
+        needsConfirmation: true,
+        noRetur: no,
+        kodeKategori,
+        idJenis: Number(label.IdJenis),
+        labelCode: code,
+        availablePcs: parentAvail.availablePcs,
+        pcsNeeded: remaining,
+        message:
+          `Label ${code} berisi ${parentAvail.availablePcs} pcs, sedangkan sisa kebutuhan ` +
+          `item ini hanya ${remaining} pcs. Pecah (partial) label ini menjadi ${remaining} pcs ` +
+          `agar bisa dipakai untuk retur ${no}? Sisa ${parentAvail.availablePcs - remaining} pcs ` +
+          `tetap tersedia di label asal untuk dipakai kebutuhan lain.`,
+      };
+    } else {
+      // User sudah konfirmasi — pecah label jadi partial sejumlah sisa
+      // kebutuhan item. LabelCode yang dicatat TETAP kode label asli.
+      consumedPcs = remaining;
+      noPartial = await createPartial(tx, kodeKategori, code, remaining);
+      wasPartialSplit = true;
     }
 
     await new sql.Request(tx)
       .input("NoRetur", sql.VarChar(50), no)
-      .input("IdTarget", sql.Int, candidate.IdTarget)
+      .input("IdItem", sql.Int, candidate.IdItem)
       .input("LabelCode", sql.VarChar(50), code)
-      .input("Pcs", sql.Int, labelPcs)
+      .input("NoPartial", sql.VarChar(50), noPartial)
+      .input("Pcs", sql.Int, consumedPcs)
       .input("ScanBy", sql.VarChar(50), actorUsername).query(`
-        INSERT INTO dbo.BJReturV3Turnover_d (NoRetur, IdTarget, LabelCode, Pcs, ScanBy)
+        INSERT INTO dbo.BJReturV3Turnover_d (NoRetur, IdItem, LabelCode, NoPartial, Pcs, ScanBy)
         OUTPUT INSERTED.IdTurnover
-        VALUES (@NoRetur, @IdTarget, @LabelCode, @Pcs, @ScanBy)
+        VALUES (@NoRetur, @IdItem, @LabelCode, @NoPartial, @Pcs, @ScanBy)
       `);
-
-    await new sql.Request(tx)
-      .input("Code", sql.VarChar(50), code)
-      .query(`UPDATE ${table} SET DateUsage = SYSUTCDATETIME() WHERE ${codeCol} = @Code`);
 
     await tx.commit();
     return {
       noRetur: no,
       idItem: candidate.IdItem,
-      idTarget: candidate.IdTarget,
       kodeKategori,
       idJenis: Number(label.IdJenis),
       labelCode: code,
-      pcs: labelPcs,
-      scannedPcs: Number(candidate.ScannedPcs || 0) + labelPcs,
+      noPartial,
+      partialCode: noPartial,
+      wasPartialSplit,
+      pcs: consumedPcs,
+      scannedPcs: Number(candidate.ScannedPcs || 0) + consumedPcs,
       targetPcs: Number(candidate.Pcs),
       audit: { actorId, requestId },
     };
@@ -1463,20 +1246,67 @@ exports.undoScan = async (noRetur, idTurnover, ctx) => {
       .input("Id", sql.Int, idTurnoverNum)
       .input("No", sql.VarChar(50), no)
       .query(
-        `SELECT tv.*, t.KodeKategori
+        `SELECT tv.*, it.KodeKategori
          FROM dbo.BJReturV3Turnover_d tv WITH (UPDLOCK,HOLDLOCK)
-         INNER JOIN dbo.BJReturV3TurnoverTarget_d t ON t.IdTarget = tv.IdTarget
+         INNER JOIN dbo.BJReturV3Item_d it ON it.IdItem = tv.IdItem
          WHERE tv.IdTurnover=@Id AND tv.NoRetur=@No`,
       );
     const turnover = turnoverRes.recordset[0];
     if (!turnover) throw notFound(`Turnover ${idTurnoverNum} tidak ditemukan`);
 
-    const table = turnover.KodeKategori === "barangjadi" ? "dbo.BarangJadi" : "dbo.FurnitureWIP";
-    const codeCol = turnover.KodeKategori === "barangjadi" ? "NoBJ" : "NoFurnitureWIP";
+    const cfg = PARTIAL_CONFIG[turnover.KodeKategori];
 
-    await new sql.Request(tx)
-      .input("Code", sql.VarChar(50), turnover.LabelCode)
-      .query(`UPDATE ${table} SET DateUsage = NULL WHERE ${codeCol} = @Code`);
+    if (turnover.NoPartial) {
+      // Baris ini memecah partial. Urai: (1) tentukan dulu apakah label sudah
+      // "fully accounted" (DateUsage ke-set & total partial >= Pcs parent) —
+      // itu tanda scan ini yang men-stamp DateUsage lewat markParentFullyUsed;
+      // (2) hapus baris *Partial; (3) hitung ulang IsPartial parent;
+      // (4) clear DateUsage HANYA kalau (1) benar.
+      const parentRes = await new sql.Request(tx)
+        .input("Code", sql.VarChar(50), turnover.LabelCode).query(`
+          SELECT p.Pcs AS ParentPcs, p.DateUsage,
+            ISNULL((SELECT SUM(pp.Pcs) FROM dbo.${cfg.partialTable} pp
+                    WHERE pp.${cfg.partialParentColumn} = p.${cfg.parentColumn}), 0) AS PartialPcs
+          FROM dbo.${cfg.parentTable} p WITH (UPDLOCK, HOLDLOCK)
+          WHERE p.${cfg.parentColumn} = @Code
+        `);
+      const p = parentRes.recordset[0];
+      const fullyAccounted =
+        !!p &&
+        p.DateUsage != null &&
+        Math.round(Number(p.PartialPcs || 0)) >= Math.round(Number(p.ParentPcs || 0));
+
+      await new sql.Request(tx)
+        .input("NoPartial", sql.VarChar(50), turnover.NoPartial)
+        .query(
+          `DELETE FROM dbo.${cfg.partialTable} WHERE ${cfg.partialColumn} = @NoPartial`,
+        );
+
+      await new sql.Request(tx)
+        .input("Code", sql.VarChar(50), turnover.LabelCode).query(`
+          UPDATE dbo.${cfg.parentTable}
+          SET IsPartial = CASE WHEN EXISTS (
+                SELECT 1 FROM dbo.${cfg.partialTable}
+                WHERE ${cfg.partialParentColumn} = @Code
+              ) THEN 1 ELSE 0 END
+          WHERE ${cfg.parentColumn} = @Code
+        `);
+
+      if (fullyAccounted) {
+        await new sql.Request(tx)
+          .input("Code", sql.VarChar(50), turnover.LabelCode).query(`
+            UPDATE dbo.${cfg.parentTable} SET DateUsage = NULL
+            WHERE ${cfg.parentColumn} = @Code AND DateUsage IS NOT NULL
+          `);
+      }
+    } else {
+      // Konsumsi 1x-penuh label utuh — scan ini yang men-stamp DateUsage.
+      await new sql.Request(tx)
+        .input("Code", sql.VarChar(50), turnover.LabelCode)
+        .query(
+          `UPDATE dbo.${cfg.parentTable} SET DateUsage = NULL WHERE ${cfg.parentColumn} = @Code`,
+        );
+    }
 
     await new sql.Request(tx)
       .input("Id", sql.Int, idTurnoverNum)
@@ -1515,59 +1345,34 @@ exports.getTurnover = async (noRetur) => {
   const items = itemsRes.recordset || [];
   if (items.length === 0) return [];
 
-  const targetsRes = await pool
-    .request()
-    .input("No", sql.VarChar(50), no).query(`
-      SELECT
-        t.IdTarget, t.IdItem, t.KodeKategori, t.IdJenis, t.Pcs,
-        CASE
-          WHEN t.KodeKategori = 'barangjadi' THEN mbj.NamaBJ
-          WHEN t.KodeKategori = 'furniturewip' THEN mcw.Nama
-        END AS NamaJenis
-      FROM dbo.BJReturV3TurnoverTarget_d t
-      LEFT JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = t.IdJenis AND t.KodeKategori = 'barangjadi'
-      LEFT JOIN dbo.MstCabinetWIP mcw ON mcw.IdCabinetWIP = t.IdJenis AND t.KodeKategori = 'furniturewip'
-      WHERE t.NoRetur=@No
-      ORDER BY t.IdItem ASC, t.IdTarget ASC
-    `);
-  const targets = targetsRes.recordset || [];
-
   const scansRes = await pool
     .request()
     .input("No", sql.VarChar(50), no).query(`
-      SELECT IdTurnover, IdTarget, LabelCode, Pcs, DateTimeScan
+      SELECT IdTurnover, IdItem, LabelCode, NoPartial, Pcs, DateTimeScan
       FROM dbo.BJReturV3Turnover_d
       WHERE NoRetur=@No
-      ORDER BY IdTarget ASC, IdTurnover ASC
+      ORDER BY IdItem ASC, IdTurnover ASC
     `);
   const scans = scansRes.recordset || [];
 
+  // Satu baris turnover per item retur (like-for-like): targetPcs = it.Pcs.
   return items.map((it) => {
-    const itemTargets = targets.filter((t) => t.IdItem === it.IdItem);
+    const itemScans = scans.filter((s) => s.IdItem === it.IdItem);
+    const scannedPcs = itemScans.reduce((sum, s) => sum + Number(s.Pcs || 0), 0);
     return {
       idItem: it.IdItem,
       kodeKategoriAsal: it.KodeKategori,
       idJenisAsal: it.IdJenis,
       namaJenisAsal: it.NamaJenis,
       pcsAsal: Number(it.Pcs),
-      targets: itemTargets.map((t) => {
-        const targetScans = scans.filter((s) => s.IdTarget === t.IdTarget);
-        const scannedPcs = targetScans.reduce((sum, s) => sum + Number(s.Pcs || 0), 0);
-        return {
-          idTarget: t.IdTarget,
-          kodeKategori: t.KodeKategori,
-          idJenis: t.IdJenis,
-          namaJenis: t.NamaJenis,
-          targetPcs: Number(t.Pcs),
-          scannedPcs,
-          scans: targetScans.map((s) => ({
-            idTurnover: s.IdTurnover,
-            labelCode: s.LabelCode,
-            pcs: Number(s.Pcs),
-            dateTimeScan: s.DateTimeScan,
-          })),
-        };
-      }),
+      scannedPcs,
+      scans: itemScans.map((s) => ({
+        idTurnover: s.IdTurnover,
+        labelCode: s.LabelCode,
+        noPartial: s.NoPartial ?? null,
+        pcs: Number(s.Pcs),
+        dateTimeScan: s.DateTimeScan,
+      })),
     };
   });
 };
@@ -1602,37 +1407,23 @@ exports.markComplete = async (noRetur, ctx) => {
       throw conflict("Retur sudah ditandai selesai sebelumnya");
     }
 
-    // Item tanpa target sama sekali dianggap belum siap ditandai selesai
-    // (bukan "otomatis terpenuhi" karena tidak ada baris untuk dibandingkan).
-    const itemsWithoutTargetRes = await new sql.Request(tx)
-      .input("No", sql.VarChar(50), no).query(`
-        SELECT it.IdItem
-        FROM dbo.BJReturV3Item_d it
-        LEFT JOIN dbo.BJReturV3TurnoverTarget_d t ON t.IdItem = it.IdItem
-        WHERE it.NoRetur = @No AND t.IdTarget IS NULL
-      `);
-    if (itemsWithoutTargetRes.recordset.length > 0) {
-      throw conflict(
-        `Tidak bisa ditandai selesai: masih ada item yang belum ditentukan target penggantinya (${itemsWithoutTargetRes.recordset.length} item)`,
-      );
-    }
-
+    // Setiap item retur harus terpenuhi: SUM(scan pcs) untuk item itu == it.Pcs.
     const unfulfilledRes = await new sql.Request(tx)
       .input("No", sql.VarChar(50), no).query(`
-        SELECT t.IdTarget, t.Pcs, ISNULL(s.ScannedPcs, 0) AS ScannedPcs
-        FROM dbo.BJReturV3TurnoverTarget_d t
+        SELECT it.IdItem, it.Pcs, ISNULL(s.ScannedPcs, 0) AS ScannedPcs
+        FROM dbo.BJReturV3Item_d it
         LEFT JOIN (
-          SELECT IdTarget, SUM(Pcs) AS ScannedPcs
+          SELECT IdItem, SUM(Pcs) AS ScannedPcs
           FROM dbo.BJReturV3Turnover_d
           WHERE NoRetur = @No
-          GROUP BY IdTarget
-        ) s ON s.IdTarget = t.IdTarget
-        WHERE t.NoRetur = @No
-          AND ISNULL(s.ScannedPcs, 0) <> t.Pcs
+          GROUP BY IdItem
+        ) s ON s.IdItem = it.IdItem
+        WHERE it.NoRetur = @No
+          AND ISNULL(s.ScannedPcs, 0) <> it.Pcs
       `);
     if (unfulfilledRes.recordset.length > 0) {
       throw conflict(
-        `Tidak bisa ditandai selesai: masih ada target yang belum fully scanned (${unfulfilledRes.recordset.length} target)`,
+        `Tidak bisa ditandai selesai: masih ada item yang belum fully scanned (${unfulfilledRes.recordset.length} item)`,
       );
     }
 

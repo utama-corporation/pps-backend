@@ -1,126 +1,16 @@
 const { sql, poolPromise } = require("../../../core/config/db");
 const { badReq, notFound, conflict } = require("../../../core/utils/http-error");
 const { applyAuditContext } = require("../../../core/utils/db-audit-context");
-const { generateNextCode } = require("../../../core/utils/sequence-code-helper");
 const {
   detectCategory,
   normalizeLabelCode,
 } = require("../penjualan-category-registry");
-
-const PARTIAL_CONFIG = {
-  furniturewip: {
-    parentTable: "FurnitureWIP",
-    parentColumn: "NoFurnitureWIP",
-    jenisColumn: "IDFurnitureWIP",
-    partialTable: "FurnitureWIPPartial",
-    partialColumn: "NoFurnitureWIPPartial",
-    partialParentColumn: "NoFurnitureWIP",
-    partialPrefix: "BC.",
-  },
-  barangjadi: {
-    parentTable: "BarangJadi",
-    parentColumn: "NoBJ",
-    jenisColumn: "IdBJ",
-    partialTable: "BarangJadiPartial",
-    partialColumn: "NoBJPartial",
-    partialParentColumn: "NoBJ",
-    partialPrefix: "BL.",
-  },
-};
-
-// Lock parent label row (belum pernah fully-consumed) + hitung sisa pcs
-// yang masih tersedia (Pcs parent dikurangi total yang sudah dipecah jadi
-// partial sebelumnya — baik oleh modul lain maupun oleh Penjualan ini).
-async function lockParentAndAvailablePcs(tx, category, noLabel) {
-  const cfg = PARTIAL_CONFIG[category];
-
-  const parentRes = await new sql.Request(tx).input(
-    "NoLabel",
-    sql.VarChar(50),
-    noLabel,
-  ).query(`
-      SELECT ${cfg.parentColumn} AS NoLabel, ${cfg.jenisColumn} AS IdJenis, Pcs AS ParentPcs, IsPartial
-      FROM dbo.${cfg.parentTable} WITH (UPDLOCK, HOLDLOCK)
-      WHERE ${cfg.parentColumn} = @NoLabel AND DateUsage IS NULL
-    `);
-  const parent = parentRes.recordset?.[0];
-  if (!parent) return null;
-
-  const partialRes = await new sql.Request(tx).input(
-    "NoLabel",
-    sql.VarChar(50),
-    noLabel,
-  ).query(`
-      SELECT ISNULL(SUM(Pcs), 0) AS PartialPcs
-      FROM dbo.${cfg.partialTable} WITH (UPDLOCK, HOLDLOCK)
-      WHERE ${cfg.partialParentColumn} = @NoLabel
-    `);
-  const partialPcs = Number(partialRes.recordset?.[0]?.PartialPcs || 0);
-  const parentPcs = Number(parent.ParentPcs || 0);
-  // Pcs kolom partial bertipe float di DB meski nilainya selalu bulat —
-  // bulatkan supaya tidak ada sisa desimal mengambang saat dikonversi ke
-  // sql.Int di query lain.
-  const availablePcs = Math.max(Math.round(parentPcs - partialPcs), 0);
-
-  return { ...parent, parentPcs, availablePcs };
-}
-
-// Tandai parent fully-consumed (dipakai saat availablePcs habis dalam 1x scan).
-async function markParentFullyUsed(tx, category, noLabel) {
-  const cfg = PARTIAL_CONFIG[category];
-  const res = await new sql.Request(tx).input(
-    "NoLabel",
-    sql.VarChar(50),
-    noLabel,
-  ).query(`
-      UPDATE dbo.${cfg.parentTable}
-      SET DateUsage = GETDATE()
-      WHERE ${cfg.parentColumn} = @NoLabel AND DateUsage IS NULL
-    `);
-  return res.rowsAffected?.[0] || 0;
-}
-
-// Pecah [pcs] dari parent jadi baris partial baru — parent.Pcs TIDAK
-// dikurangi (konvensi yang sama dipakai modul lain: sisa pcs parent
-// dihitung on-the-fly dari Pcs - SUM(partial)), parent hanya ditandai
-// IsPartial=1 dan DateUsage TETAP NULL (sisanya masih bisa dipakai lagi).
-async function createPartial(tx, category, noLabel, pcs) {
-  const cfg = PARTIAL_CONFIG[category];
-
-  const gen = () =>
-    generateNextCode(tx, {
-      tableName: `dbo.${cfg.partialTable}`,
-      columnName: cfg.partialColumn,
-      prefix: cfg.partialPrefix,
-      width: 10,
-    });
-
-  let partialCode = await gen();
-  const exist = await new sql.Request(tx)
-    .input("Code", sql.VarChar(50), partialCode)
-    .query(
-      `SELECT 1 FROM dbo.${cfg.partialTable} WITH (UPDLOCK, HOLDLOCK) WHERE ${cfg.partialColumn} = @Code`,
-    );
-  if (exist.recordset.length > 0) {
-    partialCode = await gen();
-  }
-
-  await new sql.Request(tx)
-    .input("Code", sql.VarChar(50), partialCode)
-    .input("Parent", sql.VarChar(50), noLabel)
-    .input("Pcs", sql.Float, pcs).query(`
-      INSERT INTO dbo.${cfg.partialTable} (${cfg.partialColumn}, ${cfg.partialParentColumn}, Pcs)
-      VALUES (@Code, @Parent, @Pcs)
-    `);
-
-  await new sql.Request(tx).input("NoLabel", sql.VarChar(50), noLabel).query(`
-      UPDATE dbo.${cfg.parentTable}
-      SET IsPartial = 1
-      WHERE ${cfg.parentColumn} = @NoLabel AND ISNULL(IsPartial, 0) = 0
-    `);
-
-  return partialCode;
-}
+// Mesin "partial consumption" label fisik — dipakai bareng dengan retur-v3.
+const {
+  lockParentAndAvailablePcs,
+  markParentFullyUsed,
+  createPartial,
+} = require("../../../core/shared/label-partial.helper");
 
 exports.scanLabel = async (noBJJual, noLabelRaw, ctx, options = {}) => {
   const no = String(noBJJual || "").trim();
@@ -231,6 +121,18 @@ exports.scanLabel = async (noBJJual, noLabelRaw, ctx, options = {}) => {
       if (affected === 0) {
         throw conflict(`Label ${noLabel} baru saja dipakai oleh proses lain`);
       }
+
+      // Kalau label ini SUDAH pernah dipecah sebelumnya (sisa tersedia <
+      // Pcs asli parent), sisa terakhirnya pun dicatat sebagai baris
+      // partial — supaya SETIAP konsumsi atas label ber-partial punya
+      // NoPartial. Hanya konsumsi 1x-penuh atas label yang belum pernah
+      // dipecah yang NoPartial-nya NULL. Tidak ada konfirmasi di sini:
+      // seluruh sisa memang dibutuhkan baris ini, tidak ada yang perlu
+      // diputuskan user.
+      if (parent.parentPcs > parent.availablePcs) {
+        partialCode = await createPartial(tx, category, noLabel, consumedPcs);
+        wasPartialSplit = true;
+      }
     } else if (!confirmPartial) {
       // Pcs label melebihi sisa kebutuhan — jangan langsung tolak, minta
       // konfirmasi user dulu apakah mau dipecah (partial) sejumlah sisa
@@ -262,18 +164,22 @@ exports.scanLabel = async (noBJJual, noLabelRaw, ctx, options = {}) => {
     }
 
     // 5) Insert tracking row — NoLabel selalu kode label fisik asli yang
-    // discan user, baik pada konsumsi penuh maupun partial.
+    // discan user, baik pada konsumsi penuh maupun partial. NoPartial
+    // diisi kalau scan ini memecah partial (branch confirmPartial ATAU
+    // sisa terakhir label yang sudah pernah dipecah); NULL berarti
+    // konsumsi 1x-penuh atas label yang belum pernah dipecah.
     await new sql.Request(tx)
       .input("No", sql.VarChar(13), no)
       .input("KodeKategori", sql.VarChar(20), category)
       .input("IdJenis", sql.Int, parent.IdJenis)
       .input("NoLabel", sql.VarChar(50), noLabel)
+      .input("NoPartial", sql.VarChar(50), partialCode)
       .input("Pcs", sql.Int, consumedPcs)
       .input("IdUsername", sql.Int, auditCtx.actorId).query(`
         INSERT INTO dbo.BJJualScanLabel_d (
-          NoBJJual, KodeKategori, IdJenis, NoLabel, Pcs, IdUsername
+          NoBJJual, KodeKategori, IdJenis, NoLabel, NoPartial, Pcs, IdUsername
         )
-        VALUES (@No, @KodeKategori, @IdJenis, @NoLabel, @Pcs, @IdUsername)
+        VALUES (@No, @KodeKategori, @IdJenis, @NoLabel, @NoPartial, @Pcs, @IdUsername)
       `);
 
     // 6) Cek apakah header sudah complete (semua baris terpenuhi)

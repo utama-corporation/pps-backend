@@ -136,7 +136,7 @@ async function getHeaderDetail(noBJJual) {
   const scansRes = await pool
     .request()
     .input("No", sql.VarChar(13), no).query(`
-      SELECT Id, KodeKategori, IdJenis, NoLabel, Pcs, DateTimeScan
+      SELECT Id, KodeKategori, IdJenis, NoLabel, NoPartial, Pcs, DateTimeScan
       FROM dbo.BJJualScanLabel_d WITH (NOLOCK)
       WHERE NoBJJual = @No
       ORDER BY DateTimeScan ASC, Id ASC
@@ -157,6 +157,7 @@ async function getHeaderDetail(noBJJual) {
       .map((s) => ({
         id: s.Id,
         noLabel: s.NoLabel,
+        noPartial: s.NoPartial ?? null,
         pcs: s.Pcs,
         dateTimeScan: s.DateTimeScan,
       })),

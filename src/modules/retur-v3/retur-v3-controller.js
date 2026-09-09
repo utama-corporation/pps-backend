@@ -171,59 +171,27 @@ async function getOutputs(req, res) {
   }
 }
 
-async function addTurnoverTargets(req, res) {
-  if (!requireActor(req, res)) return;
-  try {
-    const targets = (req.body || {}).targets;
-    const data = await service.addTurnoverTargets(
-      req.params.noRetur,
-      req.params.idItem,
-      targets,
-      makeCtx(req),
-    );
-    return res.status(201).json({ success: true, message: "Target pengganti berhasil ditambahkan", data });
-  } catch (e) {
-    return handleError(res, e);
-  }
-}
-
-async function updateTurnoverTarget(req, res) {
-  if (!requireActor(req, res)) return;
-  try {
-    const data = await service.updateTurnoverTarget(
-      req.params.noRetur,
-      req.params.idTarget,
-      req.body || {},
-      makeCtx(req),
-    );
-    return res.status(200).json({ success: true, message: "Target pengganti berhasil diupdate", data });
-  } catch (e) {
-    return handleError(res, e);
-  }
-}
-
-async function deleteTurnoverTarget(req, res) {
-  if (!requireActor(req, res)) return;
-  try {
-    const data = await service.deleteTurnoverTarget(
-      req.params.noRetur,
-      req.params.idTarget,
-      makeCtx(req),
-    );
-    return res.status(200).json({ success: true, message: "Target pengganti berhasil dihapus", data });
-  } catch (e) {
-    return handleError(res, e);
-  }
-}
-
 async function scanAuto(req, res) {
   if (!requireActor(req, res)) return;
   try {
+    const body = req.body || {};
     const data = await service.scanTurnoverAuto(
       req.params.noRetur,
-      (req.body || {}).labelCode,
+      body.labelCode,
       makeCtx(req),
+      { confirmPartial: body.confirmPartial === true },
     );
+    // Pcs label melebihi sisa target & belum dikonfirmasi — backend TIDAK
+    // mengubah data, hanya menawarkan pemecahan (partial). UI panggil ulang
+    // dengan confirmPartial:true.
+    if (data && data.needsConfirmation) {
+      return res.status(200).json({
+        success: true,
+        needsConfirmation: true,
+        message: data.message,
+        data,
+      });
+    }
     return res.status(201).json({ success: true, message: "Scan turnover berhasil", data });
   } catch (e) {
     return handleError(res, e);
@@ -289,9 +257,6 @@ module.exports = {
   decide,
   generateLabel,
   getOutputs,
-  addTurnoverTargets,
-  updateTurnoverTarget,
-  deleteTurnoverTarget,
   scanAuto,
   undoScan,
   getTurnover,

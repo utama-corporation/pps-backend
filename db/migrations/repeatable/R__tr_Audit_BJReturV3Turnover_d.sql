@@ -43,8 +43,9 @@ BEGIN
             SELECT
                 i.IdTurnover,
                 i.NoRetur,
-                i.IdTarget,
+                i.IdItem,
                 i.LabelCode,
+                i.NoPartial,
                 i.Pcs,
                 i.ScanBy
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
@@ -67,8 +68,9 @@ BEGIN
             SELECT
                 d.IdTurnover,
                 d.NoRetur,
-                d.IdTarget,
+                d.IdItem,
                 d.LabelCode,
+                d.NoPartial,
                 d.Pcs,
                 d.ScanBy
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
@@ -77,8 +79,9 @@ BEGIN
             SELECT
                 i.IdTurnover,
                 i.NoRetur,
-                i.IdTarget,
+                i.IdItem,
                 i.LabelCode,
+                i.NoPartial,
                 i.Pcs,
                 i.ScanBy
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
@@ -100,8 +103,9 @@ BEGIN
             SELECT
                 d.IdTurnover,
                 d.NoRetur,
-                d.IdTarget,
+                d.IdItem,
                 d.LabelCode,
+                d.NoPartial,
                 d.Pcs,
                 d.ScanBy
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
