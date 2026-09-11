@@ -1,5 +1,5 @@
 const QRCode = require('qrcode');
-const { getBrowser } = require('./browser');
+const { getBrowser, acquirePageSlot, releasePageSlot } = require('./browser');
 
 /**
  * Generate PDF label dari data + template function
@@ -33,15 +33,21 @@ async function generateLabelPdf(data, templateFn, options = {}) {
   // 2. Render HTML via template function
   const html = templateFn({ ...data, qrBase64 });
 
-  // 3. Launch browser (reuse jika sudah ada)
+  // 3. Launch browser (reuse jika sudah ada), dibatasi jumlah page paralel
+  // supaya batch print (banyak label sekaligus) tidak membuat semua page
+  // rebutan CPU sampai navigation timeout.
+  await acquirePageSlot();
   const browser = await getBrowser();
   const page = await browser.newPage();
 
   try {
+    // HTML label tidak memuat resource eksternal (gambar QR sudah base64
+    // inline), jadi 'domcontentloaded' cukup — tidak perlu menunggu
+    // 'networkidle0' yang rawan molor saat banyak page render bersamaan.
     // Ukuran halaman fix (lebar x tinggi dikunci) — dipakai untuk label thermal berukuran tetap
     if (fixedHeight) {
       await page.setViewport({ width: mmToPx(width), height: mmToPx(fixedHeight) });
-      await page.setContent(html, { waitUntil: 'networkidle0' });
+      await page.setContent(html, { waitUntil: 'domcontentloaded' });
 
       const pdf = await page.pdf({
         width,
@@ -56,7 +62,7 @@ async function generateLabelPdf(data, templateFn, options = {}) {
 
     // Set viewport lebar dulu, tinggi sementara (besar agar konten tidak terpotong)
     await page.setViewport({ width: 302, height: 3000 });
-    await page.setContent(html, { waitUntil: 'networkidle0' });
+    await page.setContent(html, { waitUntil: 'domcontentloaded' });
 
     // Baca tinggi konten aktual dari elemen .label (lebih akurat dari body.scrollHeight pada flex layout)
     const contentHeight = await page.evaluate(() => {
@@ -78,6 +84,7 @@ async function generateLabelPdf(data, templateFn, options = {}) {
     return pdf;
   } finally {
     await page.close();
+    releasePageSlot();
   }
 }
 
