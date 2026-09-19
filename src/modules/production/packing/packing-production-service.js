@@ -31,6 +31,7 @@ async function getAllProduksi(
   search = "",
   dateFrom = null,
   dateTo = null,
+  idMesin = null,
 ) {
   const pool = await poolPromise;
 
@@ -43,6 +44,10 @@ async function getAllProduksi(
   rqCount.input("search", sql.VarChar(50), s);
   rqData.input("search", sql.VarChar(50), s);
 
+  // optional idMesin (sekarang didaftarkan ke kedua request)
+  rqCount.input('idMesin', sql.Int, idMesin);
+  rqData.input('idMesin', sql.Int, idMesin);
+
   // optional dates
   rqCount.input("dateFrom", sql.Date, dateFrom);
   rqCount.input("dateTo", sql.Date, dateTo);
@@ -53,10 +58,13 @@ async function getAllProduksi(
   rqData.input("offset", sql.Int, offset);
   rqData.input("pageSize", sql.Int, pageSize);
 
+
+
   const qWhere = `
     WHERE (@search = '' OR h.NoPacking LIKE '%' + @search + '%')
       AND (@dateFrom IS NULL OR CONVERT(date, h.Tanggal) >= @dateFrom)
       AND (@dateTo   IS NULL OR CONVERT(date, h.Tanggal) <= @dateTo)
+      AND (@idMesin IS NULL OR h.idMesin = @idMesin)
   `;
 
   const qCount = `

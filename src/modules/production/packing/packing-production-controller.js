@@ -22,6 +22,10 @@ async function getAllProduksi(req, res) {
   const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
   const pageSizeRaw = parseInt(req.query.pageSize, 10) || 20;
   const pageSize = Math.min(Math.max(pageSizeRaw, 1), 100);
+  
+  const idMesin = parseInt(req.query.idMesin) || null;
+
+  //console.log(idMesin);
 
   // support both ?noPacking= and ?search=
   const search =
@@ -43,6 +47,7 @@ async function getAllProduksi(req, res) {
       search,
       dateFrom,
       dateTo,
+      idMesin,
     );
 
     return res.status(200).json({
