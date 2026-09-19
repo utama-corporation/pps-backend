@@ -109,8 +109,8 @@ function buildQcBucketInstant(tglDateStr, baseMinutes, offsetMinutes) {
 // tidak pernah ditebak dari "hari ini/kemarin" seperti versi lama di
 // frontend (itu penyebab bug: data lampau yang jam-of-day-nya kebetulan
 // mirip shift hari ini malah dikira baru mau dibuka hari ini).
-function buildQcBuckets(tglProduksi, hourStartRaw, hourEndRaw) {
-  const tglDateStr = toDateOnlyString(tglProduksi);
+function buildQcBuckets(tglProduksi, hourStartRaw, hourEndRaw, shift) {
+  let tglDateStr = toDateOnlyString(tglProduksi);
   const startMin = parseMinutesHM(normalizeTimeString(hourStartRaw));
   const endMin = parseMinutesHM(normalizeTimeString(hourEndRaw));
   if (!tglDateStr || startMin == null || endMin == null) return [];
@@ -124,31 +124,41 @@ function buildQcBuckets(tglProduksi, hourStartRaw, hourEndRaw) {
 
   const buckets = [];
   let offset = 0;
+
+  if(shift===3 && startMin >= 0 && startMin <= 360 ){    
+    const tanggal = new Date(tglDateStr);
+    tanggal.setDate(tanggal.getDate() + 1);
+    tglDateStr = tanggal.toISOString().split('T')[0];
+  }
+
   while (offset < duration) {
     const step = offset === 0 && startRem !== 0 ? firstStep : 60;
     const nextOffset = Math.min(offset + step, duration);
+
     buckets.push({
       hourStart: fmtHM(startMin + offset),
       hourEnd: fmtHM(startMin + nextOffset),
       opensAt: buildQcBucketInstant(tglDateStr, startMin, nextOffset),
-      _nextOffset: nextOffset,
+      closesAt: buildQcBucketInstant(tglDateStr, startMin, nextOffset + 60),
+      label: `${fmtHM(startMin + offset)} - ${fmtHM(startMin + nextOffset)}`,
+      //_nextOffset: nextOffset,
     });
     offset = nextOffset;
   }
 
-  for (let i = 0; i < buckets.length; i++) {
-    if (i + 1 < buckets.length) {
-      buckets[i].closesAt = buckets[i + 1].opensAt;
-    } else {
-      buckets[i].closesAt = buildQcBucketInstant(
-        tglDateStr,
-        startMin,
-        buckets[i]._nextOffset + 60,
-      );
-    }
-    delete buckets[i]._nextOffset;
-    buckets[i].label = `${buckets[i].hourStart} - ${buckets[i].hourEnd}`;
-  }
+  // for (let i = 0; i < buckets.length; i++) {
+  //   if (i + 1 < buckets.length) {
+  //     buckets[i].closesAt = buckets[i + 1].opensAt;
+  //   } else {
+  //     buckets[i].closesAt = buildQcBucketInstant(
+  //       tglDateStr,
+  //       startMin,
+  //       buckets[i]._nextOffset + 60,
+  //     );
+  //   }
+  //   delete buckets[i]._nextOffset;
+  // buckets[i].label = `${buckets[i].hourStart} - ${buckets[i].hourEnd}`;
+  // }
 
   return buckets;
 }
@@ -1476,6 +1486,7 @@ async function getInjectQcByNoProduksi(noProduksi) {
     headerRow.TglProduksi,
     headerRow.HourStart,
     headerRow.HourEnd,
+    headerRow.Shift,
   );
 
   return {
