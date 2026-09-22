@@ -74,4 +74,16 @@ router.delete(
   packingController.deleteInputsAndPartials,
 );
 
+router.get(
+  "/packing/stok",
+  verifyToken,
+  packingController.getStok,
+);
+
+router.get(
+  "/packing/:idbj/label",
+  verifyToken,
+  packingController.getLabelByIdBJ,
+);
+
 module.exports = router;

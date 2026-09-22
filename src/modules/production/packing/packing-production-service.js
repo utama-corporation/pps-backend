@@ -1496,6 +1496,161 @@ async function completePackingProduksi(noPacking, ctx) {
   }
 }
 
+async function getStok(bjType = null) {
+  const pool = await poolPromise;
+  const req = pool.request();
+
+  let idBJType = null;
+  const typeName = String(bjType || "").trim();
+
+  if (typeName) {
+    const typeRes = await req
+      .input("namaBJType", sql.VarChar, typeName)
+      .query(`
+        SELECT TOP 1 IdBJType
+        FROM dbo.MstBJType
+        WHERE NamaBJType = @namaBJType;
+      `);
+
+    const typeRow = typeRes.recordset?.[0];
+    if (!typeRow) return [];
+    idBJType = typeRow.IdBJType;
+  }
+
+  req.input("idBJType", sql.Int, idBJType);
+
+  const result = await req.query(`
+    WITH PartialSum AS (
+      SELECT NoBJ, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+      FROM dbo.BarangJadiPartial
+      GROUP BY NoBJ
+    ),
+    EffectiveDetail AS (
+      SELECT
+        bj.NoBJ,
+        bj.IdBJ,
+        bj.DateCreate,
+        CASE
+          WHEN bj.IsPartial = 1 THEN
+            CASE
+              WHEN ISNULL(bj.Pcs, 0) - ISNULL(ps.TotalPartialPcs, 0) < 0 THEN 0
+              ELSE ISNULL(bj.Pcs, 0) - ISNULL(ps.TotalPartialPcs, 0)
+            END
+          ELSE ISNULL(bj.Pcs, 0)
+        END AS PcsEfektif,
+        ISNULL(bj.Berat, 0) AS Berat
+      FROM dbo.BarangJadi bj
+      INNER JOIN PackingProduksiOutputLabelBJ o
+        ON o.NoBJ = bj.NoBJ
+      LEFT JOIN PartialSum ps
+        ON ps.NoBJ = bj.NoBJ
+      WHERE bj.DateUsage IS NULL
+    )
+    SELECT
+      m.IdBJ,
+      m.NamaBJ,   
+      ISNULL(agg.LabelSisa, 0) AS LabelSisa,
+      ISNULL(agg.PcsSisa, 0)   AS PcsSisa,
+      ISNULL(agg.BeratSisa, 0) AS BeratSisa,
+      agg.DateCreateTertua
+    FROM dbo.MstBarangJadi m
+    LEFT JOIN (
+      SELECT
+        IdBJ,
+        SUM(CASE WHEN PcsEfektif > 0 THEN 1 ELSE 0 END) AS LabelSisa,
+        SUM(PcsEfektif) AS PcsSisa,
+        SUM(Berat) AS BeratSisa,
+        MIN(CASE WHEN PcsEfektif > 0 THEN DateCreate END) AS DateCreateTertua
+      FROM EffectiveDetail
+      GROUP BY IdBJ
+    ) agg
+      ON agg.IdBJ = m.IdBJ
+    WHERE ISNULL(m.Enable, 1) = 1
+      AND (@idBJType IS NULL OR m.IdBJType = @idBJType)
+    ORDER BY m.NamaBJ ASC;
+  `);
+
+  return result.recordset.map((r) => ({
+    IdBJ: r.IdBJ,
+    NamaBJ: r.NamaBJ,
+    LabelSisa:
+      typeof r.LabelSisa === "number"
+        ? r.LabelSisa
+        : parseInt(r.LabelSisa, 10) || 0,
+    PcsSisa:
+      typeof r.PcsSisa === "number"
+        ? r.PcsSisa
+        : parseInt(r.PcsSisa, 10) || 0,
+    BeratSisa: Number(
+      (
+        typeof r.BeratSisa === "number"
+          ? r.BeratSisa
+          : parseFloat(r.BeratSisa) || 0
+      ).toFixed(2),
+    ),
+    ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
+  }));
+}
+
+async function getLabelByIdBJ(idBJ) {
+  const pool = await poolPromise;
+
+  const result = await pool
+    .request()
+    .input("IdBJ", sql.Int, idBJ)
+    .query(`
+      WITH PartialSum AS (
+        SELECT NoBJ, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+        FROM dbo.BarangJadiPartial
+        GROUP BY NoBJ
+      ),
+      EffectiveLabel AS (
+        SELECT
+          bj.NoBJ,
+          bj.DateCreate,
+          CASE
+            WHEN bj.IsPartial = 1 THEN
+              CASE
+                WHEN ISNULL(bj.Pcs, 0) - ISNULL(ps.TotalPartialPcs, 0) < 0 THEN 0
+                ELSE ISNULL(bj.Pcs, 0) - ISNULL(ps.TotalPartialPcs, 0)
+              END
+            ELSE ISNULL(bj.Pcs, 0)
+          END AS Pcs,
+          ISNULL(bj.Berat, 0) AS Berat
+        FROM dbo.BarangJadi bj
+        INNER JOIN PackingProduksiOutputLabelBJ ip
+          ON ip.NoBJ = bj.NoBJ
+        LEFT JOIN PartialSum ps
+          ON ps.NoBJ = bj.NoBJ
+        WHERE bj.IdBJ = @IdBJ
+          AND bj.DateUsage IS NULL
+      )
+      SELECT
+        NoBJ,
+        NoBJ AS Label,
+        DateCreate,
+        Pcs,
+        Berat
+      FROM EffectiveLabel
+      WHERE Pcs > 0
+      ORDER BY DateCreate ASC, NoBJ ASC;
+    `);
+
+  return result.recordset.map((r) => ({
+    NoBJ: r.NoBJ,
+    Label: r.Label,
+    ...(r.DateCreate && { DateCreate: r.DateCreate }),
+    Pcs: typeof r.Pcs === "number" ? r.Pcs : parseInt(r.Pcs, 10) || 0,
+    Berat: Number(
+      (
+        typeof r.Berat === "number"
+          ? r.Berat
+          : parseFloat(r.Berat) || 0
+      ).toFixed(2),
+    ),
+  }));
+}
+
 module.exports = {
   getAllProduksi,
   getProduksiByDate,
@@ -1509,4 +1664,6 @@ module.exports = {
   upsertInputsAndPartials,
   deleteInputsAndPartials,
   splitProduksiTime,
+  getStok,
+  getLabelByIdBJ,
 };

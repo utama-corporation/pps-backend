@@ -216,3 +216,89 @@ exports.getByNoBahanPendukung = async (noBahanPendukung) => {
   }
   return row;
 };
+
+exports.getLabelByIdCabinetMaterial = async (idCabinetMaterial) => {
+  const pool = await poolPromise;
+
+  const result = await pool
+    .request()
+    .input("IdCabinetMaterial", sql.Int, idCabinetMaterial)
+    .query(`
+      SELECT
+        b.NoBahanPendukung,
+        b.NoBahanPendukung AS Label,
+        b.CreatedAt,
+        b.Qty,
+        b.Blok,
+        b.IdLokasi,
+        ISNULL(CAST(b.HasBeenPrinted AS int), 0) AS HasBeenPrinted
+      FROM dbo.BahanPendukung b
+      WHERE b.IdCabinetMaterial = @IdCabinetMaterial
+        AND b.DateUsage IS NULL
+      ORDER BY b.CreatedAt ASC, b.NoBahanPendukung ASC;
+    `);
+
+  return result.recordset.map((r) => ({
+    NoBahanPendukung: r.NoBahanPendukung,
+    Label: r.Label,
+    ...(r.CreatedAt && { CreatedAt: r.CreatedAt }),
+    Qty: Number(
+      (
+        typeof r.Qty === "number"
+          ? r.Qty
+          : parseFloat(Number(r.Qty)) || 0
+      ).toFixed(2),
+    ),
+    ...(r.Blok && { Blok: r.Blok }),
+    ...(r.IdLokasi && { IdLokasi: r.IdLokasi }),
+    HasBeenPrinted: r.HasBeenPrinted,
+  }));
+};
+
+exports.getStok = async () => {
+  const pool = await poolPromise;
+
+  const result = await pool.request().query(`
+    SELECT
+      m.IdCabinetMaterial,
+      m.Nama AS NamaCabinetMaterial,
+      m.ItemCode,
+      u.NamaUOM,
+      ISNULL(agg.LabelSisa, 0) AS LabelSisa,
+      ISNULL(agg.QtySisa, 0) AS QtySisa,
+      agg.DateCreateTertua
+    FROM dbo.MstCabinetMaterial m
+    LEFT JOIN (
+      SELECT
+        b.IdCabinetMaterial,
+        COUNT(1) AS LabelSisa,
+        SUM(ISNULL(b.Qty, 0)) AS QtySisa,
+        MIN(b.CreatedAt) AS DateCreateTertua
+      FROM dbo.BahanPendukung b
+      WHERE b.DateUsage IS NULL
+      GROUP BY b.IdCabinetMaterial
+    ) agg ON agg.IdCabinetMaterial = m.IdCabinetMaterial
+    LEFT JOIN dbo.MstUOM u WITH (NOLOCK) ON u.IdUOM = m.IdUOM
+    WHERE ISNULL(m.Enable, 1) = 1
+    ORDER BY m.Nama ASC;
+  `);
+
+  return result.recordset.map((r) => ({
+    IdCabinetMaterial: r.IdCabinetMaterial,
+    NamaCabinetMaterial: r.NamaCabinetMaterial,
+    ...(r.ItemCode && { ItemCode: r.ItemCode }),
+    NamaUOM: r.NamaUOM,
+    LabelSisa:
+      typeof r.LabelSisa === "number"
+        ? r.LabelSisa
+        : parseInt(r.LabelSisa, 10) || 0,
+    QtySisa: Number(
+      (
+        typeof r.QtySisa === "number"
+          ? r.QtySisa
+          : parseFloat(r.QtySisa) || 0
+      ).toFixed(2),
+    ),
+    ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
+  }));
+};

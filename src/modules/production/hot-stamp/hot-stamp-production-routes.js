@@ -85,4 +85,16 @@ router.delete(
   hotStampingController.deleteInputsAndPartials,
 );
 
+router.get(
+  "/hot-stamp/stok",
+  verifyToken,
+  hotStampingController.getStok,
+);
+
+router.get(
+  "/hot-stamp/:idfurniturewip/label",
+  verifyToken,
+  hotStampingController.getLabelByIdFurnitureWip,
+);
+
 module.exports = router;

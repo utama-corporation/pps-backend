@@ -82,4 +82,16 @@ router.delete(
   spannerController.deleteInputsAndPartials,
 );
 
+router.get(
+  "/spanner/stok",
+  verifyToken,
+  spannerController.getStok,
+);
+
+router.get(
+  "/spanner/:idfurniturewip/label",
+  verifyToken,
+  spannerController.getLabelByIdFurnitureWip,
+);
+
 module.exports = router;

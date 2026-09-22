@@ -16,6 +16,20 @@ router.get(
   ctrl.getAll,
 );
 
+// GET stock per cabinet material
+router.get(
+  "/labels/bahan-pendukung/stok",
+  requirePermission("label_bahanpendukung:read"),
+  ctrl.getStok,
+);
+
+// GET labels per cabinet material
+router.get(
+  "/labels/bahan-pendukung/:idcabinetmaterial/label",
+  requirePermission("label_bahanpendukung:read"),
+  ctrl.getLabelByIdCabinetMaterial,
+);
+
 // UPDATE Bahan Pendukung
 router.put(
   "/labels/bahan-pendukung/:noBahanPendukung",

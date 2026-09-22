@@ -29,4 +29,4 @@ router.get("/packing", verifyToken, ctrl.getPacking);
 // The regex enforces numeric-only for :idbagian
 router.get("/:idbagian(\\d+)", verifyToken, ctrl.getByIdBagian);
 
-module.exports = router;
+module.exports = router;    

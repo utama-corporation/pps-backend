@@ -1912,6 +1912,48 @@ async function splitProduksiTime(req, res) {
         details: process.env.NODE_ENV === "development" ? err.stack : undefined,
       },
     });
+  }  
+}
+
+async function getStok(req, res) {
+  try {
+    const data = await injectProduksiService.getStok();
+    
+    return res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (err) {
+    console.error('Get Stok Inject Error', err);
+    return res
+      .status(500)
+      .json({ success: false, message: 'Terjadi kesalahan server'});
+  }
+}
+
+async function getLabelByIdFurnitureWip(req, res) {
+  try {
+    const idFurnitureWip = parseInt(req.params.idfurniturewip, 10);
+
+    if (!Number.isFinite(idFurnitureWip)) {
+      return res.status(400).json({
+        success: false,
+        message: "idfurniturewip wajib berupa angka",
+      });
+    }
+
+    const data = await injectProduksiService.getLabelByIdFurnitureWIP(idFurnitureWip);
+
+    return res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error("Get Label Furniture WIP By IdFurnitureWip Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Terjadi kesalahan server",
+    });
   }
 }
 
@@ -1950,4 +1992,6 @@ module.exports = {
   upsertInputsAndPartials,
   deleteInputsAndPartials,
   splitProduksiTime,
+  getStok,
+  getLabelByIdFurnitureWip,
 };

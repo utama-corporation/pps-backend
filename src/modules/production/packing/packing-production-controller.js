@@ -857,6 +857,50 @@ async function uncompleteProduksi(req, res) {
   }
 }
 
+async function getStok(req, res) {
+  try {
+    const type = typeof req.query.type === "string" ? req.query.type : "";
+
+    const data = await packingService.getStok(type);
+    
+    return res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (err) {
+    console.error("Get Stok Packing Error", err);
+    return res
+      .status(500)
+      .json({ success: false, message: "Terjadi kesalahan server" });
+  }
+}
+
+async function getLabelByIdBJ(req, res) {
+  try {
+    const idBJ = parseInt(req.params.idbj, 10);
+
+    if (!Number.isFinite(idBJ)) {
+      return res.status(400).json({
+        success: false,
+        message: "idbj wajib berupa angka",
+      });
+    }
+
+    const data = await packingService.getLabelByIdBJ(idBJ);
+
+    return res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error("Get Label Barang Jadi By IdBJ Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Terjadi kesalahan server",
+    });
+  }
+}
+
 module.exports = {
   getAllProduksi,
   getProduksiByDate,
@@ -870,4 +914,6 @@ module.exports = {
   upsertInputsAndPartials,
   deleteInputsAndPartials,
   splitProduksiTime,
+  getStok,
+  getLabelByIdBJ,
 };

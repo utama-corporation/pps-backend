@@ -179,3 +179,45 @@ exports.incrementHasBeenPrinted = async (req, res) => {
     return res.status(status).json({ success: false, message: err.message || "Terjadi kesalahan server" });
   }
 };
+
+// GET /labels/bahan-pendukung/stok
+exports.getStok = async (req, res) => {
+  try {
+    const data = await service.getStok();
+
+    return res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (err) {
+    console.error("Get Stok Bahan Pendukung Error:", err);
+    return res.status(500).json({ success: false, message: "Terjadi kesalahan server" });
+  }
+};
+
+// GET /labels/bahan-pendukung/:idcabinetmaterial/label
+exports.getLabelByIdCabinetMaterial = async (req, res) => {
+  try {
+    const idCabinetMaterial = parseInt(req.params.idcabinetmaterial, 10);
+
+    if (!Number.isFinite(idCabinetMaterial)) {
+      return res.status(400).json({
+        success: false,
+        message: "idcabinetmaterial wajib berupa angka",
+      });
+    }
+
+    const data = await service.getLabelByIdCabinetMaterial(idCabinetMaterial);
+
+    return res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error("Get Label Bahan Pendukung By IdCabinetMaterial Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Terjadi kesalahan server",
+    });
+  }
+};

@@ -5982,6 +5982,125 @@ async function resetInjectQcCounter(idMesin, payload, ctx) {
   }
 }
 
+async function getStok(){
+  const pool = await poolPromise;
+
+  const result = await pool.request().query(`
+    WITH PartialSum AS (
+      SELECT NoFurnitureWIP, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+      FROM dbo.FurnitureWIPPartial
+      GROUP BY NoFurnitureWIP
+    ),
+    EffectiveDetail AS (
+      SELECT
+        f.NoFurnitureWIP,
+        f.IdFurnitureWIP,
+        f.DateCreate,
+        CASE
+          WHEN f.IsPartial = 1 THEN
+            CASE
+              WHEN ISNULL(f.Pcs, 0) - ISNULL(ps.TotalPartialPcs, 0) < 0 THEN 0
+              ELSE ISNULL(f.Pcs, 0) - ISNULL(ps.TotalPartialPcs, 0)
+            END
+          ELSE ISNULL(f.Pcs, 0)
+        END AS PcsEfektif,
+        ISNULL(f.Berat, 0) AS Berat
+      FROM dbo.FurnitureWIP f      
+      INNER JOIN InjectProduksiOutputFurnitureWIP ip
+        ON f.NoFurnitureWIP=ip.NoFurnitureWIP
+      LEFT JOIN PartialSum ps
+        ON ps.NoFurnitureWIP = f.NoFurnitureWIP
+      WHERE f.DateUsage IS NULL
+    )
+    SELECT
+      m.IdCabinetWIP,
+      m.Nama,
+      ISNULL(agg.LabelSisa, 0) AS LabelSisa,
+      ISNULL(agg.PcsSisa, 0)   AS PcsSisa,
+      ISNULL(agg.BeratSisa, 0) AS BeratSisa,
+      agg.DateCreateTertua
+    FROM dbo.MstCabinetWIP m    
+    LEFT JOIN (
+      SELECT
+        IdFurnitureWIP,
+        SUM(CASE WHEN PcsEfektif > 0 THEN 1 ELSE 0 END) AS LabelSisa,
+        SUM(PcsEfektif) AS PcsSisa,
+        SUM(Berat) AS BeratSisa,
+        MIN(CASE WHEN PcsEfektif > 0 THEN DateCreate END) AS DateCreateTertua
+      FROM EffectiveDetail
+      GROUP BY IdFurnitureWIP
+    ) agg
+      ON agg.IdFurnitureWIP = m.IdCabinetWIP
+    WHERE ISNULL(m.Enable, 1) = 1
+    ORDER BY m.Nama ASC;
+    `);
+
+    return result.recordset.map((r) => ({
+      IdCabinetWIP: r.IdCabinetWIP,
+      Nama: r.Nama,
+      LabelSisa: typeof r.LabelSisa === "number" ? r.LabelSisa : parseInt(r.LabelSisa, 10) || 0,
+      PcsSisa: typeof r.PcsSisa === "number" ? r.PcsSisa : parseInt(r.PcsSisa, 10) || 0,
+      BeratSisa: Number(
+        (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
+      ),
+      ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
+    }));
+}
+
+async function getLabelByIdFurnitureWIP(idFurnitureWIP) {
+  const pool = await poolPromise;
+
+  const result = await pool
+    .request()
+    .input('IdFurnitureWIP', sql.Int, idFurnitureWIP).query(`
+      WITH PartialSum AS (
+        SELECT NoFurnitureWIP, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+        FROM dbo.FurnitureWIPPartial
+        GROUP BY NoFurnitureWIP
+      ),
+      EffectiveLabel AS (
+        SELECT
+          f.NoFurnitureWIP,
+          f.DateCreate,
+          CASE
+            WHEN f.IsPartial = 1 THEN
+              CASE
+                WHEN ISNULL(f.Pcs, 0) - ISNULL(ps.TotalPartialPcs, 0) < 0 THEN 0
+                ELSE ISNULL(f.Pcs, 0) - ISNULL(ps.TotalPartialPcs, 0)
+              END
+            ELSE ISNULL(f.Pcs, 0)
+          END AS Pcs,
+          ISNULL(f.Berat, 0) AS Berat
+        FROM dbo.FurnitureWIP f
+        INNER JOIN InjectProduksiOutputFurnitureWIP ip 
+          ON ip.NoFurnitureWIP=f.NoFurnitureWIP        
+        LEFT JOIN PartialSum ps
+          ON ps.NoFurnitureWIP = f.NoFurnitureWIP
+        WHERE f.IdFurnitureWIP = @IdFurnitureWIP
+          AND f.DateUsage IS NULL
+      )
+      SELECT
+        NoFurnitureWIP,
+        NoFurnitureWIP AS Label,
+        DateCreate,
+        Pcs,
+        Berat
+      FROM EffectiveLabel
+      WHERE Pcs > 0
+      ORDER BY DateCreate ASC, NoFurnitureWIP ASC;
+    `);
+
+  return result.recordset.map((r) => ({
+    NoFurnitureWIP: r.NoFurnitureWIP,
+    Label: r.Label,
+    ...(r.DateCreate && { DateCreate: r.DateCreate }),
+    Pcs: typeof r.Pcs === "number" ? r.Pcs : parseInt(r.Pcs, 10) || 0,
+    Berat: Number(
+      (typeof r.Berat === "number" ? r.Berat : parseFloat(r.Berat) || 0).toFixed(2),
+    ),
+  }));
+}
+
 module.exports = {
   getAllProduksi,
   getProduksiByDate,
@@ -6018,4 +6137,6 @@ module.exports = {
   upsertInputsAndPartials,
   deleteInputsAndPartials,
   splitProduksiTime,
+  getStok,
+  getLabelByIdFurnitureWIP,
 };

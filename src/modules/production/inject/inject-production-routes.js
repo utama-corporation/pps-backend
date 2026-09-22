@@ -205,4 +205,16 @@ router.delete(
   injectProduksiController.deleteInputsAndPartials,
 );
 
+router.get(
+  '/inject/stok',
+  verifyToken,
+  injectProduksiController.getStok,
+);
+
+router.get(
+  '/inject/:idfurniturewip/label',
+  verifyToken,
+  injectProduksiController.getLabelByIdFurnitureWip,
+);
+
 module.exports = router;
