@@ -562,6 +562,14 @@ const UPSERT_INPUT_CONFIGS = {
       validateColumn: "Enable",
       validateValue: 1,
       aggregateByKey: true, // SUM quantities by key sebelum insert/update
+      // Tandai label Bahan Pendukung (BP.) sebagai sudah dipakai (DateUsage
+      // = TglProduksi) saat material yang berasal dari scan label di-submit.
+      // Klien mengirim daftar noBahanPendukung per entry material.
+      markUsage: {
+        table: "BahanPendukung",
+        labelColumn: "NoBahanPendukung",
+        labelJsonField: "noBahanPendukung",
+      },
     },
   },
   hotStamping: {
@@ -573,6 +581,13 @@ const UPSERT_INPUT_CONFIGS = {
       validateColumn: "Enable",
       validateValue: 1,
       aggregateByKey: true, // SUM quantities by key sebelum insert/update
+      // Tandai label Bahan Pendukung (BP.) sebagai sudah dipakai (DateUsage
+      // = Tanggal) saat material yang berasal dari scan label di-submit.
+      markUsage: {
+        table: "BahanPendukung",
+        labelColumn: "NoBahanPendukung",
+        labelJsonField: "noBahanPendukung",
+      },
     },
   },
   keyFitting: {
@@ -584,6 +599,11 @@ const UPSERT_INPUT_CONFIGS = {
       validateColumn: "Enable",
       validateValue: 1,
       aggregateByKey: true, // SUM quantities by key sebelum insert/update
+      markUsage: {
+        table: "BahanPendukung",
+        labelColumn: "NoBahanPendukung",
+        labelJsonField: "noBahanPendukung",
+      },
     },
   },
   spanner: {
@@ -595,6 +615,11 @@ const UPSERT_INPUT_CONFIGS = {
       validateColumn: "Enable",
       validateValue: 1,
       aggregateByKey: true, // SUM quantities by key sebelum insert/update
+      markUsage: {
+        table: "BahanPendukung",
+        labelColumn: "NoBahanPendukung",
+        labelJsonField: "noBahanPendukung",
+      },
     },
   },
   packingProduksi: {
@@ -606,6 +631,14 @@ const UPSERT_INPUT_CONFIGS = {
       validateColumn: "Enable",
       validateValue: 1,
       aggregateByKey: true, // SUM quantities by key sebelum insert/update
+      // Tandai label Bahan Pendukung (BP.) sebagai sudah dipakai (DateUsage
+      // = Tanggal) saat material yang berasal dari scan label di-submit.
+      // Klien mengirim daftar noBahanPendukung per entry material.
+      markUsage: {
+        table: "BahanPendukung",
+        labelColumn: "NoBahanPendukung",
+        labelJsonField: "noBahanPendukung",
+      },
     },
   },
   bjJual: {

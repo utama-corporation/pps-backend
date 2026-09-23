@@ -43,27 +43,35 @@ function generateUpsertInputsSQL(produksiType, requestedTypes) {
 
   if (Object.keys(activeConfigs).length === 0) return _generateEmptySQL();
 
-  const sections = Object.entries(activeConfigs)
-    .map(([type, config]) =>
-      _generateSingleUpsertSection(type, config, produksiConfig),
-    )
-    .join("\n\n");
+  const sections = [];
+  const summaryInserts = [];
 
-  const summaryInserts = Object.keys(activeConfigs)
-    .map(
-      (type) =>
-        `  INSERT INTO @out SELECT '${type}', @${type}Inserted, @${type}Updated, 0, @${type}Invalid;`,
-    )
-    .join("\n");
+  for (const [type, config] of Object.entries(activeConfigs)) {
+    sections.push(_generateSingleUpsertSection(type, config, produksiConfig));
+    summaryInserts.push(
+      `  INSERT INTO @out SELECT '${type}', @${type}Inserted, @${type}Updated, 0, @${type}Invalid;`,
+    );
+
+    // MarkUsage: setelah UPSERT, tandai label (mis. Bahan Pendukung BP.) yang
+    // dipakai agar tidak bisa dipanggil lagi pada penginputan berikutnya.
+    if (config.markUsage) {
+      sections.push(
+        _generateMarkUsageSection(type, config, produksiConfig),
+      );
+      summaryInserts.push(
+        `  INSERT INTO @out SELECT '${type}MarkUsage', 0, @${type}Marked, 0, 0;`,
+      );
+    }
+  }
 
   return `
 SET NOCOUNT ON;
 
 DECLARE @out TABLE(Section sysname, Inserted int, Updated int, Skipped int, Invalid int);
 
-${sections}
+${sections.join("\n\n")}
 
-${summaryInserts}
+${summaryInserts.join("\n")}
 
 SELECT Section, Inserted, Updated, Skipped, Invalid FROM @out ORDER BY Section;
 `.trim();
@@ -148,6 +156,60 @@ WHERE src.${quantityColumn} > 0
   );
 
 SET @${type}Inserted = @@ROWCOUNT;
+`.trim();
+}
+
+function _generateMarkUsageSection(type, config, produksiConfig) {
+  const { table, labelColumn, labelJsonField } = config.markUsage;
+  const { mappingTable, sourceTable, keyColumn, quantityColumn, validateColumn, validateValue } = config;
+  const tempName = `#${type}MarkUsageIds`;
+
+  return `
+-- ============================================
+-- ${type.toUpperCase()} MARK USAGE (${table})
+-- ============================================
+DECLARE @${type}Marked int = 0;
+
+-- Tandai label (mis. Bahan Pendukung BP.) yang dipakai pada submit ini:
+-- DateUsage diset ke tanggal produksi sehingga validate-label tidak lagi
+-- mengembalikan label yang sama pada penginputan berikutnya.
+-- Hanya entry valid (quantity > 0 & material aktif) yang menandai labelnya.
+-- CATATAN: OPENJSON tidak boleh jadi row source di UPDATE ... FROM (syntax
+-- error), jadi label dikumpulkan dulu ke temp table lalu di-update.
+IF OBJECT_ID(N'tempdb..${tempName}') IS NOT NULL DROP TABLE ${tempName};
+
+CREATE TABLE ${tempName} (${labelColumn} nvarchar(50));
+
+INSERT INTO ${tempName} (${labelColumn})
+SELECT lbl.value
+FROM OPENJSON(@jsInputs, '$.${type}')
+WITH (
+  ${keyColumn} int '${jsonPath(keyColumn)}',
+  ${quantityColumn} int '${jsonPath(quantityColumn)}',
+  ${labelJsonField} nvarchar(max) '$.${labelJsonField}' AS JSON
+) inp
+CROSS APPLY OPENJSON(inp.${labelJsonField}) lbl
+WHERE inp.${quantityColumn} > 0
+  AND EXISTS (
+    SELECT 1 FROM dbo.${sourceTable} m WITH (NOLOCK)
+    WHERE m.${keyColumn} = inp.${keyColumn}
+      AND m.${validateColumn} = ${validateValue}
+  );
+
+DECLARE @${type}TglProduksi datetime;
+SELECT @${type}TglProduksi = ${produksiConfig.dateColumn}
+FROM dbo.${produksiConfig.headerTable} WITH (NOLOCK)
+WHERE ${produksiConfig.codeColumn} = @no;
+
+UPDATE b
+SET b.DateUsage = @${type}TglProduksi
+FROM dbo.${table} b
+INNER JOIN ${tempName} u ON u.${labelColumn} = b.${labelColumn}
+WHERE b.DateUsage IS NULL;
+
+SET @${type}Marked = @@ROWCOUNT;
+
+DROP TABLE ${tempName};
 `.trim();
 }
 

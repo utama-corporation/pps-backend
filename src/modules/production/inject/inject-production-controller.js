@@ -1467,6 +1467,16 @@ async function upsertInputsAndPartials(req, res) {
     ...payload
   } = body;
 
+  // [TEMP DEBUG] lihat apa yang sampai dari tablet untuk cabinetMaterial
+  try {
+    const _dbg = JSON.stringify(payload.cabinetMaterial ?? "N/A");
+    console.log("[debug upsert] ", noProduksi, " cabinetMaterial=", _dbg);
+    require("fs").appendFileSync(
+      require("path").join(__dirname, "../../../../../upsert-debug.log"),
+      `${new Date().toISOString()} ${noProduksi} cabinetMaterial=${_dbg}\n`,
+    );
+  } catch (_) {}
+
   // ✅ Get trusted audit context from token/session
   const actorId = getActorId(req);
   if (!actorId) {

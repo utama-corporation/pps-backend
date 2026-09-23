@@ -41,6 +41,8 @@ async function lookupLabel(labelCode) {
     prefix = "BB.";
   } else if (raw.substring(0, 3).toUpperCase() === "BA.") {
     prefix = "BA.";
+  } else if (raw.substring(0, 3).toUpperCase() === "BP.") {
+    prefix = "BP.";
   } else {
     prefix = raw.substring(0, 2).toUpperCase();
   }
@@ -149,8 +151,41 @@ async function lookupLabel(labelCode) {
       `;
       return await run(raw);
 
+    // =========================
+    // BP. BahanPendukung (belum terpakai — DateUsage IS NULL)
+    // =========================
+    case "BP.":
+      tableName = "BahanPendukung";
+      query = `
+        SELECT
+          b.NoBahanPendukung,
+          b.IdSupplier  AS idSupplier,
+          b.IdCabinetMaterial AS idJenis,
+          cm.Nama       AS namaJenis,
+          uom.NamaUOM   AS namaUom,
+          b.Qty,
+          b.DateUsage   AS dateUsage,
+          b.IsPartial   AS isPartial,
+          b.Keterangan,
+          b.CreateBy    AS createBy,
+          b.CreatedAt   AS createdAt,
+          b.Blok,
+          b.IdLokasi,
+          ISNULL(CAST(b.HasBeenPrinted AS int), 0) AS hasBeenPrinted
+        FROM dbo.BahanPendukung b WITH (NOLOCK)
+        LEFT JOIN dbo.MstCabinetMaterial cm WITH (NOLOCK)
+          ON cm.IdCabinetMaterial = b.IdCabinetMaterial
+        LEFT JOIN dbo.MstUOM uom WITH (NOLOCK)
+          ON uom.IdUOM = cm.IdUOM
+        WHERE b.NoBahanPendukung = @labelCode
+          AND b.DateUsage IS NULL
+          AND b.Qty > 0
+        ORDER BY b.NoBahanPendukung;
+      `;
+      return await run(raw);
+
     default:
-      throw new Error(`Invalid prefix: ${prefix}. Valid prefixes: BB., BA.`);
+      throw new Error(`Invalid prefix: ${prefix}. Valid prefixes: BB., BA., BP.`);
   }
 }
 

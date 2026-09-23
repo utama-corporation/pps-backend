@@ -4048,6 +4048,15 @@ async function updateInjectProduksiTanggal(noProduksi, tglProduksi, ctx) {
           )
         );
 
+      UPDATE b SET b.DateUsage = @TglProduksi
+      FROM dbo.BahanPendukung AS b
+      WHERE b.DateUsage IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM dbo.InjectProduksiInputCabinetMaterial map
+          WHERE map.NoProduksi = @NoProduksi
+            AND map.IdCabinetMaterial = b.IdCabinetMaterial
+        );
+
       -------------------------------------------------------
       -- OUTPUT: DateCreate (label yang dihasilkan NoProduksi ini),
       -- termasuk Mixer_h walau dibuat lewat modul mixer terpisah.
@@ -4741,10 +4750,10 @@ async function validateLabel(labelCode) {
   const raw = String(labelCode || "").trim();
   if (!raw) throw new Error("Label code is required");
 
-  // prefix rule: untuk BF. (3 char), lainnya 2 char (mis: D., H., V., BB.)
+  // prefix rule: untuk BF. (3 char), lainnya 2 char (mis: D., H., V., BB., BP.)
   let prefix = "";
   const prefix3 = raw.substring(0, 3).toUpperCase();
-  if (["BA.", "BB.", "BF.", "BL."].includes(prefix3)) prefix = prefix3;
+  if (["BA.", "BB.", "BF.", "BL.", "BP."].includes(prefix3)) prefix = prefix3;
   else prefix = raw.substring(0, 2).toUpperCase();
 
   let query = "";
@@ -4954,9 +4963,43 @@ async function validateLabel(labelCode) {
       return await run(raw);
     }
 
+    // =========================================================
+    // BP. = BahanPendukung (belum terpakai — DateUsage IS NULL)
+    // =========================================================
+    case "BP.": {
+      tableName = "BahanPendukung";
+      query = `
+        SELECT
+          b.NoBahanPendukung,
+          b.IdSupplier  AS idSupplier,
+          b.IdCabinetMaterial AS idJenis,
+          cm.Nama       AS namaJenis,
+          uom.NamaUOM   AS namaUom,
+          b.Qty,
+          b.DateUsage   AS dateUsage,
+          b.IsPartial   AS isPartial,
+          b.Keterangan,
+          b.CreateBy    AS createBy,
+          b.CreatedAt   AS createdAt,
+          b.Blok,
+          b.IdLokasi,
+          ISNULL(CAST(b.HasBeenPrinted AS int), 0) AS hasBeenPrinted
+        FROM dbo.BahanPendukung b WITH (NOLOCK)
+        LEFT JOIN dbo.MstCabinetMaterial cm WITH (NOLOCK)
+          ON cm.IdCabinetMaterial = b.IdCabinetMaterial
+        LEFT JOIN dbo.MstUOM uom WITH (NOLOCK)
+          ON uom.IdUOM = cm.IdUOM
+        WHERE b.NoBahanPendukung = @labelCode
+          AND b.DateUsage IS NULL
+          AND b.Qty > 0
+        ORDER BY b.NoBahanPendukung;
+      `;
+      return await run(raw);
+    }
+
     default:
       throw new Error(
-        `Invalid prefix: ${prefix}. Valid prefixes (Inject): BB., D., H., V.`,
+        `Invalid prefix: ${prefix}. Valid prefixes (Inject): BB., D., H., V., BP.`,
       );
   }
 }
