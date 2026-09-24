@@ -707,6 +707,7 @@ async function deleteHotStampingProduksi(noProduksi, ctx) {
     // ===============================
     const rqDel = new sql.Request(tx);
     rqDel.input("NoProduksi", sql.VarChar(50), noProduksi);
+    rqDel.input("TglProduksi", sql.Date, docDateOnly);
 
     // apply audit context sebelum eksekusi
     await applyAuditContext(rqDel, auditCtx);
@@ -714,6 +715,14 @@ async function deleteHotStampingProduksi(noProduksi, ctx) {
     const sqlDelete = `
       -- SIMPAN KEY FURNITURE WIP
       DECLARE @FWIPKeys TABLE (NoFurnitureWIP varchar(50) PRIMARY KEY);
+
+      -- SIMPAN KEY CABINET MATERIAL (sebelum mapping dihapus)
+      DECLARE @MatKeys TABLE (IdCabinetMaterial int PRIMARY KEY);
+
+      INSERT INTO @MatKeys (IdCabinetMaterial)
+      SELECT DISTINCT map.IdCabinetMaterial
+      FROM dbo.HotStampingInputMaterial AS map
+      WHERE map.NoProduksi = @NoProduksi;
 
       INSERT INTO @FWIPKeys (NoFurnitureWIP)
       SELECT DISTINCT map.NoFurnitureWIP
@@ -752,6 +761,15 @@ async function deleteHotStampingProduksi(noProduksi, ctx) {
       JOIN @FWIPKeys AS k
         ON k.NoFurnitureWIP = fw.NoFurnitureWIP;
 
+      -- Release label Bahan Pendukung (BP.) milik material yang dihapus:
+      -- kembalikan DateUsage ke NULL supaya label bisa dipanggil lagi.
+      UPDATE b
+      SET b.DateUsage = NULL
+      FROM dbo.BahanPendukung AS b
+      JOIN @MatKeys AS k
+        ON k.IdCabinetMaterial = b.IdCabinetMaterial
+      WHERE b.DateUsage = @TglProduksi;
+
       DELETE FROM dbo.HotStamping_h WHERE NoProduksi = @NoProduksi;
     `;
 
@@ -789,7 +807,8 @@ SELECT
   fw.IDFurnitureWIP         AS IdJenis,
 
   mw.Nama                   AS NamaJenis,
-  uom.NamaUOM               AS NamaUOM
+  uom.NamaUOM               AS NamaUOM,
+  CAST(NULL AS nvarchar(max)) AS NoBahanPendukung
 FROM dbo.HotStampingInputLabelFWIP map WITH (NOLOCK)
 LEFT JOIN dbo.FurnitureWIP fw WITH (NOLOCK)
   ON fw.NoFurnitureWIP = map.NoFurnitureWIP
@@ -817,7 +836,8 @@ WHERE map.NoProduksi = @no
       CAST(NULL AS bit) AS IsPartial,
       CAST(NULL AS int) AS IdJenis,
       mm.Nama AS NamaJenis,
-      uom.NamaUOM
+      uom.NamaUOM,
+      im.NoBahanPendukung AS NoBahanPendukung
     FROM dbo.HotStampingInputMaterial im WITH (NOLOCK)
     LEFT JOIN dbo.MstCabinetMaterial mm WITH (NOLOCK)
       ON mm.IdCabinetMaterial = im.IdCabinetMaterial
@@ -894,6 +914,7 @@ ORDER BY mp.NoFurnitureWIPPartial DESC;
           idCabinetMaterial: r.Ref1,
           jumlah: r.Pcs ?? null,
           berat: r.Berat ?? null,
+          noBahanPendukung: r.NoBahanPendukung ?? null,
           ...base,
         });
         break;

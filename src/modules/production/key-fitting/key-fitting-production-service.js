@@ -793,12 +793,21 @@ async function deleteKeyFittingProduksi(noProduksi, ctx) {
     // ===============================
     const rqDel = new sql.Request(tx);
     rqDel.input("NoProduksi", sql.VarChar(50), noProduksi);
+    rqDel.input("TglProduksi", sql.Date, docDateOnly);
 
     // apply audit context sebelum eksekusi
     await applyAuditContext(rqDel, auditCtx);
 
     const sqlDelete = `
       DECLARE @FWIPKeys TABLE (NoFurnitureWIP varchar(50) PRIMARY KEY);
+
+      -- SIMPAN KEY CABINET MATERIAL (sebelum mapping dihapus)
+      DECLARE @MatKeys TABLE (IdCabinetMaterial int PRIMARY KEY);
+
+      INSERT INTO @MatKeys (IdCabinetMaterial)
+      SELECT DISTINCT map.IdCabinetMaterial
+      FROM dbo.PasangKunciInputMaterial AS map
+      WHERE map.NoProduksi = @NoProduksi;
 
       -- keys FULL
       INSERT INTO @FWIPKeys (NoFurnitureWIP)
@@ -842,6 +851,15 @@ async function deleteKeyFittingProduksi(noProduksi, ctx) {
       JOIN @FWIPKeys AS k
         ON k.NoFurnitureWIP = fw.NoFurnitureWIP;
 
+      -- Release label Bahan Pendukung (BP.) milik material yang dihapus:
+      -- kembalikan DateUsage ke NULL supaya label bisa dipanggil lagi.
+      UPDATE b
+      SET b.DateUsage = NULL
+      FROM dbo.BahanPendukung AS b
+      JOIN @MatKeys AS k
+        ON k.IdCabinetMaterial = b.IdCabinetMaterial
+      WHERE b.DateUsage = @TglProduksi;
+
       DELETE FROM dbo.PasangKunci_h WHERE NoProduksi = @NoProduksi;
     `;
 
@@ -881,7 +899,8 @@ async function fetchInputs(noProduksi) {
       fw.IDFurnitureWIP AS IdJenis,
       mw.Nama           AS NamaJenis,
       uom.NamaUOM       AS NamaUOM,
-      CAST(NULL AS datetime) AS DatetimeInput
+      CAST(NULL AS datetime) AS DatetimeInput,
+      CAST(NULL AS nvarchar(max)) AS NoBahanPendukung
     FROM dbo.PasangKunciInputLabelFWIP map WITH (NOLOCK)
     LEFT JOIN dbo.FurnitureWIP fw WITH (NOLOCK)
       ON fw.NoFurnitureWIP = map.NoFurnitureWIP
@@ -907,7 +926,8 @@ async function fetchInputs(noProduksi) {
       CAST(NULL AS int)           AS IdJenis,
       mm.Nama                     AS NamaJenis,
       uom.NamaUOM                 AS NamaUOM,
-      CAST(NULL AS datetime) AS DatetimeInput
+      CAST(NULL AS datetime) AS DatetimeInput,
+      im.NoBahanPendukung         AS NoBahanPendukung
     FROM dbo.PasangKunciInputMaterial im WITH (NOLOCK)
     LEFT JOIN dbo.MstCabinetMaterial mm WITH (NOLOCK)
       ON mm.IdCabinetMaterial = im.IdCabinetMaterial
@@ -974,6 +994,7 @@ async function fetchInputs(noProduksi) {
           idCabinetMaterial: r.Ref1, // string cast
           jumlah: r.Pcs ?? null,
           berat: r.Berat ?? null,
+          noBahanPendukung: r.NoBahanPendukung ?? null,
           ...base,
         });
         break;

@@ -93,6 +93,41 @@ function _generateSingleUpsertSection(type, config, produksiConfig) {
   const keyCamel = toCamelField(keyColumn);
   const qtyCamel = toCamelField(quantityColumn);
 
+  // Kolom label Bahan Pendukung (BP.) per baris material. Hanya dibuat kalau
+  // config punya markUsage (klien mengirim noBahanPendukung per entry).
+  // Tujuan: NoBP tersimpan di baris mapping sehingga GET inputs bisa
+  // mengembalikannya & UI menampilkan hasil inputan dengan labelnya.
+  const hasLabels = !!config.markUsage;
+  const labelField = config.markUsage?.labelJsonField || "noBahanPendukung";
+  const labelColumn = "NoBahanPendukung";
+  const srcLabelDecl = hasLabels ? `, ${labelColumn} nvarchar(max)` : "";
+  const fillLabels = hasLabels
+    ? `
+-- Isi label Bahan Pendukung (BP.) yang termasuk material ini (agregat, dedup)
+UPDATE s
+SET s.${labelColumn} = lbl.Labels
+FROM @${type}Src AS s
+CROSS APPLY (
+  SELECT STRING_AGG(t.Lbl, ',') WITHIN GROUP (ORDER BY t.Lbl) AS Labels
+  FROM (
+    SELECT DISTINCT l.value AS Lbl
+    FROM OPENJSON(@jsInputs, '$.${type}')
+    WITH (
+      ${keyColumn} int '${jsonPath(keyColumn)}',
+      ${quantityColumn} int '${jsonPath(quantityColumn)}',
+      ${labelField} nvarchar(max) '$.${labelField}' AS JSON
+    ) inp
+    CROSS APPLY OPENJSON(inp.${labelField}) AS l
+    WHERE inp.${keyColumn} = s.${keyColumn}
+      AND inp.${quantityColumn} > 0
+  ) t
+) lbl;
+`
+    : "";
+  const updateSetLabels = hasLabels ? `, tgt.${labelColumn} = src.${labelColumn}` : "";
+  const insertCols = hasLabels ? `, ${labelColumn}` : "";
+  const insertVals = hasLabels ? `, src.${labelColumn}` : "";
+
   return `
 -- ============================================
 -- ${type.toUpperCase()} (UPSERT)
@@ -102,7 +137,7 @@ DECLARE @${type}Updated int = 0;
 DECLARE @${type}Invalid int = 0;
 
 -- Temp table untuk aggregated data (SUM by key)
-DECLARE @${type}Src TABLE(${keyColumn} int, ${quantityColumn} int);
+DECLARE @${type}Src TABLE(${keyColumn} int, ${quantityColumn} int${srcLabelDecl});
 
 INSERT INTO @${type}Src(${keyColumn}, ${quantityColumn})
 SELECT ${keyColumn}, SUM(ISNULL(${quantityColumn}, 0)) AS ${quantityColumn}
@@ -114,6 +149,7 @@ WITH (
 WHERE ${keyColumn} IS NOT NULL
 GROUP BY ${keyColumn};
 
+${fillLabels}
 -- Count invalid: quantity <= 0 OR material not exists/disabled
 SELECT @${type}Invalid = COUNT(*)
 FROM @${type}Src s
@@ -126,7 +162,7 @@ WHERE s.${quantityColumn} <= 0
 
 -- UPDATE existing records
 UPDATE tgt
-SET tgt.${quantityColumn} = src.${quantityColumn}
+SET tgt.${quantityColumn} = src.${quantityColumn}${updateSetLabels}
 FROM dbo.${mappingTable} tgt
 INNER JOIN @${type}Src src ON src.${keyColumn} = tgt.${keyColumn}
 WHERE tgt.${produksiConfig.codeColumn} = @no
@@ -140,8 +176,8 @@ WHERE tgt.${produksiConfig.codeColumn} = @no
 SET @${type}Updated = @@ROWCOUNT;
 
 -- INSERT new records
-INSERT INTO dbo.${mappingTable}(${produksiConfig.codeColumn}, ${keyColumn}, ${quantityColumn})
-SELECT @no, src.${keyColumn}, src.${quantityColumn}
+INSERT INTO dbo.${mappingTable}(${produksiConfig.codeColumn}, ${keyColumn}, ${quantityColumn}${insertCols})
+SELECT @no, src.${keyColumn}, src.${quantityColumn}${insertVals}
 FROM @${type}Src src
 WHERE src.${quantityColumn} > 0
   AND EXISTS (

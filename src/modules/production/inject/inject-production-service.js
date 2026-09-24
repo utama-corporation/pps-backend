@@ -4191,7 +4191,8 @@ async function fetchInputs(noProduksi) {
       fw.IDFurnitureWIP AS IdJenis,
       mcw.Nama          AS NamaJenis,
       CAST(NULL AS varchar(50)) AS NamaUOM,
-      fw.Pcs AS Pcs
+      fw.Pcs AS Pcs,
+      CAST(NULL AS nvarchar(max)) AS NoBahanPendukung
     FROM dbo.InjectProduksiInputFurnitureWIP f WITH (NOLOCK)
     LEFT JOIN dbo.FurnitureWIP fw WITH (NOLOCK)
       ON fw.NoFurnitureWIP = f.NoFurnitureWIP
@@ -4215,7 +4216,8 @@ async function fetchInputs(noProduksi) {
       bh.IdJenisPlastik AS IdJenis,
       jp.Jenis          AS NamaJenis,
       CAST(NULL AS varchar(50)) AS NamaUOM,
-      CAST(NULL AS int) AS Pcs
+      CAST(NULL AS int) AS Pcs,
+      CAST(NULL AS nvarchar(max)) AS NoBahanPendukung
     FROM dbo.InjectProduksiInputBroker b WITH (NOLOCK)
     LEFT JOIN dbo.Broker_d brd WITH (NOLOCK)
       ON brd.NoBroker = b.NoBroker AND brd.NoSak = b.NoSak
@@ -4241,7 +4243,8 @@ async function fetchInputs(noProduksi) {
       mh.IdMixer AS IdJenis,
       mm.Jenis   AS NamaJenis,
       CAST(NULL AS varchar(50)) AS NamaUOM,
-      CAST(NULL AS int) AS Pcs
+      CAST(NULL AS int) AS Pcs,
+      CAST(NULL AS nvarchar(max)) AS NoBahanPendukung
     FROM dbo.InjectProduksiInputMixer m WITH (NOLOCK)
     LEFT JOIN dbo.Mixer_d md WITH (NOLOCK)
       ON md.NoMixer = m.NoMixer AND md.NoSak = m.NoSak
@@ -4267,7 +4270,8 @@ async function fetchInputs(noProduksi) {
       gl.IdGilingan    AS IdJenis,
       mg.NamaGilingan  AS NamaJenis,
       CAST(NULL AS varchar(50)) AS NamaUOM,
-      CAST(NULL AS int) AS Pcs
+      CAST(NULL AS int) AS Pcs,
+      CAST(NULL AS nvarchar(max)) AS NoBahanPendukung
     FROM dbo.InjectProduksiInputGilingan g WITH (NOLOCK)
     LEFT JOIN dbo.Gilingan gl WITH (NOLOCK)
       ON gl.NoGilingan = g.NoGilingan
@@ -4291,7 +4295,8 @@ async function fetchInputs(noProduksi) {
       CAST(NULL AS int) AS IdJenis,
       mm.Nama AS NamaJenis,
       uom.NamaUOM AS NamaUOM,
-      CAST(cm.Pcs AS int) AS Pcs
+      CAST(cm.Pcs AS int) AS Pcs,
+      cm.NoBahanPendukung AS NoBahanPendukung
     FROM dbo.InjectProduksiInputCabinetMaterial cm WITH (NOLOCK)
     LEFT JOIN dbo.MstCabinetMaterial mm WITH (NOLOCK)
       ON mm.IdCabinetMaterial = cm.IdCabinetMaterial
@@ -4447,6 +4452,7 @@ async function fetchInputs(noProduksi) {
           pcs: r.Pcs ?? null,
           namaJenis: r.NamaJenis ?? null,
           namaUom: r.NamaUOM ?? null,
+          noBahanPendukung: r.NoBahanPendukung ?? null,
         });
         break;
     }

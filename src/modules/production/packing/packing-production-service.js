@@ -687,12 +687,21 @@ async function deletePackingProduksi(noPacking, ctx) {
     // ===============================
     const rqDel = new sql.Request(tx);
     rqDel.input("NoPacking", sql.VarChar(50), noPacking);
+    rqDel.input("TglProduksi", sql.Date, docDateOnly);
 
     // ✅ apply audit context (BENAR)
     await applyAuditContext(rqDel, auditCtx);
 
     const sqlDelete = `
       DECLARE @FWIPKeys TABLE (NoFurnitureWIP varchar(50) PRIMARY KEY);
+
+      /* ========== SIMPAN KEY CABINET MATERIAL (sebelum mapping dihapus) ========== */
+      DECLARE @MatKeys TABLE (IdCabinetMaterial int PRIMARY KEY);
+
+      INSERT INTO @MatKeys (IdCabinetMaterial)
+      SELECT DISTINCT map.IdCabinetMaterial
+      FROM dbo.PackingProduksiInputMaterial AS map
+      WHERE map.NoPacking = @NoPacking;
 
       /* =======================
          A) collect FWIP keys (FULL)
@@ -750,6 +759,16 @@ async function deletePackingProduksi(noPacking, ctx) {
         ON k.NoFurnitureWIP = fw.NoFurnitureWIP;
 
       /* =======================
+         E2) release label Bahan Pendukung (BP.) milik material yang dihapus
+         ======================= */
+      UPDATE b
+      SET b.DateUsage = NULL
+      FROM dbo.BahanPendukung AS b
+      JOIN @MatKeys AS k
+        ON k.IdCabinetMaterial = b.IdCabinetMaterial
+      WHERE b.DateUsage = @TglProduksi;
+
+      /* =======================
          F) delete header
          ======================= */
       DELETE FROM dbo.PackingProduksi_h
@@ -805,7 +824,8 @@ async function fetchInputs(noPacking) {
       fw.IDFurnitureWIP AS IdJenis,
       mw.Nama           AS NamaJenis,
       uom.NamaUOM       AS NamaUOM,
-      CAST(NULL AS datetime) AS DatetimeInput
+      CAST(NULL AS datetime) AS DatetimeInput,
+      CAST(NULL AS nvarchar(max)) AS NoBahanPendukung
     FROM dbo.PackingProduksiInputLabelFWIP map WITH (NOLOCK)
     LEFT JOIN dbo.FurnitureWIP fw WITH (NOLOCK)
       ON fw.NoFurnitureWIP = map.NoFurnitureWIP
@@ -831,7 +851,8 @@ async function fetchInputs(noPacking) {
       CAST(NULL AS int)           AS IdJenis,
       mm.Nama                     AS NamaJenis,
       uom.NamaUOM                 AS NamaUOM,
-      CAST(NULL AS datetime)      AS DatetimeInput
+      CAST(NULL AS datetime)      AS DatetimeInput,
+      im.NoBahanPendukung         AS NoBahanPendukung
     FROM dbo.PackingProduksiInputMaterial im WITH (NOLOCK)
     LEFT JOIN dbo.MstCabinetMaterial mm WITH (NOLOCK)
       ON mm.IdCabinetMaterial = im.IdCabinetMaterial
@@ -901,6 +922,7 @@ async function fetchInputs(noPacking) {
           idCabinetMaterial: r.Ref1, // string cast (konsisten)
           jumlah: r.Pcs ?? null, // jumlah disimpan ke jumlah
           berat: r.Berat ?? null,
+          noBahanPendukung: r.NoBahanPendukung ?? null,
           ...base,
         });
         break;
