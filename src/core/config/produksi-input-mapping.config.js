@@ -569,6 +569,12 @@ const UPSERT_INPUT_CONFIGS = {
         table: "BahanPendukung",
         labelColumn: "NoBahanPendukung",
         labelJsonField: "noBahanPendukung",
+        // Konsumsi per label (partial) — HANYA modul inject untuk saat ini.
+        // Klien mengirim array { no, qty } per entry material (bpPartials).
+        // Label hanya ditandai DateUsage saat qty >= sisa Qty label; jika
+        // qty < sisa, Qty label dikurangi sehingga sisa tetap bisa dipakai
+        // produksi lain.
+        partialJsonField: "bpPartials",
       },
     },
   },
@@ -583,10 +589,13 @@ const UPSERT_INPUT_CONFIGS = {
       aggregateByKey: true, // SUM quantities by key sebelum insert/update
       // Tandai label Bahan Pendukung (BP.) sebagai sudah dipakai (DateUsage
       // = Tanggal) saat material yang berasal dari scan label di-submit.
+      // Konsumsi parsial per label via bpPartials ({no, qty}) — sisa label
+      // yang tidak habis tetap dipakai (Qty dikurangi, DateUsage NULL).
       markUsage: {
         table: "BahanPendukung",
         labelColumn: "NoBahanPendukung",
         labelJsonField: "noBahanPendukung",
+        partialJsonField: "bpPartials",
       },
     },
   },
@@ -603,6 +612,7 @@ const UPSERT_INPUT_CONFIGS = {
         table: "BahanPendukung",
         labelColumn: "NoBahanPendukung",
         labelJsonField: "noBahanPendukung",
+        partialJsonField: "bpPartials",
       },
     },
   },
@@ -619,6 +629,7 @@ const UPSERT_INPUT_CONFIGS = {
         table: "BahanPendukung",
         labelColumn: "NoBahanPendukung",
         labelJsonField: "noBahanPendukung",
+        partialJsonField: "bpPartials",
       },
     },
   },
@@ -634,10 +645,12 @@ const UPSERT_INPUT_CONFIGS = {
       // Tandai label Bahan Pendukung (BP.) sebagai sudah dipakai (DateUsage
       // = Tanggal) saat material yang berasal dari scan label di-submit.
       // Klien mengirim daftar noBahanPendukung per entry material.
+      // Konsumsi parsial per label via bpPartials ({no, qty}).
       markUsage: {
         table: "BahanPendukung",
         labelColumn: "NoBahanPendukung",
         labelJsonField: "noBahanPendukung",
+        partialJsonField: "bpPartials",
       },
     },
   },

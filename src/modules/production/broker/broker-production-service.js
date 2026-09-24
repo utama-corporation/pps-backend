@@ -17,6 +17,8 @@ const {
   calcJamKerjaFromStartEnd,
 } = require("../../../core/utils/jam-kerja-helper");
 
+const { buildQcBuckets } = require("../../../core/utils/qc-bucket");
+
 const sharedInputService = require("../../../core/shared/produksi-input.service");
 const {
   getFormulaInputsByCategory,
@@ -3386,9 +3388,161 @@ async function splitProduksiTime(selector, payload, ctx) {
   }
 }
 
+// ── QC Downtime (catatan downtime per produksi broker) ──────────────────────
+
+function mapBrokerQcRow(row) {
+  return {
+    id: Number(row.Id),
+    noProduksi: String(row.NoProduksi || ""),
+    idMesin: row.IdMesin == null ? null : Number(row.IdMesin),
+    hourStart: row.HourStart ? String(row.HourStart).slice(0, 5) : null,
+    keterangan: row.Keterangan ?? null,
+    dateTimeCreate: row.DateTimeCreate ?? null,
+  };
+}
+
+async function getBrokerQcByNoProduksi(noProduksi) {
+  const pool = await poolPromise;
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib diisi");
+
+  const headerRes = await new sql.Request(pool)
+    .input("NoProduksi", sql.VarChar(50), no)
+    .query(`
+      SELECT TOP 1
+        NoProduksi,
+        TglProduksi,
+        Shift,
+        CONVERT(VARCHAR(8), HourStart, 108) AS HourStart,
+        CONVERT(VARCHAR(8), HourEnd, 108) AS HourEnd
+      FROM dbo.BrokerProduksi_h WITH (NOLOCK)
+      WHERE NoProduksi = @NoProduksi;
+    `);
+
+  const headerRow = headerRes.recordset?.[0];
+  if (!headerRow) throw notFound(`Produksi ${no} tidak ditemukan`);
+
+  const res = await new sql.Request(pool)
+    .input("NoProduksi", sql.VarChar(50), no)
+    .query(`
+      SELECT Id, NoProduksi, IdMesin, HourStart, Keterangan, DateTimeCreate
+      FROM dbo.BrokerProduksiQc WITH (NOLOCK)
+      WHERE NoProduksi = @NoProduksi
+      ORDER BY DateTimeCreate ASC, Id ASC;
+    `);
+
+  const items = (res.recordset || []).map(mapBrokerQcRow);
+  const buckets = buildQcBuckets(
+    headerRow.TglProduksi,
+    headerRow.HourStart ? String(headerRow.HourStart).slice(0, 5) : null,
+    headerRow.HourEnd ? String(headerRow.HourEnd).slice(0, 5) : null,
+    headerRow.Shift,
+  );
+
+  return {
+    header: {
+      noProduksi: String(headerRow.NoProduksi || ""),
+      tglProduksi: headerRow.TglProduksi ?? null,
+      shift: headerRow.Shift == null ? null : Number(headerRow.Shift),
+      hourStart: headerRow.HourStart
+        ? String(headerRow.HourStart).slice(0, 5)
+        : null,
+      hourEnd: headerRow.HourEnd
+        ? String(headerRow.HourEnd).slice(0, 5)
+        : null,
+    },
+    items,
+    buckets,
+  };
+}
+
+async function createBrokerQc(noProduksi, idMesin, hourStart, keterangan) {
+  const no = String(noProduksi || "").trim();
+  const text = String(keterangan || "").trim();
+  const hs =
+    hourStart == null || String(hourStart).trim() === ""
+      ? null
+      : String(hourStart).trim().slice(0, 5);
+  if (!no) throw badReq("noProduksi wajib diisi");
+  if (!text) throw badReq("keterangan downtime wajib diisi");
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  try {
+    await tx.begin();
+    const exist = await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), no)
+      .query(`
+        SELECT TOP 1 NoProduksi FROM dbo.BrokerProduksi_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoProduksi = @NoProduksi;
+      `);
+    if (!exist.recordset || exist.recordset.length === 0) {
+      throw notFound(`Produksi ${no} tidak ditemukan`);
+    }
+
+    const insert = await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), no)
+      .input("IdMesin", sql.Int, idMesin == null ? null : Number(idMesin))
+      .input("HourStart", sql.VarChar(5), hs)
+      .input("Keterangan", sql.NVarChar(500), text)
+      .query(`
+        INSERT INTO dbo.BrokerProduksiQc (NoProduksi, IdMesin, HourStart, Keterangan, DateTimeCreate)
+        OUTPUT INSERTED.Id, INSERTED.NoProduksi, INSERTED.IdMesin, INSERTED.HourStart, INSERTED.Keterangan, INSERTED.DateTimeCreate
+        VALUES (@NoProduksi, @IdMesin, @HourStart, @Keterangan, GETDATE());
+      `);
+    await tx.commit();
+    return mapBrokerQcRow(insert.recordset[0]);
+  } catch (e) {
+    try { await tx.rollback(); } catch (_) {}
+    throw e;
+  }
+}
+
+async function updateBrokerQc(id, keterangan) {
+  const idNum = Number(id);
+  const text = String(keterangan || "").trim();
+  if (!Number.isInteger(idNum) || idNum <= 0) throw badReq("id wajib integer positif");
+  if (!text) throw badReq("keterangan downtime wajib diisi");
+
+  const pool = await poolPromise;
+  const res = await new sql.Request(pool)
+    .input("Id", sql.Int, idNum)
+    .input("Keterangan", sql.NVarChar(500), text)
+    .query(`
+      UPDATE dbo.BrokerProduksiQc
+      SET Keterangan = @Keterangan
+      OUTPUT INSERTED.Id, INSERTED.NoProduksi, INSERTED.IdMesin, INSERTED.HourStart, INSERTED.Keterangan, INSERTED.DateTimeCreate
+      WHERE Id = @Id;
+    `);
+  if (!res.recordset || res.recordset.length === 0) {
+    throw notFound(`Catatan downtime id ${idNum} tidak ditemukan`);
+  }
+  return mapBrokerQcRow(res.recordset[0]);
+}
+
+async function deleteBrokerQc(id) {
+  const idNum = Number(id);
+  if (!Number.isInteger(idNum) || idNum <= 0) throw badReq("id wajib integer positif");
+
+  const pool = await poolPromise;
+  const res = await new sql.Request(pool)
+    .input("Id", sql.Int, idNum)
+    .query(`
+      DELETE FROM dbo.BrokerProduksiQc WHERE Id = @Id;
+    `);
+  if (!res.rowsAffected || res.rowsAffected[0] === 0) {
+    throw notFound(`Catatan downtime id ${idNum} tidak ditemukan`);
+  }
+  return { id: idNum, deleted: true };
+}
+
 module.exports = {
   getAllProduksi,
   getProduksiByDate,
+  getBrokerQcByNoProduksi,
+  createBrokerQc,
+  updateBrokerQc,
+  deleteBrokerQc,
   fetchInputs,
   fetchInputsV2,
   getFormulaInputsByNoProduksi,

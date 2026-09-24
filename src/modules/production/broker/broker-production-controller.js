@@ -5,7 +5,7 @@ const {
   getActorUsername,
   makeRequestId,
 } = require("../../../core/utils/http-context");
-const { toBitUndef } = require("../../../core/utils/parse");
+const { toBitUndef, normalizeTime } = require("../../../core/utils/parse");
 
 async function getAllProduksi(req, res) {
   const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
@@ -1232,9 +1232,130 @@ async function splitProduksiTime(req, res) {
   }
 }
 
+// ── QC Downtime (catatan downtime per produksi broker) ──────────────────────
+
+async function getQcByNoProduksi(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+  try {
+    const data = await brokerProduksiService.getBrokerQcByNoProduksi(
+      noProduksi,
+    );
+    return res
+      .status(200)
+      .json({ success: true, message: "QC downtime retrieved", data });
+  } catch (err) {
+    console.error("[broker.getQcByNoProduksi]", err);
+    const status = err.statusCode || err.status || 500;
+    return res.status(status).json({
+      success: false,
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
+      error: { message: err.message },
+    });
+  }
+}
+
+async function createQc(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+  const idMesinRaw = req.body?.idMesin;
+  const idMesin =
+    idMesinRaw == null || idMesinRaw === ""
+      ? null
+      : Number(idMesinRaw);
+  const hourStart = normalizeTime(req.body?.hourStart);
+  const keterangan = (req.body?.keterangan || "").toString();
+
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+  if (!keterangan.trim()) {
+    return res
+      .status(400)
+      .json({ success: false, message: "keterangan downtime wajib diisi" });
+  }
+  try {
+    const data = await brokerProduksiService.createBrokerQc(
+      noProduksi,
+      idMesin,
+      hourStart ?? null,
+      keterangan,
+    );
+    return res.status(201).json({
+      success: true,
+      message: "QC downtime created",
+      data,
+    });
+  } catch (err) {
+    console.error("[broker.createQc]", err);
+    const status = err.statusCode || err.status || 500;
+    return res.status(status).json({
+      success: false,
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
+      error: { message: err.message },
+    });
+  }
+}
+
+async function updateQc(req, res) {
+  const id = (req.params.id || "").trim();
+  const keterangan = (req.body?.keterangan || "").toString();
+
+  if (!keterangan.trim()) {
+    return res
+      .status(400)
+      .json({ success: false, message: "keterangan downtime wajib diisi" });
+  }
+  try {
+    const data = await brokerProduksiService.updateBrokerQc(id, keterangan);
+    return res
+      .status(200)
+      .json({ success: true, message: "QC downtime updated", data });
+  } catch (err) {
+    console.error("[broker.updateQc]", err);
+    const status = err.statusCode || err.status || 500;
+    return res.status(status).json({
+      success: false,
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
+      error: { message: err.message },
+    });
+  }
+}
+
+async function deleteQc(req, res) {
+  const id = (req.params.id || "").trim();
+  try {
+    const data = await brokerProduksiService.deleteBrokerQc(id);
+    return res
+      .status(200)
+      .json({ success: true, message: "QC downtime deleted", data });
+  } catch (err) {
+    console.error("[broker.deleteQc]", err);
+    const status = err.statusCode || err.status || 500;
+    return res.status(status).json({
+      success: false,
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
+      error: { message: err.message },
+    });
+  }
+}
+
 module.exports = {
   getProduksiByDate,
   getInputsByNoProduksi,
+  getQcByNoProduksi,
+  createQc,
+  updateQc,
+  deleteQc,
   getInputsByNoProduksiV2,
   getFormulaInputsByNoProduksi,
   getOutputsByNoProduksi,

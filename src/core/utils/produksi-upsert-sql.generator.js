@@ -196,6 +196,29 @@ SET @${type}Inserted = @@ROWCOUNT;
 }
 
 function _generateMarkUsageSection(type, config, produksiConfig) {
+  const partialJsonField = config.markUsage?.partialJsonField;
+  const hasPartial =
+    partialJsonField &&
+    typeof partialJsonField === "string" &&
+    partialJsonField.length > 0;
+
+  if (hasPartial) {
+    return _generatePartialMarkUsageSection(
+      type,
+      config,
+      produksiConfig,
+      partialJsonField,
+    );
+  }
+  return _generateLegacyMarkUsageSection(type, config, produksiConfig);
+}
+
+/**
+ * Mark usage klasik: tandai seluruh label (misi. Bahan Pendukung BP.) yang
+ * dikirim di `labelJsonField` sekaligus (DateUsage = TglProduksi). Dipakai
+ * modul yang belum mendukung konsumsi parsial per label.
+ */
+function _generateLegacyMarkUsageSection(type, config, produksiConfig) {
   const { table, labelColumn, labelJsonField } = config.markUsage;
   const { mappingTable, sourceTable, keyColumn, quantityColumn, validateColumn, validateValue } = config;
   const tempName = `#${type}MarkUsageIds`;
@@ -244,6 +267,131 @@ INNER JOIN ${tempName} u ON u.${labelColumn} = b.${labelColumn}
 WHERE b.DateUsage IS NULL;
 
 SET @${type}Marked = @@ROWCOUNT;
+
+DROP TABLE ${tempName};
+`.trim();
+}
+
+/**
+ * Mark usage dengan dukungan konsumsi PARSIAL per label (dipakai modul
+ * inject untuk Bahan Pendukung). Klien mengirim rincian `partialJsonField`
+ * (array { no, qty } per entry). Perilaku:
+ *  - qty < sisa Qty label → Qty label DIKURANGI, DateUsage tetap NULL
+ *    (sisa tetap bisa dipakai produksi lain).
+ *  - qty >= sisa Qty label → label ditandai penuh (DateUsage), Qty dibiarkan
+ *    (kompatibel dengan release label pada delete).
+ *  - Label yang dikirim lewat `labelJsonField` (noBahanPendukung) TANPA
+ *    rincian parsial → ditandai penuh (fallback untuk klien lama / entry
+ *    tanpa rincian).
+ */
+function _generatePartialMarkUsageSection(
+  type,
+  config,
+  produksiConfig,
+  partialJsonField,
+) {
+  const { table, labelColumn, labelJsonField } = config.markUsage;
+  const { sourceTable, keyColumn, quantityColumn, validateColumn, validateValue } = config;
+  const tempName = `#${type}MarkUsageIds`;
+
+  // Rincian konsumsi per label dari klien
+  const aggSQL = `
+  SELECT
+    LTRIM(RTRIM(p.no)) AS Lbl,
+    SUM(ISNULL(p.qty, 0)) AS ConQty
+  FROM OPENJSON(@jsInputs, '$.${type}')
+  WITH (
+    ${keyColumn} int '${jsonPath(keyColumn)}',
+    ${partialJsonField} nvarchar(max) '$.${partialJsonField}' AS JSON
+  ) e
+  CROSS APPLY OPENJSON(e.${partialJsonField})
+    WITH (no nvarchar(50) '$.no', qty decimal(18,4) '$.qty') p
+  WHERE e.${keyColumn} IS NOT NULL
+    AND p.qty > 0
+    AND LTRIM(RTRIM(p.no)) <> ''
+  GROUP BY LTRIM(RTRIM(p.no))`;
+
+  return `
+-- ============================================
+-- ${type.toUpperCase()} MARK USAGE PARSIAL (${table})
+-- ============================================
+DECLARE @${type}Marked int = 0;
+
+DECLARE @${type}TglProduksi datetime;
+SELECT @${type}TglProduksi = ${produksiConfig.dateColumn}
+FROM dbo.${produksiConfig.headerTable} WITH (NOLOCK)
+WHERE ${produksiConfig.codeColumn} = @no;
+
+-- Rincian konsumsi per label (dari klien: partialJsonField)
+DECLARE @${type}Agg TABLE (Lbl varchar(50), ConQty decimal(18,4));
+INSERT INTO @${type}Agg (Lbl, ConQty)
+${aggSQL};
+
+-- Tentukan tindakan per label berdasarkan sisa Qty saat ini (pre-image)
+DECLARE @${type}Action TABLE (
+  Lbl varchar(50),
+  ConQty decimal(18,4),
+  FullMark bit
+);
+INSERT INTO @${type}Action (Lbl, ConQty, FullMark)
+SELECT a.Lbl, a.ConQty, CASE WHEN a.ConQty < b.Qty THEN 0 ELSE 1 END
+FROM @${type}Agg a
+INNER JOIN dbo.${table} b WITH (NOLOCK)
+  ON b.${labelColumn} = a.Lbl
+WHERE b.DateUsage IS NULL AND b.Qty > 0;
+
+-- [PARSIAL] qty < sisa → kurangi Qty label, DateUsage tetap NULL
+UPDATE b
+SET b.Qty = b.Qty - a.ConQty
+FROM dbo.${table} b
+INNER JOIN @${type}Action a ON a.Lbl = b.${labelColumn}
+WHERE a.FullMark = 0 AND b.DateUsage IS NULL AND b.Qty > 0;
+
+DECLARE @${type}PartialCount int = @@ROWCOUNT;
+
+-- [PENUH via rincian] qty >= sisa → tandai DateUsage
+UPDATE b
+SET b.DateUsage = @${type}TglProduksi
+FROM dbo.${table} b
+INNER JOIN @${type}Action a ON a.Lbl = b.${labelColumn}
+WHERE a.FullMark = 1 AND b.DateUsage IS NULL;
+
+DECLARE @${type}FullCount int = @@ROWCOUNT;
+
+-- [LEGACY/FALLBACK] label di labelJsonField TANPA rincian parsial →
+-- ditandai penuh (klien lama / entry tanpa bpPartials)
+IF OBJECT_ID(N'tempdb..${tempName}') IS NOT NULL DROP TABLE ${tempName};
+CREATE TABLE ${tempName} (${labelColumn} nvarchar(50));
+
+INSERT INTO ${tempName} (${labelColumn})
+SELECT lbl.value
+FROM OPENJSON(@jsInputs, '$.${type}')
+WITH (
+  ${keyColumn} int '${jsonPath(keyColumn)}',
+  ${quantityColumn} int '${jsonPath(quantityColumn)}',
+  ${labelJsonField} nvarchar(max) '$.${labelJsonField}' AS JSON
+) inp
+CROSS APPLY OPENJSON(inp.${labelJsonField}) lbl
+WHERE inp.${quantityColumn} > 0
+  AND EXISTS (
+    SELECT 1 FROM dbo.${sourceTable} m WITH (NOLOCK)
+    WHERE m.${keyColumn} = inp.${keyColumn}
+      AND m.${validateColumn} = ${validateValue}
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM @${type}Agg a
+    WHERE a.Lbl = LTRIM(RTRIM(lbl.value))
+  );
+
+UPDATE b
+SET b.DateUsage = @${type}TglProduksi
+FROM dbo.${table} b
+INNER JOIN ${tempName} u ON u.${labelColumn} = b.${labelColumn}
+WHERE b.DateUsage IS NULL;
+
+DECLARE @${type}LegacyCount int = @@ROWCOUNT;
+
+SET @${type}Marked = @${type}PartialCount + @${type}FullCount + @${type}LegacyCount;
 
 DROP TABLE ${tempName};
 `.trim();

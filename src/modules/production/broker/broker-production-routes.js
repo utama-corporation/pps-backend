@@ -142,4 +142,29 @@ router.delete(
   brokerProduksiController.deleteInputsAndPartials,
 );
 
+// QC Downtime: GET/POST /broker/:noProduksi/qc ; PUT/DELETE /broker/:noProduksi/qc/:id
+router.get(
+  "/broker/:noProduksi/qc",
+  verifyToken,
+  brokerProduksiController.getQcByNoProduksi,
+);
+
+router.post(
+  "/broker/:noProduksi/qc",
+  verifyToken,
+  brokerProduksiController.createQc,
+);
+
+router.put(
+  "/broker/:noProduksi/qc/:id",
+  verifyToken,
+  brokerProduksiController.updateQc,
+);
+
+router.delete(
+  "/broker/:noProduksi/qc/:id",
+  verifyToken,
+  brokerProduksiController.deleteQc,
+);
+
 module.exports = router;

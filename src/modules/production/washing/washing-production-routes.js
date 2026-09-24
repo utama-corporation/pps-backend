@@ -119,4 +119,29 @@ router.delete(
   washingProduksiController.deleteInputsAndPartials,
 );
 
+// QC Downtime: GET/POST /washing/:noProduksi/qc ; PUT/DELETE /washing/:noProduksi/qc/:id
+router.get(
+  "/washing/:noProduksi/qc",
+  verifyToken,
+  washingProduksiController.getQcByNoProduksi,
+);
+
+router.post(
+  "/washing/:noProduksi/qc",
+  verifyToken,
+  washingProduksiController.createQc,
+);
+
+router.put(
+  "/washing/:noProduksi/qc/:id",
+  verifyToken,
+  washingProduksiController.updateQc,
+);
+
+router.delete(
+  "/washing/:noProduksi/qc/:id",
+  verifyToken,
+  washingProduksiController.deleteQc,
+);
+
 module.exports = router;
