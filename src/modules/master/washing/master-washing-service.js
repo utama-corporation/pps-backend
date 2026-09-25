@@ -34,7 +34,16 @@ async function getStokProses() {
       m.Nama,
       ISNULL(agg.SakSisa, 0)   AS SakSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua
+      agg.DateCreateTertua,
+      STUFF((
+        SELECT DISTINCT ', ' + CONCAT(lh.Blok, CONVERT(VARCHAR(10), lh.IdLokasi))
+        FROM dbo.Washing_h lh
+        INNER JOIN dbo.Washing_d ld ON ld.NoWashing = lh.NoWashing
+        WHERE lh.IdJenisPlastik = m.IdWashing
+          AND ld.DateUsage IS NULL
+          AND ISNULL(NULLIF(lh.Blok, ''), '') <> ''
+        FOR XML PATH('')
+      ), 1, 2, '') AS Lokasi
     FROM dbo.MstWashing m
     LEFT JOIN (
       SELECT
@@ -61,6 +70,7 @@ async function getStokProses() {
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
     ),
     ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
+    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
   }));
 }
 

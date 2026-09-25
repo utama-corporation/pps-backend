@@ -36,6 +36,8 @@ async function getStokProses() {
       SELECT
         h.IdMixer,
         h.DateCreate,
+        h.Blok,
+        h.IdLokasi,
         d.NoSak,
         CASE
           WHEN d.IsPartial = 1 THEN d.Berat - ISNULL(ps.PartialBerat, 0)
@@ -54,7 +56,15 @@ async function getStokProses() {
       m.Jenis,
       ISNULL(agg.SakSisa, 0)   AS SakSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua
+      agg.DateCreateTertua,
+      STUFF((
+        SELECT DISTINCT ', ' + CONCAT(ed.Blok, CONVERT(VARCHAR(10), ed.IdLokasi))
+        FROM EffectiveDetail ed
+        WHERE ed.IdMixer = m.IdMixer
+          AND ed.BeratEfektif > 0
+          AND ISNULL(NULLIF(ed.Blok, ''), '') <> ''
+        FOR XML PATH('')
+      ), 1, 2, '') AS Lokasi
     FROM dbo.MstMixer m
     LEFT JOIN (
       SELECT
@@ -78,6 +88,7 @@ async function getStokProses() {
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
     ),
     ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
+    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
   }));
 }
 

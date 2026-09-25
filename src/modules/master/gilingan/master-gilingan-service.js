@@ -38,6 +38,8 @@ async function getStokProses() {
         g.NoGilingan,
         g.IdGilingan,
         g.DateCreate,
+        g.Blok,
+        g.IdLokasi,
         CASE
           WHEN ISNULL(g.Berat, 0) - ISNULL(ps.TotalPartialBerat, 0) < 0 THEN 0
           ELSE ISNULL(g.Berat, 0) - ISNULL(ps.TotalPartialBerat, 0)
@@ -52,7 +54,15 @@ async function getStokProses() {
       m.NamaGilingan,
       ISNULL(agg.LabelSisa, 0) AS LabelSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua
+      agg.DateCreateTertua,
+      STUFF((
+        SELECT DISTINCT ', ' + CONCAT(ed.Blok, CONVERT(VARCHAR(10), ed.IdLokasi))
+        FROM EffectiveDetail ed
+        WHERE ed.IdGilingan = m.IdGilingan
+          AND ed.BeratEfektif > 0
+          AND ISNULL(NULLIF(ed.Blok, ''), '') <> ''
+        FOR XML PATH('')
+      ), 1, 2, '') AS Lokasi
     FROM dbo.MstGilingan m
     LEFT JOIN (
       SELECT
@@ -76,6 +86,7 @@ async function getStokProses() {
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
     ),
     ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
+    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
   }));
 }
 

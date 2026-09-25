@@ -27,4 +27,47 @@ async function getAllActive(req, res) {
   }
 }
 
-module.exports = { getAllActive };
+async function getStokProses(req, res) {
+  try {
+    const data = await service.getStokProses();
+
+    return res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error("Get Stok Barang Jadi Proses Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Terjadi kesalahan server",
+    });
+  }
+}
+
+async function getLabelByIdBarangJadi(req, res) {
+  try {
+    const idBJ = parseInt(req.params.idbj, 10);
+
+    if (!Number.isFinite(idBJ)) {
+      return res.status(400).json({
+        success: false,
+        message: "idbj wajib berupa angka",
+      });
+    }
+
+    const data = await service.getLabelByIdBarangJadi(idBJ);
+
+    return res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error("Get Label Barang Jadi By IdBJ Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Terjadi kesalahan server",
+    });
+  }
+}
+
+module.exports = { getAllActive, getStokProses, getLabelByIdBarangJadi };

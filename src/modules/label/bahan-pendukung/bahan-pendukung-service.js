@@ -266,7 +266,15 @@ exports.getStok = async () => {
       u.NamaUOM,
       ISNULL(agg.LabelSisa, 0) AS LabelSisa,
       ISNULL(agg.QtySisa, 0) AS QtySisa,
-      agg.DateCreateTertua
+      agg.DateCreateTertua,
+      STUFF((
+        SELECT DISTINCT ', ' + CONCAT(b.Blok, CONVERT(VARCHAR(10), b.IdLokasi))
+        FROM dbo.BahanPendukung b
+        WHERE b.IdCabinetMaterial = m.IdCabinetMaterial
+          AND b.DateUsage IS NULL
+          AND ISNULL(NULLIF(b.Blok, ''), '') <> ''
+        FOR XML PATH('')
+      ), 1, 2, '') AS Lokasi
     FROM dbo.MstCabinetMaterial m
     LEFT JOIN (
       SELECT
@@ -300,5 +308,6 @@ exports.getStok = async () => {
       ).toFixed(2),
     ),
     ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
+    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
   }));
 };

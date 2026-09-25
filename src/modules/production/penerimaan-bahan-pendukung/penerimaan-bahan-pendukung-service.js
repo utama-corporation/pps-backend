@@ -246,6 +246,10 @@ async function addItemsPenerimaanBahanPendukung(noPenerimaan, payload, ctx) {
           IdSupplier: item.idSupplier,
           IdCabinetMaterial: item.idCabinetMaterial,
           Qty: item.qty,
+          // QtyAwal: snapshot kuantitas asli saat penerimaan. Qty (live)
+          // dipotong oleh konsumsi parsial di proses produksi, QtyAwal
+          // TIDAK pernah berubah — dipakai riwayat penerimaan.
+          QtyAwal: item.qty,
           Keterangan: item.keterangan,
           CreateBy: actorUsername || null,
         },
@@ -328,7 +332,7 @@ async function listPenerimaanBahanPendukung({ page = 1, pageSize = 20, filter = 
     OUTER APPLY (
       SELECT
         COUNT(1) AS JumlahItem,
-        SUM(ISNULL(bp.Qty, 0)) AS TotalQty
+        SUM(ISNULL(bp.QtyAwal, bp.Qty)) AS TotalQty
       FROM dbo.PenerimaanBahanPendukung_d dd
       INNER JOIN dbo.BahanPendukung bp ON bp.NoBahanPendukung = dd.NoBahanPendukung
       WHERE dd.NoPenerimaan = h.NoPenerimaan
@@ -371,7 +375,8 @@ async function getDetailPenerimaanBahanPendukung(noPenerimaan) {
       sup.NmSupplier AS NamaSupplier,
       bp.IdCabinetMaterial,
       cm.Nama AS NamaCabinetMaterial,
-      bp.Qty,
+      ISNULL(bp.QtyAwal, bp.Qty) AS Qty,
+      bp.Qty AS QtySisa,
       bp.Keterangan,
       bp.HasBeenPrinted
     FROM dbo.PenerimaanBahanPendukung_d dd

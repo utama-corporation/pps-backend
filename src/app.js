@@ -33,6 +33,7 @@ const mstOperatorRoutes = require("./modules/master-operator/master-operator-rou
 const mstCetakanRoutes = require("./modules/master-cetakan/master-cetakan-route");
 const mstWarnaRoutes = require("./modules/master-warna/master-warna-route");
 const mstWashingRoutes = require("./modules/master/washing/master-washing-route");
+const mstGilinganRoutes = require("./modules/master/gilingan/master-gilingan-route");
 const mstBarangJadiRoutes = require("./modules/master/barang-jadi/master-barang-jadi-route");
 const mstBrokerRoutes = require("./modules/master/broker/master-broker-route");
 const mstCrusherRoutes = require("./modules/master/crusher/master-crusher-route");
@@ -146,6 +147,7 @@ app.use("/api/production", checkOverlapRoutes);
 app.use("/api/mst-cetakan", mstCetakanRoutes);
 app.use("/api/mst-warna", mstWarnaRoutes);
 app.use("/api/mst-washing", mstWashingRoutes);
+app.use("/api/mst-gilingan", mstGilinganRoutes);
 app.use("/api/mst-barang-jadi", mstBarangJadiRoutes);
 app.use("/api/mst-broker", mstBrokerRoutes);
 app.use("/api/mst-crusher", mstCrusherRoutes);

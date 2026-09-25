@@ -27,7 +27,15 @@ async function getStokProses() {
       m.IdBonggolan,
       m.NamaBonggolan,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua
+      agg.DateCreateTertua,
+      STUFF((
+        SELECT DISTINCT ', ' + CONCAT(lb.Blok, CONVERT(VARCHAR(10), lb.IdLokasi))
+        FROM dbo.Bonggolan lb
+        WHERE lb.IdBonggolan = m.IdBonggolan
+          AND lb.DateUsage IS NULL
+          AND ISNULL(NULLIF(lb.Blok, ''), '') <> ''
+        FOR XML PATH('')
+      ), 1, 2, '') AS Lokasi
     FROM dbo.MstBonggolan m
     LEFT JOIN (
       SELECT
@@ -53,6 +61,7 @@ async function getStokProses() {
       ).toFixed(2),
     ),
     ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
+    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
   }));
 }
 

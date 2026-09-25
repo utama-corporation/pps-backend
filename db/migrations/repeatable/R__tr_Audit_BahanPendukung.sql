@@ -30,7 +30,8 @@ BEGIN
     CONCAT('{"NoBahanPendukung":"', i.NoBahanPendukung, '"}'),
     NULL,
     (SELECT i.NoBahanPendukung, i.IdSupplier, i.IdCabinetMaterial,
-            CAST(i.Qty AS decimal(18,3)) AS Qty, i.Keterangan,
+            CAST(i.Qty AS decimal(18,3)) AS Qty,
+            CAST(i.QtyAwal AS decimal(18,3)) AS QtyAwal, i.Keterangan,
             i.IsPartial, i.DateUsage, i.CreateBy, i.CreatedAt,
             i.Blok, i.IdLokasi, i.HasBeenPrinted
      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)
@@ -44,12 +45,14 @@ BEGIN
     'UPDATE', 'BahanPendukung', @actor, @rid,
     CONCAT('{"NoBahanPendukung":"', i.NoBahanPendukung, '"}'),
     (SELECT d.NoBahanPendukung, d.IdSupplier, d.IdCabinetMaterial,
-            CAST(d.Qty AS decimal(18,3)) AS Qty, d.Keterangan,
+            CAST(d.Qty AS decimal(18,3)) AS Qty,
+            CAST(d.QtyAwal AS decimal(18,3)) AS QtyAwal, d.Keterangan,
             d.IsPartial, d.DateUsage, d.CreateBy, d.CreatedAt,
             d.Blok, d.IdLokasi, d.HasBeenPrinted
      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
     (SELECT i.NoBahanPendukung, i.IdSupplier, i.IdCabinetMaterial,
-            CAST(i.Qty AS decimal(18,3)) AS Qty, i.Keterangan,
+            CAST(i.Qty AS decimal(18,3)) AS Qty,
+            CAST(i.QtyAwal AS decimal(18,3)) AS QtyAwal, i.Keterangan,
             i.IsPartial, i.DateUsage, i.CreateBy, i.CreatedAt,
             i.Blok, i.IdLokasi, i.HasBeenPrinted
      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)
@@ -62,7 +65,8 @@ BEGIN
     'DELETE', 'BahanPendukung', @actor, @rid,
     CONCAT('{"NoBahanPendukung":"', d.NoBahanPendukung, '"}'),
     (SELECT d.NoBahanPendukung, d.IdSupplier, d.IdCabinetMaterial,
-            CAST(d.Qty AS decimal(18,3)) AS Qty, d.Keterangan,
+            CAST(d.Qty AS decimal(18,3)) AS Qty,
+            CAST(d.QtyAwal AS decimal(18,3)) AS QtyAwal, d.Keterangan,
             d.IsPartial, d.DateUsage, d.CreateBy, d.CreatedAt,
             d.Blok, d.IdLokasi, d.HasBeenPrinted
      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),

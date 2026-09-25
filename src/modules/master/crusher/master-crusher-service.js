@@ -27,7 +27,15 @@ async function getStokProses() {
       m.IdCrusher,
       m.NamaCrusher,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua
+      agg.DateCreateTertua,
+      STUFF((
+        SELECT DISTINCT ', ' + CONCAT(lc.Blok, CONVERT(VARCHAR(10), lc.IdLokasi))
+        FROM dbo.Crusher lc
+        WHERE lc.IdCrusher = m.IdCrusher
+          AND lc.DateUsage IS NULL
+          AND ISNULL(NULLIF(lc.Blok, ''), '') <> ''
+        FOR XML PATH('')
+      ), 1, 2, '') AS Lokasi
     FROM dbo.MstCrusher m
     LEFT JOIN (
       SELECT
@@ -50,6 +58,7 @@ async function getStokProses() {
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
     ),
     ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
+    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
   }));
 }
 

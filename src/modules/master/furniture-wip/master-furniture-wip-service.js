@@ -47,6 +47,8 @@ async function getStokProses() {
         f.NoFurnitureWIP,
         f.IdFurnitureWIP,
         f.DateCreate,
+        f.Blok,
+        f.IdLokasi,
         CASE
           WHEN f.IsPartial = 1 THEN
             CASE
@@ -67,7 +69,15 @@ async function getStokProses() {
       ISNULL(agg.LabelSisa, 0) AS LabelSisa,
       ISNULL(agg.PcsSisa, 0)   AS PcsSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua
+      agg.DateCreateTertua,
+      STUFF((
+        SELECT DISTINCT ', ' + CONCAT(ed.Blok, CONVERT(VARCHAR(10), ed.IdLokasi))
+        FROM EffectiveDetail ed
+        WHERE ed.IdFurnitureWIP = m.IdCabinetWIP
+          AND ed.PcsEfektif > 0
+          AND ISNULL(NULLIF(ed.Blok, ''), '') <> ''
+        FOR XML PATH('')
+      ), 1, 2, '') AS Lokasi
     FROM dbo.MstCabinetWIP m
     LEFT JOIN (
       SELECT
@@ -93,6 +103,7 @@ async function getStokProses() {
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
     ),
     ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
+    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
   }));
 }
 

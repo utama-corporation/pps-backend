@@ -1552,6 +1552,8 @@ async function getStok(bjType = null) {
         bj.NoBJ,
         bj.IdBJ,
         bj.DateCreate,
+        bj.Blok,
+        bj.IdLokasi,
         CASE
           WHEN bj.IsPartial = 1 THEN
             CASE
@@ -1574,7 +1576,15 @@ async function getStok(bjType = null) {
       ISNULL(agg.LabelSisa, 0) AS LabelSisa,
       ISNULL(agg.PcsSisa, 0)   AS PcsSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua
+      agg.DateCreateTertua,
+      STUFF((
+        SELECT DISTINCT ', ' + CONCAT(ed.Blok, CONVERT(VARCHAR(10), ed.IdLokasi))
+        FROM EffectiveDetail ed
+        WHERE ed.IdBJ = m.IdBJ
+          AND ed.PcsEfektif > 0
+          AND ISNULL(NULLIF(ed.Blok, ''), '') <> ''
+        FOR XML PATH('')
+      ), 1, 2, '') AS Lokasi
     FROM dbo.MstBarangJadi m
     LEFT JOIN (
       SELECT
@@ -1611,6 +1621,7 @@ async function getStok(bjType = null) {
       ).toFixed(2),
     ),
     ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
+    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
   }));
 }
 

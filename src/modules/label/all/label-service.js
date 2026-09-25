@@ -1312,6 +1312,19 @@ async function getAllLabelsV2(
           GROUP BY ${colNo}
         ) rp ON rp.${colNo} = t.${colNo}${j.join}
         WHERE t.DateUsage IS NULL`;
+    } else if (["barangadagang", "bahanpendukung"].includes(kode)) {
+      const j = jenisJoin("t");
+      sub = `
+        SELECT
+          t.${colNo} AS LabelCode,
+          t.CreatedAt AS DateCreate, t.Blok AS Blok, t.IdLokasi AS IdLokasi,
+          CAST(N'${q(prefix)}' AS NVARCHAR(10)) AS Prefix,
+          CAST(N'${q(kat.NamaKategori)}' AS NVARCHAR(100)) AS Kategori,
+          CAST(N'${q(kat.NamaUOM)}' AS NVARCHAR(10)) AS NamaUOM,
+          ISNULL(t.Qty, 0) AS Qty,
+          0 AS Berat${j.select}
+        FROM [dbo].[${tbl}] t${j.join}
+        WHERE t.DateUsage IS NULL`;
     } else {
       const j = jenisJoin("t");
       sub = `

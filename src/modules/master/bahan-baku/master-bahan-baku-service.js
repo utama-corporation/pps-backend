@@ -10,7 +10,18 @@ async function getStokByFilter(whereClause) {
       m.Nama,
       ISNULL(agg.SakSisa, 0)   AS SakSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua
+      agg.DateCreateTertua,
+      STUFF((
+        SELECT DISTINCT ', ' + CONCAT(p.Blok, CONVERT(VARCHAR(10), p.IdLokasi))
+        FROM dbo.BahanBakuPallet_h p
+        INNER JOIN dbo.BahanBaku_d pd
+          ON pd.NoBahanBaku = p.NoBahanBaku
+         AND pd.NoPallet    = p.NoPallet
+        WHERE p.IdJenisPlastik = m.IdBB
+          AND pd.DateUsage IS NULL
+          AND ISNULL(NULLIF(p.Blok, ''), '') <> ''
+        FOR XML PATH('')
+      ), 1, 2, '') AS Lokasi
     FROM dbo.MstBahanBaku m
     LEFT JOIN (
       SELECT
@@ -65,6 +76,7 @@ async function getStokByFilter(whereClause) {
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
     ),
     ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
+    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
   }));
 }
 
