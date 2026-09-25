@@ -15,6 +15,7 @@ exports.insertBarangDagangHeader = async (
     .input("IdSupplier", sql.Int, header.IdSupplier)
     .input("IdBarangDagang", sql.Int, header.IdBarangDagang)
     .input("Qty", sql.Decimal(18, 3), header.Qty)
+    .input("QtyAwal", sql.Decimal(18, 3), header.QtyAwal ?? header.Qty)
     .input("Keterangan", sql.NVarChar(200), header.Keterangan ?? null)
     .input("IsPartial", sql.Bit, header.IsPartial ?? 0)
     .input("CreateBy", sql.VarChar(100), header.CreateBy)
@@ -23,12 +24,12 @@ exports.insertBarangDagangHeader = async (
     .input("IdLokasi", sql.Int, header.IdLokasi ?? null).query(`
       INSERT INTO dbo.BarangDagang (
         NoBarangDagang, IdSupplier, IdBarangDagang,
-        Qty, Keterangan, IsPartial, DateUsage,
+        Qty, QtyAwal, Keterangan, IsPartial, DateUsage,
         CreateBy, CreatedAt, Blok, IdLokasi
       )
       VALUES (
         @NoBarangDagang, @IdSupplier, @IdBarangDagang,
-        @Qty, @Keterangan, @IsPartial, NULL,
+        @Qty, @QtyAwal, @Keterangan, @IsPartial, NULL,
         @CreateBy, @CreatedAt, @Blok, @IdLokasi
       );
     `);

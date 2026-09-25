@@ -18,6 +18,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
       b.IdBarangDagang,
       md.NamaBarangDagang,
       b.Qty,
+      b.QtyAwal,
       b.Keterangan,
       b.IsPartial,
       CASE WHEN b.DateUsage IS NULL THEN CAST(0 AS bit) ELSE CAST(1 AS bit) END AS Used,
@@ -88,7 +89,7 @@ exports.getExistingForUpdate = async (tx, noBarangDagang) => {
   const res = await new sql.Request(tx).input("NoBarangDagang", sql.VarChar(50), noBarangDagang).query(`
     SELECT TOP 1
       NoBarangDagang, IdSupplier, IdBarangDagang,
-      Qty, Keterangan, IsPartial, DateUsage,
+      Qty, QtyAwal, Keterangan, IsPartial, DateUsage,
       CreateBy, CreatedAt, Blok, IdLokasi
     FROM dbo.BarangDagang WITH (UPDLOCK, HOLDLOCK)
     WHERE NoBarangDagang = @NoBarangDagang;
@@ -122,7 +123,7 @@ exports.getByNoBarangDagang = async (noBarangDagang) => {
       SELECT
         b.NoBarangDagang, b.IdSupplier, sup.NmSupplier AS NamaSupplier,
         b.IdBarangDagang, md.NamaBarangDagang,
-        b.Qty, b.Keterangan,
+        b.Qty, b.QtyAwal, b.Keterangan,
         b.IsPartial,
         ISNULL(CAST(b.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
         b.CreateBy,

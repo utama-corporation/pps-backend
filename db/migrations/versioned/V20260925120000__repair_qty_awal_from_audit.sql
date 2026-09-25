@@ -1,5 +1,5 @@
 -- ================================================================
--- Migration: Repair QtyAwal dari audit trail (INSERT pertama per label)
+-- Migration: Repair QtyAwal dari audit trail (INSERT pembuat baris live)
 -- ================================================================
 -- Backfill awal (V20260925110000) sekadar menyalin Qty (sisa stok saat
 -- ini) ke QtyAwal. Untuk label yang SUDAH terpotong konsumsi parsial di
@@ -7,12 +7,15 @@
 -- tetap kuantitas asli saat penerimaan.
 --
 -- Nilai asli penerimaan dapat direkonstruksi dari AuditTrail: baris
--- INSERT pertama per NoBahanPendukung (Action='INSERT', OldData IS NULL)
--- merekam Qty awal (dalam JSON NewData). Migration ini menimpa QtyAwal
--- dengan nilai tersebut.
+-- INSERT (Action='INSERT', OldData IS NULL) yang menciptakan baris yang
+-- SAAT INI masih hidup merekam Qty awal (dalam JSON NewData). Karena
+-- nomor label bisa dihapus lalu di-INSERT ulang (siklus delete/recreate),
+-- INSERT PERTAMA belum tentu milik baris live — jadi dipakai INSERT
+-- TERAKHIR per NoBahanPendukung (AuditId tertinggi, identik dengan baris
+-- yang ada sekarang). Migration ini menimpa QtyAwal dengan nilai tersebut.
 --
 -- Label tanpa catatan INSERT di audit (mis. dibuat sebelum trigger audit
--- aktif / sudah terpurn) dibiarkan memakai nilai backfill lama.
+-- aktif / sudah terhapus) dibiarkan memakai nilai backfill lama.
 -- ================================================================
 
 UPDATE b
@@ -24,7 +27,7 @@ INNER JOIN (
         CAST(JSON_VALUE(a.NewData, '$.Qty') AS decimal(18,3)) AS OrigQty,
         ROW_NUMBER() OVER (
             PARTITION BY JSON_VALUE(a.PK, '$.NoBahanPendukung')
-            ORDER BY a.AuditId ASC
+            ORDER BY a.AuditId DESC
         ) AS rn
     FROM dbo.AuditTrail a WITH (NOLOCK)
     WHERE a.TableName = 'BahanPendukung'

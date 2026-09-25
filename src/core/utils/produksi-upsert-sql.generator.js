@@ -278,11 +278,14 @@ DROP TABLE ${tempName};
  * (array { no, qty } per entry). Perilaku:
  *  - qty < sisa Qty label → Qty label DIKURANGI, DateUsage tetap NULL
  *    (sisa tetap bisa dipakai produksi lain).
- *  - qty >= sisa Qty label → label ditandai penuh (DateUsage), Qty dibiarkan
- *    (kompatibel dengan release label pada delete).
+ *  - qty >= sisa Qty label → label habis dipakai: Qty di-zero (sisa 0) dan
+ *    ditandai penuh (DateUsage).
  *  - Label yang dikirim lewat `labelJsonField` (noBahanPendukung) TANPA
  *    rincian parsial → ditandai penuh (fallback untuk klien lama / entry
- *    tanpa rincian).
+ *    tanpa rincian), Qty juga di-zero.
+ *  - Setiap konsumsi dicatat ke dbo.${table}Konsumsi_d (per NoProduksi +
+ *    NoBahanPendukung) SEBELUM Qty berubah, sehingga saat input produksi
+ *    di-release/hapus Qty label bisa dikembalikan persis.
  */
 function _generatePartialMarkUsageSection(
   type,
@@ -293,6 +296,7 @@ function _generatePartialMarkUsageSection(
   const { table, labelColumn, labelJsonField } = config.markUsage;
   const { sourceTable, keyColumn, quantityColumn, validateColumn, validateValue } = config;
   const tempName = `#${type}MarkUsageIds`;
+  const consumptionLogTable = `dbo.${table}Konsumsi_d`;
 
   // Rincian konsumsi per label dari klien
   const aggSQL = `
@@ -331,14 +335,45 @@ ${aggSQL};
 DECLARE @${type}Action TABLE (
   Lbl varchar(50),
   ConQty decimal(18,4),
+  SisaAtAction decimal(18,4),
   FullMark bit
 );
-INSERT INTO @${type}Action (Lbl, ConQty, FullMark)
-SELECT a.Lbl, a.ConQty, CASE WHEN a.ConQty < b.Qty THEN 0 ELSE 1 END
+INSERT INTO @${type}Action (Lbl, ConQty, SisaAtAction, FullMark)
+SELECT a.Lbl, a.ConQty, ISNULL(b.Qty, 0) AS SisaAtAction,
+       CASE WHEN a.ConQty < b.Qty THEN 0 ELSE 1 END
 FROM @${type}Agg a
 INNER JOIN dbo.${table} b WITH (NOLOCK)
   ON b.${labelColumn} = a.Lbl
 WHERE b.DateUsage IS NULL AND b.Qty > 0;
+
+-- Catat konsumsi per label ke log konsumsi (per produksi) SEBELUM Qty
+-- berubah. Penuh → seluruh sisa label; parsial → sesuai ConQty.
+-- Log bersifat AKUMULATIF per (produksi, label): jika bdang yang sama
+-- di-resubmit (mis. dua material makan label yang sama, atau parsial lalu
+-- penuh), nilai dijumlahkan sehingga SUM(log) == total Qty yang benar-benar
+-- dikurangi dari label oleh produksi ini (dasar restore yang tepat).
+UPDATE k
+SET k.QtyKonsumsi = ISNULL(k.QtyKonsumsi, 0) + a.AddQty
+FROM ${consumptionLogTable} k
+INNER JOIN (
+  SELECT Lbl,
+    CASE WHEN FullMark = 1 THEN SisaAtAction ELSE ConQty END AS AddQty
+  FROM @${type}Action
+) a ON a.Lbl = k.NoBahanPendukung AND k.NoProduksi = @no;
+
+INSERT INTO ${consumptionLogTable}(NoProduksi, NoBahanPendukung, QtyKonsumsi, CreateBy, DateTimeCreate)
+SELECT @no, a.Lbl, a.AddQty,
+       NULL,
+       SYSDATETIME()
+FROM (
+  SELECT Lbl,
+    CASE WHEN FullMark = 1 THEN SisaAtAction ELSE ConQty END AS AddQty
+  FROM @${type}Action
+) a
+WHERE NOT EXISTS (
+  SELECT 1 FROM ${consumptionLogTable} k
+  WHERE k.NoProduksi = @no AND k.NoBahanPendukung = a.Lbl
+);
 
 -- [PARSIAL] qty < sisa → kurangi Qty label, DateUsage tetap NULL
 UPDATE b
@@ -349,9 +384,9 @@ WHERE a.FullMark = 0 AND b.DateUsage IS NULL AND b.Qty > 0;
 
 DECLARE @${type}PartialCount int = @@ROWCOUNT;
 
--- [PENUH via rincian] qty >= sisa → tandai DateUsage
+-- [PENUH via rincian] qty >= sisa → habis dipakai: sisa 0 + tandai DateUsage
 UPDATE b
-SET b.DateUsage = @${type}TglProduksi
+SET b.Qty = 0, b.DateUsage = @${type}TglProduksi
 FROM dbo.${table} b
 INNER JOIN @${type}Action a ON a.Lbl = b.${labelColumn}
 WHERE a.FullMark = 1 AND b.DateUsage IS NULL;
@@ -359,7 +394,7 @@ WHERE a.FullMark = 1 AND b.DateUsage IS NULL;
 DECLARE @${type}FullCount int = @@ROWCOUNT;
 
 -- [LEGACY/FALLBACK] label di labelJsonField TANPA rincian parsial →
--- ditandai penuh (klien lama / entry tanpa bpPartials)
+-- habis dipakai: sisa 0 + tandai penuh (klien lama / entry tanpa bpPartials)
 IF OBJECT_ID(N'tempdb..${tempName}') IS NOT NULL DROP TABLE ${tempName};
 CREATE TABLE ${tempName} (${labelColumn} nvarchar(50));
 
@@ -383,8 +418,34 @@ WHERE inp.${quantityColumn} > 0
     WHERE a.Lbl = LTRIM(RTRIM(lbl.value))
   );
 
+-- Catat konsumsi legacy (seluruh sisa label) ke log, akumulatif per produksi.
+UPDATE k
+SET k.QtyKonsumsi = ISNULL(k.QtyKonsumsi, 0) + t.AddQty
+FROM ${consumptionLogTable} k
+INNER JOIN (
+  SELECT b.${labelColumn} AS Lbl, ISNULL(b.Qty, 0) AS AddQty
+  FROM dbo.${table} b
+  INNER JOIN ${tempName} u ON u.${labelColumn} = b.${labelColumn}
+  WHERE b.DateUsage IS NULL AND b.Qty > 0
+) t ON t.Lbl = k.NoBahanPendukung AND k.NoProduksi = @no;
+
+INSERT INTO ${consumptionLogTable}(NoProduksi, NoBahanPendukung, QtyKonsumsi, CreateBy, DateTimeCreate)
+SELECT @no, t.Lbl, t.AddQty,
+       NULL,
+       SYSDATETIME()
+FROM (
+  SELECT b.${labelColumn} AS Lbl, ISNULL(b.Qty, 0) AS AddQty
+  FROM dbo.${table} b
+  INNER JOIN ${tempName} u ON u.${labelColumn} = b.${labelColumn}
+  WHERE b.DateUsage IS NULL AND b.Qty > 0
+) t
+WHERE NOT EXISTS (
+  SELECT 1 FROM ${consumptionLogTable} k
+  WHERE k.NoProduksi = @no AND k.NoBahanPendukung = t.Lbl
+);
+
 UPDATE b
-SET b.DateUsage = @${type}TglProduksi
+SET b.Qty = 0, b.DateUsage = @${type}TglProduksi
 FROM dbo.${table} b
 INNER JOIN ${tempName} u ON u.${labelColumn} = b.${labelColumn}
 WHERE b.DateUsage IS NULL;

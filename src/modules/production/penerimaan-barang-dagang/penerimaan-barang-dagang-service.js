@@ -369,6 +369,7 @@ async function getDetailPenerimaanBarangDagang(noPenerimaan) {
       bd.IdBarangDagang,
       md.NamaBarangDagang,
       bd.Qty,
+      bd.QtyAwal,
       bd.Keterangan,
       bd.HasBeenPrinted
     FROM dbo.PenerimaanBarangDagang_d dd

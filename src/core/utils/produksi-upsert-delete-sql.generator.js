@@ -76,9 +76,35 @@ function _generateSingleDeleteSection(type, config, produksiConfig) {
   const { mappingTable, keyColumn } = config;
   const keyCamel = toCamelField(keyColumn);
   const keysTable = `#${type}DelKeys`;
+  const labelsTable = `#${type}DelLabels`;
+  const hasLabels = !!config.markUsage;
+
+  // Tangkap label (mis. NoBahanPendukung) milik material yang dihapus
+  // SEBELUM baris mapping dihapus — label tersimpan sebagai CSV di kolom
+  // NoBahanPendukung baris mapping.
+  const captureLabels = hasLabels
+    ? `
+-- Tangkap label ${config.markUsage.labelColumn} material yang akan dihapus
+IF OBJECT_ID(N'tempdb..${labelsTable}') IS NOT NULL DROP TABLE ${labelsTable};
+CREATE TABLE ${labelsTable} (${config.markUsage.labelColumn} nvarchar(50) PRIMARY KEY);
+
+INSERT INTO ${labelsTable} (${config.markUsage.labelColumn})
+SELECT DISTINCT LTRIM(RTRIM(s.value))
+FROM dbo.${mappingTable} map
+INNER JOIN ${keysTable} k ON k.${keyColumn} = map.${keyColumn}
+CROSS APPLY STRING_SPLIT(ISNULL(map.NoBahanPendukung, ''), ',') s
+WHERE map.${produksiConfig.codeColumn} = @no
+  AND LTRIM(RTRIM(s.value)) <> '';
+`
+    : "";
+  const dropLabels = hasLabels
+    ? `
+IF OBJECT_ID(N'tempdb..${labelsTable}') IS NOT NULL DROP TABLE ${labelsTable};
+`
+    : "";
 
   const unmarkSection = config.markUsage
-    ? _generateUnmarkUsageSection(type, config, produksiConfig, keysTable)
+    ? _generateUnmarkUsageSection(type, config, produksiConfig, labelsTable)
     : "";
 
   return `
@@ -103,6 +129,7 @@ WHERE map.${produksiConfig.codeColumn} = @no;
 
 SELECT @${type}Deleted = COUNT(*) FROM ${keysTable};
 
+${captureLabels}
 -- Delete records
 DELETE map
 FROM dbo.${mappingTable} map
@@ -117,24 +144,36 @@ SET @${type}NotFound = @${type}Requested - @${type}Deleted;
 ${unmarkSection}
 
 DROP TABLE ${keysTable};
+${dropLabels}
 `.trim();
 }
 
 /**
- * Generate unmark-usage section: kembalikan DateUsage label (mis. Bahan
- * Pendukung BP.) ke NULL untuk material yang dihapus, supaya label bisa
- * dipanggil kembali.
+ * Generate unmark-usage section: kembalikan Qty label (mis. Bahan Pendukung
+ * BP.) dari log konsumsi produksi ini dan lepaskan DateUsage, supaya label
+ * bisa dipakai kembali.
  *
- * Hanya label yang DateUsage-nya SAMA dengan tanggal produksi ini yang
- * dilepas (label ditandai = tanggal produksi saat material di-submit),
- * untuk menghindari membebaskan label milik produksi lain di tanggal lain.
+ * - Label yang punya catatan konsumsi di dbo.${table}Konsumsi_d untuk
+ *   produksi ini → Qty dikembalikan persis sebesar QtyKonsumsi.
+ * - Label legacy full-mark (tanpa log, mis. dikonsumsi sebelum fitur log)
+ *   → Qty dibiarkan (sudah benar pada metode lama) dan hanya DateUsage
+ *   yang dilepaskan.
+ * - Kategori label dibatasi pada material yang benar-benar dihapus
+ *   (labelsTable berisi NoBahanPendukung CSV dari baris mapping yang
+ *   dihapus), sehingga release bersifat presisi per produksi+label.
  */
-function _generateUnmarkUsageSection(type, config, produksiConfig, keysTable) {
-  const { keyColumn } = config;
+function _generateUnmarkUsageSection(
+  type,
+  config,
+  produksiConfig,
+  labelsTable,
+) {
+  const { table, labelColumn } = config.markUsage;
+  const consumptionLogTable = `dbo.${table}Konsumsi_d`;
 
   return `
 -- ============================================
--- ${type.toUpperCase()} RELEASE ${config.markUsage.table.toUpperCase()}
+-- ${type.toUpperCase()} RELEASE ${config.markUsage.table.toUpperCase()} (restore Qty dari log)
 -- ============================================
 DECLARE @${type}TglProduksi datetime;
 SELECT @${type}TglProduksi = ${produksiConfig.dateColumn}
@@ -144,15 +183,27 @@ WHERE ${produksiConfig.codeColumn} = @no;
 IF @${type}TglProduksi IS NOT NULL
 BEGIN
   UPDATE b
-  SET b.DateUsage = NULL
-  FROM dbo.${config.markUsage.table} AS b
-  WHERE b.DateUsage = @${type}TglProduksi
-    AND EXISTS (
-      SELECT 1 FROM ${keysTable} k
-      WHERE k.${keyColumn} = b.${keyColumn}
-    );
+  SET
+    b.Qty = ISNULL(b.Qty, 0) + ISNULL(k.QtyKonsumsi, 0),
+    b.DateUsage = CASE WHEN b.DateUsage = @${type}TglProduksi THEN NULL ELSE b.DateUsage END
+  FROM dbo.${table} AS b
+  INNER JOIN ${labelsTable} t ON t.${labelColumn} = b.${labelColumn}
+  LEFT JOIN (
+    SELECT NoBahanPendukung, SUM(QtyKonsumsi) AS QtyKonsumsi
+    FROM ${consumptionLogTable}
+    WHERE NoProduksi = @no
+    GROUP BY NoBahanPendukung
+  ) k ON k.NoBahanPendukung = b.${labelColumn}
+  WHERE k.NoBahanPendukung IS NOT NULL
+     OR b.DateUsage = @${type}TglProduksi;
 
   SELECT @${type}LabelReleased = @@ROWCOUNT;
+
+  -- Hapus catatan konsumsi produksi ini agar tidak double-restore.
+  DELETE k
+  FROM ${consumptionLogTable} k
+  INNER JOIN ${labelsTable} t ON t.${labelColumn} = k.NoBahanPendukung
+  WHERE k.NoProduksi = @no;
 END
 `.trim();
 }

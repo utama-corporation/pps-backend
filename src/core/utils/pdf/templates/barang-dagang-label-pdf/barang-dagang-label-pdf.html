@@ -113,13 +113,25 @@
         overflow-wrap: anywhere;
       }
 
-      /* 3. By — pembuat, kecil & normal */
-      .by {
+      /* 3. Qty + By — satu baris horizontal: qty kiri, by kanan */
+      .by-qty {
         flex: 0 0 auto;
         margin-top: 1mm;
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
         font-size: 6.5pt;
         font-weight: normal;
         line-height: 1.2;
+      }
+
+      .by-qty .qty {
+        word-break: break-all;
+      }
+
+      .by-qty .by {
+        margin-left: 1mm;
+        text-align: right;
         word-break: break-all;
       }
 
@@ -152,7 +164,10 @@
           <span class="jenis-text" id="jenisText">{{namaProduk}}</span>
         </div>
 
-        <div class="by">By&nbsp;: {{createBy}}</div>
+        <div class="by-qty">
+          <span class="qty">{{qty}}</span>
+          <span class="by">By&nbsp;: {{createBy}}</span>
+        </div>
 
         <div class="batch">{{tanggal}}</div>
       </div>
