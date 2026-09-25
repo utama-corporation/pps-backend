@@ -1,4 +1,5 @@
 const { sql, poolPromise } = require("../../../core/config/db");
+const { attachLokasiToStok } = require("../../../core/shared/stok-lokasi.helper");
 
 async function getAllActive() {
   const pool = await poolPromise;
@@ -34,16 +35,7 @@ async function getStokProses() {
       m.Nama,
       ISNULL(agg.SakSisa, 0)   AS SakSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua,
-      STUFF((
-        SELECT DISTINCT ', ' + CONCAT(lh.Blok, CONVERT(VARCHAR(10), lh.IdLokasi))
-        FROM dbo.Washing_h lh
-        INNER JOIN dbo.Washing_d ld ON ld.NoWashing = lh.NoWashing
-        WHERE lh.IdJenisPlastik = m.IdWashing
-          AND ld.DateUsage IS NULL
-          AND ISNULL(NULLIF(lh.Blok, ''), '') <> ''
-        FOR XML PATH('')
-      ), 1, 2, '') AS Lokasi
+      agg.DateCreateTertua
     FROM dbo.MstWashing m
     LEFT JOIN (
       SELECT
@@ -62,16 +54,30 @@ async function getStokProses() {
     ORDER BY m.Nama ASC;
   `);
 
-  return result.recordset.map((r) => ({
+  const items = result.recordset.map((r) => ({
     IdWashing: r.IdWashing,
     Nama: r.Nama,
     SakSisa: typeof r.SakSisa === "number" ? r.SakSisa : parseInt(r.SakSisa, 10) || 0,
     BeratSisa: Number(
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
     ),
-    ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
-    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
+    DateCreateTertua: r.DateCreateTertua,
   }));
+
+  return attachLokasiToStok(items, {
+    sql: `
+      SELECT
+        h.IdJenisPlastik AS IdKey,
+        h.Blok,
+        h.IdLokasi
+      FROM dbo.Washing_h h
+      INNER JOIN dbo.Washing_d d ON d.NoWashing = h.NoWashing
+      WHERE d.DateUsage IS NULL
+        AND ISNULL(NULLIF(h.Blok, ''), '') <> ''
+      GROUP BY h.IdJenisPlastik, h.Blok, h.IdLokasi;
+    `,
+    idOf: (r) => r.IdWashing,
+  });
 }
 
 async function getLabelByIdWashing(idWashing) {
@@ -84,6 +90,8 @@ async function getLabelByIdWashing(idWashing) {
         h.NoWashing,
         h.NoWashing AS Label,
         h.DateCreate,
+        h.Blok,
+        h.IdLokasi,
         COUNT(d.NoSak) AS SakSisa,
         SUM(ISNULL(d.Berat, 0)) AS BeratSisa
       FROM dbo.Washing_h h
@@ -91,7 +99,7 @@ async function getLabelByIdWashing(idWashing) {
         ON d.NoWashing = h.NoWashing
       WHERE h.IdJenisPlastik = @IdJenisPlastik
         AND d.DateUsage IS NULL
-      GROUP BY h.NoWashing, h.DateCreate
+      GROUP BY h.NoWashing, h.DateCreate, h.Blok, h.IdLokasi
       ORDER BY h.DateCreate ASC, h.NoWashing ASC;
     `);
 
@@ -99,6 +107,9 @@ async function getLabelByIdWashing(idWashing) {
     NoWashing: r.NoWashing,
     Label: r.Label,
     ...(r.DateCreate && { DateCreate: r.DateCreate }),
+    ...(r.Blok && r.Blok.trim()
+      ? { Lokasi: `${r.Blok}${r.IdLokasi ?? ""}` }
+      : {}),
     SakSisa: typeof r.SakSisa === "number" ? r.SakSisa : parseInt(r.SakSisa, 10) || 0,
     BeratSisa: Number(
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),

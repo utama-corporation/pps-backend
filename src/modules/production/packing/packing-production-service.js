@@ -1,5 +1,6 @@
 // services/packing-production-service.js
 const { sql, poolPromise } = require("../../../core/config/db");
+const { attachLokasiToStok } = require("../../../core/shared/stok-lokasi.helper");
 const {
   assertOutputJenisChangeAllowed,
 } = require("../../../core/utils/output-jenis-guard");
@@ -1576,15 +1577,7 @@ async function getStok(bjType = null) {
       ISNULL(agg.LabelSisa, 0) AS LabelSisa,
       ISNULL(agg.PcsSisa, 0)   AS PcsSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua,
-      STUFF((
-        SELECT DISTINCT ', ' + CONCAT(ed.Blok, CONVERT(VARCHAR(10), ed.IdLokasi))
-        FROM EffectiveDetail ed
-        WHERE ed.IdBJ = m.IdBJ
-          AND ed.PcsEfektif > 0
-          AND ISNULL(NULLIF(ed.Blok, ''), '') <> ''
-        FOR XML PATH('')
-      ), 1, 2, '') AS Lokasi
+      agg.DateCreateTertua
     FROM dbo.MstBarangJadi m
     LEFT JOIN (
       SELECT
@@ -1602,7 +1595,7 @@ async function getStok(bjType = null) {
     ORDER BY m.NamaBJ ASC;
   `);
 
-  return result.recordset.map((r) => ({
+  const items = result.recordset.map((r) => ({
     IdBJ: r.IdBJ,
     NamaBJ: r.NamaBJ,
     LabelSisa:
@@ -1620,9 +1613,30 @@ async function getStok(bjType = null) {
           : parseFloat(r.BeratSisa) || 0
       ).toFixed(2),
     ),
-    ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
-    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
+    DateCreateTertua: r.DateCreateTertua,
   }));
+
+  const idBJTypeCond =
+    idBJType == null ? "" : `AND m.IdBJType = ${Number(idBJType)}`;
+
+  return attachLokasiToStok(items, {
+    sql: `
+      SELECT
+        bj.IdBJ AS IdKey,
+        bj.Blok,
+        bj.IdLokasi
+      FROM dbo.BarangJadi bj
+      INNER JOIN PackingProduksiOutputLabelBJ o
+        ON o.NoBJ = bj.NoBJ
+      INNER JOIN dbo.MstBarangJadi m
+        ON m.IdBJ = bj.IdBJ
+      WHERE bj.DateUsage IS NULL
+        AND ISNULL(NULLIF(bj.Blok, ''), '') <> ''
+        ${idBJTypeCond}
+      GROUP BY bj.IdBJ, bj.Blok, bj.IdLokasi;
+    `,
+    idOf: (r) => r.IdBJ,
+  });
 }
 
 async function getLabelByIdBJ(idBJ) {
@@ -1641,6 +1655,8 @@ async function getLabelByIdBJ(idBJ) {
         SELECT
           bj.NoBJ,
           bj.DateCreate,
+          bj.Blok,
+          bj.IdLokasi,
           CASE
             WHEN bj.IsPartial = 1 THEN
               CASE
@@ -1662,6 +1678,8 @@ async function getLabelByIdBJ(idBJ) {
         NoBJ,
         NoBJ AS Label,
         DateCreate,
+        Blok,
+        IdLokasi,
         Pcs,
         Berat
       FROM EffectiveLabel
@@ -1673,6 +1691,9 @@ async function getLabelByIdBJ(idBJ) {
     NoBJ: r.NoBJ,
     Label: r.Label,
     ...(r.DateCreate && { DateCreate: r.DateCreate }),
+    ...(r.Blok && r.Blok.trim()
+      ? { Lokasi: `${r.Blok}${r.IdLokasi ?? ""}` }
+      : {}),
     Pcs: typeof r.Pcs === "number" ? r.Pcs : parseInt(r.Pcs, 10) || 0,
     Berat: Number(
       (

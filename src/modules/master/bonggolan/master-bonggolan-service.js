@@ -1,4 +1,5 @@
 const { sql, poolPromise } = require("../../../core/config/db");
+const { attachLokasiToStok } = require("../../../core/shared/stok-lokasi.helper");
 
 async function getAllActive() {
   const pool = await poolPromise;
@@ -27,15 +28,7 @@ async function getStokProses() {
       m.IdBonggolan,
       m.NamaBonggolan,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua,
-      STUFF((
-        SELECT DISTINCT ', ' + CONCAT(lb.Blok, CONVERT(VARCHAR(10), lb.IdLokasi))
-        FROM dbo.Bonggolan lb
-        WHERE lb.IdBonggolan = m.IdBonggolan
-          AND lb.DateUsage IS NULL
-          AND ISNULL(NULLIF(lb.Blok, ''), '') <> ''
-        FOR XML PATH('')
-      ), 1, 2, '') AS Lokasi
+      agg.DateCreateTertua
     FROM dbo.MstBonggolan m
     LEFT JOIN (
       SELECT
@@ -51,7 +44,7 @@ async function getStokProses() {
     ORDER BY m.NamaBonggolan ASC;
   `);
 
-  return result.recordset.map((r) => ({
+  const items = result.recordset.map((r) => ({
     IdBonggolan: r.IdBonggolan,
     NamaBonggolan: r.NamaBonggolan,
     BeratSisa: Number(
@@ -60,9 +53,22 @@ async function getStokProses() {
         : parseFloat(r.BeratSisa) || 0
       ).toFixed(2),
     ),
-    ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
-    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
+    DateCreateTertua: r.DateCreateTertua,
   }));
+
+  return attachLokasiToStok(items, {
+    sql: `
+      SELECT
+        b.IdBonggolan AS IdKey,
+        b.Blok,
+        b.IdLokasi
+      FROM dbo.Bonggolan b
+      WHERE b.DateUsage IS NULL
+        AND ISNULL(NULLIF(b.Blok, ''), '') <> ''
+      GROUP BY b.IdBonggolan, b.Blok, b.IdLokasi;
+    `,
+    idOf: (r) => r.IdBonggolan,
+  });
 }
 
 async function getLabelByIdBonggolan(idBonggolan) {
@@ -74,6 +80,8 @@ async function getLabelByIdBonggolan(idBonggolan) {
         b.NoBonggolan,
         b.NoBonggolan AS Label,
         b.DateCreate,
+        b.Blok,
+        b.IdLokasi,
         ISNULL(b.Berat, 0) AS BeratSisa
       FROM dbo.Bonggolan b
       WHERE b.IdBonggolan = @IdBonggolan
@@ -85,6 +93,9 @@ async function getLabelByIdBonggolan(idBonggolan) {
     NoBonggolan: r.NoBonggolan,
     Label: r.Label,
     ...(r.DateCreate && { DateCreate: r.DateCreate }),
+    ...(r.Blok && r.Blok.trim()
+      ? { Lokasi: `${r.Blok}${r.IdLokasi ?? ""}` }
+      : {}),
     BeratSisa: Number(
       (typeof r.BeratSisa === "number"
         ? r.BeratSisa

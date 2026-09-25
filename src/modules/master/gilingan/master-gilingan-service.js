@@ -1,4 +1,5 @@
 const { sql, poolPromise } = require("../../../core/config/db");
+const { attachLokasiToStok } = require("../../../core/shared/stok-lokasi.helper");
 
 async function getAllActive() {
   const pool = await poolPromise;
@@ -54,15 +55,7 @@ async function getStokProses() {
       m.NamaGilingan,
       ISNULL(agg.LabelSisa, 0) AS LabelSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua,
-      STUFF((
-        SELECT DISTINCT ', ' + CONCAT(ed.Blok, CONVERT(VARCHAR(10), ed.IdLokasi))
-        FROM EffectiveDetail ed
-        WHERE ed.IdGilingan = m.IdGilingan
-          AND ed.BeratEfektif > 0
-          AND ISNULL(NULLIF(ed.Blok, ''), '') <> ''
-        FOR XML PATH('')
-      ), 1, 2, '') AS Lokasi
+      agg.DateCreateTertua
     FROM dbo.MstGilingan m
     LEFT JOIN (
       SELECT
@@ -78,16 +71,29 @@ async function getStokProses() {
     ORDER BY m.NamaGilingan ASC;
   `);
 
-  return result.recordset.map((r) => ({
+  const items = result.recordset.map((r) => ({
     IdGilingan: r.IdGilingan,
     NamaGilingan: r.NamaGilingan,
     LabelSisa: typeof r.LabelSisa === "number" ? r.LabelSisa : parseInt(r.LabelSisa, 10) || 0,
     BeratSisa: Number(
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
     ),
-    ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
-    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
+    DateCreateTertua: r.DateCreateTertua,
   }));
+
+  return attachLokasiToStok(items, {
+    sql: `
+      SELECT
+        g.IdGilingan AS IdKey,
+        g.Blok,
+        g.IdLokasi
+      FROM dbo.Gilingan g
+      WHERE g.DateUsage IS NULL
+        AND ISNULL(NULLIF(g.Blok, ''), '') <> ''
+      GROUP BY g.IdGilingan, g.Blok, g.IdLokasi;
+    `,
+    idOf: (r) => r.IdGilingan,
+  });
 }
 
 async function getLabelByIdGilingan(idGilingan) {
@@ -105,6 +111,8 @@ async function getLabelByIdGilingan(idGilingan) {
         SELECT
           g.NoGilingan,
           g.DateCreate,
+          g.Blok,
+          g.IdLokasi,
           CASE
             WHEN ISNULL(g.Berat, 0) - ISNULL(ps.TotalPartialBerat, 0) < 0 THEN 0
             ELSE ISNULL(g.Berat, 0) - ISNULL(ps.TotalPartialBerat, 0)
@@ -119,6 +127,8 @@ async function getLabelByIdGilingan(idGilingan) {
         NoGilingan,
         NoGilingan AS Label,
         DateCreate,
+        Blok,
+        IdLokasi,
         Berat
       FROM EffectiveLabel
       WHERE Berat > 0
@@ -129,6 +139,9 @@ async function getLabelByIdGilingan(idGilingan) {
     NoGilingan: r.NoGilingan,
     Label: r.Label,
     ...(r.DateCreate && { DateCreate: r.DateCreate }),
+    ...(r.Blok && r.Blok.trim()
+      ? { Lokasi: `${r.Blok}${r.IdLokasi ?? ""}` }
+      : {}),
     Berat: Number(
       (typeof r.Berat === "number" ? r.Berat : parseFloat(r.Berat) || 0).toFixed(2),
     ),

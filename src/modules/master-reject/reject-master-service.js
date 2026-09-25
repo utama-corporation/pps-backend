@@ -1,5 +1,6 @@
 // src/modules/master/reject-master-service.js
 const { sql, poolPromise } = require('../../core/config/db');
+const { attachLokasiToStok } = require('../../core/shared/stok-lokasi.helper');
 
 async function getAllActive() {
   const pool = await poolPromise;
@@ -61,15 +62,7 @@ async function getStokProses() {
       m.NamaReject,
       ISNULL(agg.LabelSisa, 0) AS LabelSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua,
-      STUFF((
-        SELECT DISTINCT ', ' + CONCAT(ed.Blok, CONVERT(VARCHAR(10), ed.IdLokasi))
-        FROM EffectiveDetail ed
-        WHERE ed.IdReject = m.IdReject
-          AND ed.BeratEfektif > 0
-          AND ISNULL(NULLIF(ed.Blok, ''), '') <> ''
-        FOR XML PATH('')
-      ), 1, 2, '') AS Lokasi
+      agg.DateCreateTertua
     FROM dbo.MstReject m
     LEFT JOIN (
       SELECT
@@ -85,16 +78,29 @@ async function getStokProses() {
     ORDER BY m.NamaReject ASC;
   `);
 
-  return result.recordset.map((r) => ({
+  const items = result.recordset.map((r) => ({
     IdReject: r.IdReject,
     NamaReject: r.NamaReject,
     LabelSisa: typeof r.LabelSisa === 'number' ? r.LabelSisa : parseInt(r.LabelSisa, 10) || 0,
     BeratSisa: Number(
       (typeof r.BeratSisa === 'number' ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
     ),
-    ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
-    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
+    DateCreateTertua: r.DateCreateTertua,
   }));
+
+  return attachLokasiToStok(items, {
+    sql: `
+      SELECT
+        r.IdReject AS IdKey,
+        r.Blok,
+        r.IdLokasi
+      FROM dbo.RejectV2 r
+      WHERE r.DateUsage IS NULL
+        AND ISNULL(NULLIF(r.Blok, ''), '') <> ''
+      GROUP BY r.IdReject, r.Blok, r.IdLokasi;
+    `,
+    idOf: (r) => r.IdReject,
+  });
 }
 
 async function getLabelByIdReject(idReject) {
@@ -112,6 +118,8 @@ async function getLabelByIdReject(idReject) {
         SELECT
           r.NoReject,
           r.DateCreate,
+          r.Blok,
+          r.IdLokasi,
           CASE
             WHEN ISNULL(r.Berat, 0) - ISNULL(ps.TotalPartialBerat, 0) < 0 THEN 0
             ELSE ISNULL(r.Berat, 0) - ISNULL(ps.TotalPartialBerat, 0)
@@ -126,6 +134,8 @@ async function getLabelByIdReject(idReject) {
         NoReject,
         NoReject AS Label,
         DateCreate,
+        Blok,
+        IdLokasi,
         Berat
       FROM EffectiveLabel
       WHERE Berat > 0
@@ -136,6 +146,9 @@ async function getLabelByIdReject(idReject) {
     NoReject: r.NoReject,
     Label: r.Label,
     ...(r.DateCreate && { DateCreate: r.DateCreate }),
+    ...(r.Blok && r.Blok.trim()
+      ? { Lokasi: `${r.Blok}${r.IdLokasi ?? ""}` }
+      : {}),
     Berat: Number(
       (typeof r.Berat === 'number' ? r.Berat : parseFloat(r.Berat) || 0).toFixed(2),
     ),

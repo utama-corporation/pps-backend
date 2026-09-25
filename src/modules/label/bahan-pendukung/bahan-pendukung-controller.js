@@ -121,6 +121,7 @@ exports.generatePdf = async (req, res) => {
       noLabel: row.NoBahanPendukung,
       namaProduk: row.NamaCabinetMaterial,
       kode: row.NoBahanPendukung,
+      qty: row.QtyAwal ?? row.Qty,
       tanggal: kodeLabel,
       createBy: row.CreateBy || "-",
       watermarkText: "",

@@ -1,4 +1,5 @@
 const { sql, poolPromise } = require("../../../core/config/db");
+const { attachLokasiToStok } = require("../../../core/shared/stok-lokasi.helper");
 
 async function getAllActive() {
   const pool = await poolPromise;
@@ -69,15 +70,7 @@ async function getStokProses() {
       ISNULL(agg.LabelSisa, 0) AS LabelSisa,
       ISNULL(agg.PcsSisa, 0)   AS PcsSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua,
-      STUFF((
-        SELECT DISTINCT ', ' + CONCAT(ed.Blok, CONVERT(VARCHAR(10), ed.IdLokasi))
-        FROM EffectiveDetail ed
-        WHERE ed.IdFurnitureWIP = m.IdCabinetWIP
-          AND ed.PcsEfektif > 0
-          AND ISNULL(NULLIF(ed.Blok, ''), '') <> ''
-        FOR XML PATH('')
-      ), 1, 2, '') AS Lokasi
+      agg.DateCreateTertua
     FROM dbo.MstCabinetWIP m
     LEFT JOIN (
       SELECT
@@ -94,7 +87,7 @@ async function getStokProses() {
     ORDER BY m.Nama ASC;
   `);
 
-  return result.recordset.map((r) => ({
+  const items = result.recordset.map((r) => ({
     IdCabinetWIP: r.IdCabinetWIP,
     Nama: r.Nama,
     LabelSisa: typeof r.LabelSisa === "number" ? r.LabelSisa : parseInt(r.LabelSisa, 10) || 0,
@@ -102,9 +95,22 @@ async function getStokProses() {
     BeratSisa: Number(
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
     ),
-    ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
-    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
+    DateCreateTertua: r.DateCreateTertua,
   }));
+
+  return attachLokasiToStok(items, {
+    sql: `
+      SELECT
+        f.IdFurnitureWIP AS IdKey,
+        f.Blok,
+        f.IdLokasi
+      FROM dbo.FurnitureWIP f
+      WHERE f.DateUsage IS NULL
+        AND ISNULL(NULLIF(f.Blok, ''), '') <> ''
+      GROUP BY f.IdFurnitureWIP, f.Blok, f.IdLokasi;
+    `,
+    idOf: (r) => r.IdCabinetWIP,
+  });
 }
 
 async function getLabelByIdFurnitureWip(idFurnitureWip) {
@@ -122,6 +128,8 @@ async function getLabelByIdFurnitureWip(idFurnitureWip) {
         SELECT
           f.NoFurnitureWIP,
           f.DateCreate,
+          f.Blok,
+          f.IdLokasi,
           CASE
             WHEN f.IsPartial = 1 THEN
               CASE
@@ -141,6 +149,8 @@ async function getLabelByIdFurnitureWip(idFurnitureWip) {
         NoFurnitureWIP,
         NoFurnitureWIP AS Label,
         DateCreate,
+        Blok,
+        IdLokasi,
         Pcs,
         Berat
       FROM EffectiveLabel
@@ -152,6 +162,9 @@ async function getLabelByIdFurnitureWip(idFurnitureWip) {
     NoFurnitureWIP: r.NoFurnitureWIP,
     Label: r.Label,
     ...(r.DateCreate && { DateCreate: r.DateCreate }),
+    ...(r.Blok && r.Blok.trim()
+      ? { Lokasi: `${r.Blok}${r.IdLokasi ?? ""}` }
+      : {}),
     Pcs: typeof r.Pcs === "number" ? r.Pcs : parseInt(r.Pcs, 10) || 0,
     Berat: Number(
       (typeof r.Berat === "number" ? r.Berat : parseFloat(r.Berat) || 0).toFixed(2),

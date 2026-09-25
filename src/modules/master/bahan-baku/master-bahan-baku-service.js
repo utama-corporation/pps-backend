@@ -1,4 +1,5 @@
 const { sql, poolPromise } = require("../../../core/config/db");
+const { attachLokasiToStok } = require("../../../core/shared/stok-lokasi.helper");
 
 // Builder query stok sisa (sak & berat) per jenis MstBahanBaku, di-filter lewat whereClause.
 async function getStokByFilter(whereClause) {
@@ -10,18 +11,7 @@ async function getStokByFilter(whereClause) {
       m.Nama,
       ISNULL(agg.SakSisa, 0)   AS SakSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua,
-      STUFF((
-        SELECT DISTINCT ', ' + CONCAT(p.Blok, CONVERT(VARCHAR(10), p.IdLokasi))
-        FROM dbo.BahanBakuPallet_h p
-        INNER JOIN dbo.BahanBaku_d pd
-          ON pd.NoBahanBaku = p.NoBahanBaku
-         AND pd.NoPallet    = p.NoPallet
-        WHERE p.IdJenisPlastik = m.IdBB
-          AND pd.DateUsage IS NULL
-          AND ISNULL(NULLIF(p.Blok, ''), '') <> ''
-        FOR XML PATH('')
-      ), 1, 2, '') AS Lokasi
+      agg.DateCreateTertua
     FROM dbo.MstBahanBaku m
     LEFT JOIN (
       SELECT
@@ -68,16 +58,35 @@ async function getStokByFilter(whereClause) {
     ORDER BY m.Nama;
   `);
 
-  return result.recordset.map((r) => ({
+  const items = result.recordset.map((r) => ({
     IdBB: r.IdBB,
     Nama: r.Nama,
     SakSisa: typeof r.SakSisa === "number" ? r.SakSisa : parseInt(r.SakSisa, 10) || 0,
     BeratSisa: Number(
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
     ),
-    ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
-    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
+    DateCreateTertua: r.DateCreateTertua,
   }));
+
+  return attachLokasiToStok(items, {
+    sql: `
+      SELECT
+        p.IdJenisPlastik AS IdKey,
+        p.Blok,
+        p.IdLokasi
+      FROM dbo.BahanBakuPallet_h p
+      INNER JOIN dbo.BahanBaku_d pd
+        ON pd.NoBahanBaku = p.NoBahanBaku
+       AND pd.NoPallet    = p.NoPallet
+      INNER JOIN dbo.MstBahanBaku m
+        ON m.IdBB = p.IdJenisPlastik
+      WHERE pd.DateUsage IS NULL
+        AND ISNULL(NULLIF(p.Blok, ''), '') <> ''
+        AND (${whereClause})
+      GROUP BY p.IdJenisPlastik, p.Blok, p.IdLokasi;
+    `,
+    idOf: (r) => r.IdBB,
+  });
 }
 
 // GET jenis bahan baku proses (IsProses = 1) beserta sisa stok (sak & berat)
@@ -102,6 +111,8 @@ exports.getLabelByIdBahanBaku = async (idBahanBaku) => {
         p.NoPallet,
         p.NoBahanBaku + '-' + CAST(p.NoPallet AS varchar(20)) AS Label,
         h.DateCreate,
+        p.Blok,
+        p.IdLokasi,
         ISNULL(agg.SakSisa, 0)   AS SakSisa,
         ISNULL(agg.BeratSisa, 0) AS BeratSisa
       FROM dbo.BahanBakuPallet_h p
@@ -146,6 +157,9 @@ exports.getLabelByIdBahanBaku = async (idBahanBaku) => {
     NoPallet: r.NoPallet,
     Label: r.Label,
     ...(r.DateCreate && { DateCreate: r.DateCreate }),
+    ...(r.Blok && r.Blok.trim()
+      ? { Lokasi: `${r.Blok}${r.IdLokasi ?? ""}` }
+      : {}),
     SakSisa: typeof r.SakSisa === "number" ? r.SakSisa : parseInt(r.SakSisa, 10) || 0,
     BeratSisa: Number(
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),

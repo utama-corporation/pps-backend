@@ -1,4 +1,5 @@
 const { sql, poolPromise } = require("../../../core/config/db");
+const { attachLokasiToStok } = require("../../../core/shared/stok-lokasi.helper");
 
 async function getAllActive() {
   const pool = await poolPromise;
@@ -56,15 +57,7 @@ async function getStokProses() {
       m.Jenis,
       ISNULL(agg.SakSisa, 0)   AS SakSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua,
-      STUFF((
-        SELECT DISTINCT ', ' + CONCAT(ed.Blok, CONVERT(VARCHAR(10), ed.IdLokasi))
-        FROM EffectiveDetail ed
-        WHERE ed.IdMixer = m.IdMixer
-          AND ed.BeratEfektif > 0
-          AND ISNULL(NULLIF(ed.Blok, ''), '') <> ''
-        FOR XML PATH('')
-      ), 1, 2, '') AS Lokasi
+      agg.DateCreateTertua
     FROM dbo.MstMixer m
     LEFT JOIN (
       SELECT
@@ -80,16 +73,30 @@ async function getStokProses() {
     ORDER BY m.Jenis ASC;
   `);
 
-  return result.recordset.map((r) => ({
+  const items = result.recordset.map((r) => ({
     IdMixer: r.IdMixer,
     Jenis: r.Jenis,
     SakSisa: typeof r.SakSisa === "number" ? r.SakSisa : parseInt(r.SakSisa, 10) || 0,
     BeratSisa: Number(
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
     ),
-    ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
-    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
+    DateCreateTertua: r.DateCreateTertua,
   }));
+
+  return attachLokasiToStok(items, {
+    sql: `
+      SELECT
+        h.IdMixer AS IdKey,
+        h.Blok,
+        h.IdLokasi
+      FROM dbo.Mixer_h h
+      INNER JOIN dbo.Mixer_d d ON d.NoMixer = h.NoMixer
+      WHERE d.DateUsage IS NULL
+        AND ISNULL(NULLIF(h.Blok, ''), '') <> ''
+      GROUP BY h.IdMixer, h.Blok, h.IdLokasi;
+    `,
+    idOf: (r) => r.IdMixer,
+  });
 }
 
 async function getLabelByIdMixer(idMixer) {
@@ -107,6 +114,8 @@ async function getLabelByIdMixer(idMixer) {
         SELECT
           h.NoMixer,
           h.DateCreate,
+          h.Blok,
+          h.IdLokasi,
           d.NoSak,
           CASE
             WHEN d.IsPartial = 1 THEN d.Berat - ISNULL(ps.PartialBerat, 0)
@@ -125,10 +134,12 @@ async function getLabelByIdMixer(idMixer) {
         NoMixer,
         NoMixer AS Label,
         DateCreate,
+        Blok,
+        IdLokasi,
         COUNT(NoSak) AS SakSisa,
         SUM(ISNULL(BeratEfektif, 0)) AS BeratSisa
       FROM EffectiveDetail
-      GROUP BY NoMixer, DateCreate
+      GROUP BY NoMixer, DateCreate, Blok, IdLokasi
       ORDER BY DateCreate ASC, NoMixer ASC;
     `);
 
@@ -136,6 +147,9 @@ async function getLabelByIdMixer(idMixer) {
     NoMixer: r.NoMixer,
     Label: r.Label,
     ...(r.DateCreate && { DateCreate: r.DateCreate }),
+    ...(r.Blok && r.Blok.trim()
+      ? { Lokasi: `${r.Blok}${r.IdLokasi ?? ""}` }
+      : {}),
     SakSisa: typeof r.SakSisa === "number" ? r.SakSisa : parseInt(r.SakSisa, 10) || 0,
     BeratSisa: Number(
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),

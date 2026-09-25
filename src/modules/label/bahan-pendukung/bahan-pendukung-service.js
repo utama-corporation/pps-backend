@@ -7,6 +7,7 @@
 // writeRepo, bukan lewat service ini). Module ini hanya menangani
 // list/update/delete/print untuk barang yang sudah ada.
 const { sql, poolPromise } = require("../../../core/config/db");
+const { attachLokasiToStok } = require("../../../core/shared/stok-lokasi.helper");
 const {
   toDateOnly,
   assertNotLocked,
@@ -251,6 +252,9 @@ exports.getLabelByIdCabinetMaterial = async (idCabinetMaterial) => {
     ),
     ...(r.Blok && { Blok: r.Blok }),
     ...(r.IdLokasi && { IdLokasi: r.IdLokasi }),
+    ...(r.Blok && r.Blok.trim()
+      ? { Lokasi: `${r.Blok}${r.IdLokasi ?? ""}` }
+      : {}),
     HasBeenPrinted: r.HasBeenPrinted,
   }));
 };
@@ -266,15 +270,7 @@ exports.getStok = async () => {
       u.NamaUOM,
       ISNULL(agg.LabelSisa, 0) AS LabelSisa,
       ISNULL(agg.QtySisa, 0) AS QtySisa,
-      agg.DateCreateTertua,
-      STUFF((
-        SELECT DISTINCT ', ' + CONCAT(b.Blok, CONVERT(VARCHAR(10), b.IdLokasi))
-        FROM dbo.BahanPendukung b
-        WHERE b.IdCabinetMaterial = m.IdCabinetMaterial
-          AND b.DateUsage IS NULL
-          AND ISNULL(NULLIF(b.Blok, ''), '') <> ''
-        FOR XML PATH('')
-      ), 1, 2, '') AS Lokasi
+      agg.DateCreateTertua
     FROM dbo.MstCabinetMaterial m
     LEFT JOIN (
       SELECT
@@ -291,7 +287,7 @@ exports.getStok = async () => {
     ORDER BY m.Nama ASC;
   `);
 
-  return result.recordset.map((r) => ({
+  const items = result.recordset.map((r) => ({
     IdCabinetMaterial: r.IdCabinetMaterial,
     NamaCabinetMaterial: r.NamaCabinetMaterial,
     ...(r.ItemCode && { ItemCode: r.ItemCode }),
@@ -307,7 +303,20 @@ exports.getStok = async () => {
           : parseFloat(r.QtySisa) || 0
       ).toFixed(2),
     ),
-    ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
-    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
+    DateCreateTertua: r.DateCreateTertua,
   }));
+
+  return attachLokasiToStok(items, {
+    sql: `
+      SELECT
+        b.IdCabinetMaterial AS IdKey,
+        b.Blok,
+        b.IdLokasi
+      FROM dbo.BahanPendukung b
+      WHERE b.DateUsage IS NULL
+        AND ISNULL(NULLIF(b.Blok, ''), '') <> ''
+      GROUP BY b.IdCabinetMaterial, b.Blok, b.IdLokasi;
+    `,
+    idOf: (r) => r.IdCabinetMaterial,
+  });
 };

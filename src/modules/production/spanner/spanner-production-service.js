@@ -1,5 +1,6 @@
 // services/spanner-production-service.js
 const { sql, poolPromise } = require("../../../core/config/db");
+const { attachLokasiToStok } = require("../../../core/shared/stok-lokasi.helper");
 const {
   assertOutputJenisChangeAllowed,
 } = require("../../../core/utils/output-jenis-guard");
@@ -1559,15 +1560,7 @@ async function getStok() {
       ISNULL(agg.LabelSisa, 0) AS LabelSisa,
       ISNULL(agg.PcsSisa, 0)   AS PcsSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua,
-      STUFF((
-        SELECT DISTINCT ', ' + CONCAT(ed.Blok, CONVERT(VARCHAR(10), ed.IdLokasi))
-        FROM EffectiveDetail ed
-        WHERE ed.IdFurnitureWIP = m.IdCabinetWIP
-          AND ed.PcsEfektif > 0
-          AND ISNULL(NULLIF(ed.Blok, ''), '') <> ''
-        FOR XML PATH('')
-      ), 1, 2, '') AS Lokasi
+      agg.DateCreateTertua
     FROM dbo.MstCabinetWIP m
     LEFT JOIN (
       SELECT
@@ -1584,7 +1577,7 @@ async function getStok() {
     ORDER BY m.Nama ASC;
   `);
 
-  return result.recordset.map((r) => ({
+  const items = result.recordset.map((r) => ({
     IdCabinetWIP: r.IdCabinetWIP,
     Nama: r.Nama,
     LabelSisa:
@@ -1602,9 +1595,24 @@ async function getStok() {
           : parseFloat(r.BeratSisa) || 0
       ).toFixed(2),
     ),
-    ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
-    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
+    DateCreateTertua: r.DateCreateTertua,
   }));
+
+  return attachLokasiToStok(items, {
+    sql: `
+      SELECT
+        f.IdFurnitureWIP AS IdKey,
+        f.Blok,
+        f.IdLokasi
+      FROM dbo.FurnitureWIP f
+      INNER JOIN SpannerOutputLabelFWIP ip
+        ON ip.NoFurnitureWIP = f.NoFurnitureWIP
+      WHERE f.DateUsage IS NULL
+        AND ISNULL(NULLIF(f.Blok, ''), '') <> ''
+      GROUP BY f.IdFurnitureWIP, f.Blok, f.IdLokasi;
+    `,
+    idOf: (r) => r.IdCabinetWIP,
+  });
 }
 
 async function getLabelByIdFurnitureWIP(idFurnitureWIP) {
@@ -1623,6 +1631,8 @@ async function getLabelByIdFurnitureWIP(idFurnitureWIP) {
         SELECT
           f.NoFurnitureWIP,
           f.DateCreate,
+          f.Blok,
+          f.IdLokasi,
           CASE
             WHEN f.IsPartial = 1 THEN
               CASE
@@ -1644,6 +1654,8 @@ async function getLabelByIdFurnitureWIP(idFurnitureWIP) {
         NoFurnitureWIP,
         NoFurnitureWIP AS Label,
         DateCreate,
+        Blok,
+        IdLokasi,
         Pcs,
         Berat
       FROM EffectiveLabel
@@ -1655,6 +1667,9 @@ async function getLabelByIdFurnitureWIP(idFurnitureWIP) {
     NoFurnitureWIP: r.NoFurnitureWIP,
     Label: r.Label,
     ...(r.DateCreate && { DateCreate: r.DateCreate }),
+    ...(r.Blok && r.Blok.trim()
+      ? { Lokasi: `${r.Blok}${r.IdLokasi ?? ""}` }
+      : {}),
     Pcs: typeof r.Pcs === "number" ? r.Pcs : parseInt(r.Pcs, 10) || 0,
     Berat: Number(
       (

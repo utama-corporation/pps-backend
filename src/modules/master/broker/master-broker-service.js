@@ -1,4 +1,5 @@
 const { sql, poolPromise } = require("../../../core/config/db");
+const { attachLokasiToStok } = require("../../../core/shared/stok-lokasi.helper");
 
 async function getAllActive() {
   const pool = await poolPromise;
@@ -57,17 +58,7 @@ async function getStokProses() {
       m.Nama,
       ISNULL(agg.SakSisa, 0)   AS SakSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua,
-      STUFF((
-        SELECT DISTINCT ', ' + CONCAT(h.Blok, CONVERT(VARCHAR(10), h.IdLokasi))
-        FROM dbo.Broker_h h
-        INNER JOIN dbo.Broker_d d
-          ON d.NoBroker = h.NoBroker
-        WHERE h.IdJenisPlastik = m.IdBroker
-          AND d.DateUsage IS NULL
-          AND ISNULL(NULLIF(h.Blok, ''), '') <> ''
-        FOR XML PATH('')
-      ), 1, 2, '') AS Lokasi
+      agg.DateCreateTertua
     FROM dbo.MstBroker m
     LEFT JOIN (
       SELECT
@@ -83,16 +74,30 @@ async function getStokProses() {
     ORDER BY m.Nama ASC;
   `);
 
-  return result.recordset.map((r) => ({
+  const items = result.recordset.map((r) => ({
     IdBroker: r.IdBroker,
     Nama: r.Nama,
     SakSisa: typeof r.SakSisa === "number" ? r.SakSisa : parseInt(r.SakSisa, 10) || 0,
     BeratSisa: Number(
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
     ),
-    ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
-    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
+    DateCreateTertua: r.DateCreateTertua,
   }));
+
+  return attachLokasiToStok(items, {
+    sql: `
+      SELECT
+        h.IdJenisPlastik AS IdKey,
+        h.Blok,
+        h.IdLokasi
+      FROM dbo.Broker_h h
+      INNER JOIN dbo.Broker_d d ON d.NoBroker = h.NoBroker
+      WHERE d.DateUsage IS NULL
+        AND ISNULL(NULLIF(h.Blok, ''), '') <> ''
+      GROUP BY h.IdJenisPlastik, h.Blok, h.IdLokasi;
+    `,
+    idOf: (r) => r.IdBroker,
+  });
 }
 
 async function getLabelByIdBroker(idBroker) {
@@ -105,6 +110,8 @@ async function getLabelByIdBroker(idBroker) {
         SELECT
           h.NoBroker,
           h.DateCreate,
+          h.Blok,
+          h.IdLokasi,
           d.NoSak,
           CASE
             WHEN d.IsPartial = 1 THEN
@@ -126,10 +133,12 @@ async function getLabelByIdBroker(idBroker) {
         NoBroker,
         NoBroker AS Label,
         DateCreate,
+        Blok,
+        IdLokasi,
         COUNT(NoSak) AS SakSisa,
         SUM(ISNULL(BeratEfektif, 0)) AS BeratSisa
       FROM EffectiveDetail
-      GROUP BY NoBroker, DateCreate
+      GROUP BY NoBroker, DateCreate, Blok, IdLokasi
       ORDER BY DateCreate ASC, NoBroker ASC;
     `);
 
@@ -137,6 +146,9 @@ async function getLabelByIdBroker(idBroker) {
     NoBroker: r.NoBroker,
     Label: r.Label,
     ...(r.DateCreate && { DateCreate: r.DateCreate }),
+    ...(r.Blok && r.Blok.trim()
+      ? { Lokasi: `${r.Blok}${r.IdLokasi ?? ""}` }
+      : {}),
     SakSisa: typeof r.SakSisa === "number" ? r.SakSisa : parseInt(r.SakSisa, 10) || 0,
     BeratSisa: Number(
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),

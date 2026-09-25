@@ -122,7 +122,7 @@ exports.getByNoBahanPendukung = async (noBahanPendukung) => {
       SELECT
         b.NoBahanPendukung, b.IdSupplier, sup.NmSupplier AS NamaSupplier,
         b.IdCabinetMaterial, cm.Nama AS NamaCabinetMaterial,
-        b.Qty, b.Keterangan,
+        b.Qty, b.QtyAwal, b.Keterangan,
         b.IsPartial,
         ISNULL(CAST(b.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
         b.CreateBy,

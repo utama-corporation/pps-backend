@@ -1,4 +1,5 @@
 const { sql, poolPromise } = require("../../../core/config/db");
+const { attachLokasiToStok } = require("../../../core/shared/stok-lokasi.helper");
 
 async function getAllActive({ search = "" } = {}) {
   const pool = await poolPromise;
@@ -57,15 +58,7 @@ async function getStokProses() {
       ISNULL(agg.LabelSisa, 0) AS LabelSisa,
       ISNULL(agg.PcsSisa, 0)   AS PcsSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
-      agg.DateCreateTertua,
-      STUFF((
-        SELECT DISTINCT ', ' + CONCAT(ed.Blok, CONVERT(VARCHAR(10), ed.IdLokasi))
-        FROM EffectiveDetail ed
-        WHERE ed.IdBJ = m.IdBJ
-          AND ed.PcsEfektif > 0
-          AND ISNULL(NULLIF(ed.Blok, ''), '') <> ''
-        FOR XML PATH('')
-      ), 1, 2, '') AS Lokasi
+      agg.DateCreateTertua
     FROM dbo.MstBarangJadi m
     LEFT JOIN (
       SELECT
@@ -82,7 +75,7 @@ async function getStokProses() {
     ORDER BY m.NamaBJ ASC;
   `);
 
-  return result.recordset.map((r) => ({
+  const items = result.recordset.map((r) => ({
     IdBJ: r.IdBJ,
     NamaBJ: r.NamaBJ,
     LabelSisa: typeof r.LabelSisa === "number" ? r.LabelSisa : parseInt(r.LabelSisa, 10) || 0,
@@ -90,9 +83,22 @@ async function getStokProses() {
     BeratSisa: Number(
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
     ),
-    ...(r.DateCreateTertua && { DateCreateTertua: r.DateCreateTertua }),
-    ...(r.Lokasi && r.Lokasi.trim() ? { Lokasi: r.Lokasi } : {}),
+    DateCreateTertua: r.DateCreateTertua,
   }));
+
+  return attachLokasiToStok(items, {
+    sql: `
+      SELECT
+        bj.IdBJ AS IdKey,
+        bj.Blok,
+        bj.IdLokasi
+      FROM dbo.BarangJadi bj
+      WHERE bj.DateUsage IS NULL
+        AND ISNULL(NULLIF(bj.Blok, ''), '') <> ''
+      GROUP BY bj.IdBJ, bj.Blok, bj.IdLokasi;
+    `,
+    idOf: (r) => r.IdBJ,
+  });
 }
 
 async function getLabelByIdBarangJadi(idBJ) {
@@ -110,6 +116,8 @@ async function getLabelByIdBarangJadi(idBJ) {
         SELECT
           bj.NoBJ,
           bj.DateCreate,
+          bj.Blok,
+          bj.IdLokasi,
           CASE
             WHEN bj.IsPartial = 1 THEN
               CASE
@@ -129,6 +137,8 @@ async function getLabelByIdBarangJadi(idBJ) {
         NoBJ,
         NoBJ AS Label,
         DateCreate,
+        Blok,
+        IdLokasi,
         Pcs,
         Berat
       FROM EffectiveLabel
@@ -140,6 +150,9 @@ async function getLabelByIdBarangJadi(idBJ) {
     NoBJ: r.NoBJ,
     Label: r.Label,
     ...(r.DateCreate && { DateCreate: r.DateCreate }),
+    ...(r.Blok && r.Blok.trim()
+      ? { Lokasi: `${r.Blok}${r.IdLokasi ?? ""}` }
+      : {}),
     Pcs: typeof r.Pcs === "number" ? r.Pcs : parseInt(r.Pcs, 10) || 0,
     Berat: Number(
       (typeof r.Berat === "number" ? r.Berat : parseFloat(r.Berat) || 0).toFixed(2),
