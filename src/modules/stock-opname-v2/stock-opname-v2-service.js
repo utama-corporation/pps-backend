@@ -567,6 +567,204 @@ async function getStockOpnameRiwayat({
   };
 }
 
+// Riwayat sesi stock opname LINTAS kategori — semua sesi dari semua kategori
+// dalam satu daftar, urut tanggal terbaru, dengan paging server-side.
+// Dipakai panel "Riwayat" di tablet yang butuh daftar sesi dari seluruh
+// kategori (bukan per kategori seperti getStockOpnameRiwayat di atas).
+// Filter year/month/status/search semuanya opsional; tanpa filter yang
+// dikembalikan adalah seluruh sesi yang pernah ada.
+async function getAllStockOpnameRiwayat({
+  year,
+  month,
+  status,
+  search,
+  page = 1,
+  pageSize = 20,
+}) {
+  const yearNum =
+    year !== undefined && year !== null && year !== ""
+      ? Number(year)
+      : null;
+  if (
+    year !== undefined &&
+    year !== null &&
+    year !== "" &&
+    !Number.isInteger(yearNum)
+  ) {
+    throw badReq("year wajib berupa integer valid");
+  }
+  const monthNum =
+    month !== undefined && month !== null && month !== ""
+      ? Number(month)
+      : null;
+  if (
+    month !== undefined &&
+    month !== null &&
+    month !== "" &&
+    (!Number.isInteger(monthNum) || monthNum < 1 || monthNum > 12)
+  ) {
+    throw badReq("month wajib berupa integer 1-12");
+  }
+  if (monthNum !== null && yearNum === null) {
+    throw badReq("year wajib diisi kalau month diisi");
+  }
+
+  const statusStr =
+    status !== undefined && status !== null && status !== ""
+      ? String(status).trim().toLowerCase()
+      : null;
+  const validStatuses = Object.values(STOCK_OPNAME_STATUS);
+  if (statusStr && !validStatuses.includes(statusStr)) {
+    throw badReq(`status wajib salah satu dari: ${validStatuses.join(", ")}`);
+  }
+
+  const searchStr =
+    search !== undefined && search !== null ? String(search).trim() : "";
+
+  const p = Math.max(1, Number(page) || 1);
+  const ps = Math.max(1, Math.min(100, Number(pageSize) || 20));
+  const offset = (p - 1) * ps;
+
+  // Setiap baris di StockOpname_h sudah mewakili satu sesi, jadi status
+  // "not_started" tidak mungkin ada di tabel ini (kategori yang belum
+  // generate tidak punya baris sama sekali — itu ditunjukkan endpoint
+  // /kategori). Jadi filter not_started dihentikan di sini: halaman kosong
+  // tanpa perlu query DB.
+  if (statusStr === STOCK_OPNAME_STATUS.NOT_STARTED) {
+    return {
+      data: [],
+      currentPage: p,
+      pageSize: ps,
+      totalRecords: 0,
+      totalPages: 0,
+    };
+  }
+
+  const whereYear = yearNum !== null ? "AND YEAR(h.Tanggal) = @year" : "";
+  const whereMonth = monthNum !== null ? "AND MONTH(h.Tanggal) = @month" : "";
+  const whereStatus =
+    statusStr === STOCK_OPNAME_STATUS.COMPLETED
+      ? "AND h.IsComplete = 1"
+      : statusStr === STOCK_OPNAME_STATUS.IN_PROGRESS
+        ? "AND ISNULL(h.IsComplete, 0) = 0"
+        : "";
+  const whereSearch = searchStr
+    ? "AND (h.NoSO LIKE @search OR k.NamaKategori LIKE @search OR k.KodeKategori LIKE @search)"
+    : "";
+
+  const pool = await poolPromise;
+
+  const bindInputs = (req) => {
+    if (yearNum !== null) req.input("year", sql.Int, yearNum);
+    if (monthNum !== null) req.input("month", sql.Int, monthNum);
+    if (searchStr) req.input("search", sql.VarChar(100), `%${searchStr}%`);
+    return req;
+  };
+
+  const [listRes, countRes] = await Promise.all([
+    bindInputs(pool.request()).query(`
+      SELECT
+        h.NoSO, h.IdKategori, h.Tanggal, h.IsComplete, h.DateComplete,
+        k.KodeKategori, k.NamaKategori
+      FROM dbo.StockOpname_h AS h
+      LEFT JOIN dbo.MstKategori AS k ON k.IdKategori = h.IdKategori
+      WHERE h.IdKategori IS NOT NULL
+        ${whereYear} ${whereMonth} ${whereStatus} ${whereSearch}
+      ORDER BY h.Tanggal DESC, h.NoSO DESC
+      OFFSET ${offset} ROWS FETCH NEXT ${ps} ROWS ONLY;
+    `),
+    bindInputs(pool.request()).query(`
+      SELECT COUNT(*) AS total
+      FROM dbo.StockOpname_h AS h
+      LEFT JOIN dbo.MstKategori AS k ON k.IdKategori = h.IdKategori
+      WHERE h.IdKategori IS NOT NULL
+        ${whereYear} ${whereMonth} ${whereStatus} ${whereSearch};
+    `),
+  ]);
+  const total = countRes.recordset?.[0]?.total || 0;
+  const rows = listRes.recordset || [];
+
+  // Hitung labelCount/scannedCount per KATEGORI (1 query per kategori per
+  // halaman), bukan per baris — kalau satu kategori punya banyak sesi di
+  // halaman yang sama, query-nya tetap handful, bukan N.
+  const rowsByCategory = new Map();
+  for (const row of rows) {
+    const code = String(row.KodeKategori || "")
+      .trim()
+      .toLowerCase();
+    const cfg = STOCK_OPNAME_SNAPSHOT_CONFIG[code];
+    if (!cfg) continue;
+    if (!rowsByCategory.has(code)) {
+      rowsByCategory.set(code, { cfg, rows: [] });
+    }
+    rowsByCategory.get(code).rows.push(row);
+  }
+
+  const countsByNoSo = new Map();
+  await Promise.all(
+    [...rowsByCategory.values()].map(async ({ cfg, rows: cfgRows }) => {
+      const placeholders = cfgRows
+        .map((_, i) => `@noso${i}`)
+        .join(", ");
+      const req = pool.request();
+      cfgRows.forEach((row, i) =>
+        req.input(`noso${i}`, sql.VarChar, row.NoSO),
+      );
+
+      const scannedMatchSql = [
+        "hasil.NoSO = src.NoSO",
+        ...cfg.labelColumns.map((col) => `hasil.${col} = src.${col}`),
+      ].join(" AND ");
+
+      const summaryRes = await req.query(`
+        SELECT
+          src.NoSO,
+          COUNT(*) AS labelCount,
+          SUM(CASE WHEN hasil.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
+        FROM dbo.${cfg.snapshotTable} AS src
+        LEFT JOIN dbo.${cfg.hasilTable} AS hasil ON ${scannedMatchSql}
+        WHERE src.NoSO IN (${placeholders})
+        GROUP BY src.NoSO;
+      `);
+
+      for (const summary of summaryRes.recordset || []) {
+        countsByNoSo.set(summary.NoSO, {
+          labelCount: summary.labelCount || 0,
+          scannedCount: summary.scannedCount || 0,
+        });
+      }
+    }),
+  );
+
+  const data = rows.map((row) => {
+    const counts = countsByNoSo.get(row.NoSO) || {
+      labelCount: 0,
+      scannedCount: 0,
+    };
+    return {
+      stockOpnameNo: row.NoSO,
+      categoryId: row.IdKategori ?? null,
+      categoryCode: row.KodeKategori ?? null,
+      categoryName: row.NamaKategori ?? null,
+      status: row.IsComplete
+        ? STOCK_OPNAME_STATUS.COMPLETED
+        : STOCK_OPNAME_STATUS.IN_PROGRESS,
+      labelCount: counts.labelCount,
+      scannedCount: counts.scannedCount,
+      startDate: row.Tanggal ?? null,
+      completedAt: row.DateComplete ?? null,
+    };
+  });
+
+  return {
+    data,
+    currentPage: p,
+    pageSize: ps,
+    totalRecords: total,
+    totalPages: Math.ceil(total / ps) || 0,
+  };
+}
+
 async function resolveStockOpnameCategory(pool, stockOpnameNo) {
   const no = String(stockOpnameNo || "").trim();
   if (!no) throw badReq("stockOpnameNo wajib diisi");
@@ -2559,6 +2757,7 @@ module.exports = {
   getServerTime,
   getAllKategoriWithStatus,
   getStockOpnameRiwayat,
+  getAllStockOpnameRiwayat,
   getJenisByKategori,
   previewStockOpnameLabelCount,
   generateStockOpname,

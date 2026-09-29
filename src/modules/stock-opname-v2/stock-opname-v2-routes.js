@@ -71,6 +71,17 @@ router.get(
   stockOpnameV2Controller.listRiwayatHandler,
 );
 
+// Riwayat sesi stock opname LINTAS kategori (semua sesi, bukan per kategori)
+// dengan paging server-side — dipakai panel "Riwayat Stock Opname" di tablet.
+// Query opsional: year, month, status, search, page, pageSize.
+// ⚠️ Daftarkan sebelum route "/stock-opname-v2/transaksi/:stockOpnameNo/..."
+// di bawah, meski keduanya tidak akan tabrakan (jumlah segment URL beda).
+router.get(
+  "/stock-opname-v2/transaksi",
+  verifyToken,
+  stockOpnameV2Controller.listAllRiwayatHandler,
+);
+
 // ⚠️ Daftarkan SEBELUM POST "/stock-opname-v2/transaksi" (statis vs
 // dokumentasi urutan route, meski beda method tidak akan tabrakan) — dipakai
 // FE untuk menampilkan preview jumlah label sebelum benar-benar generate .

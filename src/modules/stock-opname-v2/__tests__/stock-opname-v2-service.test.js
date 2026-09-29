@@ -134,6 +134,148 @@ describe("listAllUsers", () => {
   });
 });
 
+describe("getAllStockOpnameRiwayat", () => {
+  it("lists sesi lintas kategori with paging meta and per-NoSO label counts", async () => {
+    // Urutan call: (1) list, (2) count, (3) hitung label per kategori
+    // washing, (4) hitung label per kategori crusher.
+    mQuery
+      .mockResolvedValueOnce({
+        recordset: [
+          {
+            NoSO: "SO.002",
+            IdKategori: 1,
+            Tanggal: "2026-09-02T00:00:00.000Z",
+            IsComplete: 1,
+            DateComplete: "2026-09-03T00:00:00.000Z",
+            KodeKategori: "washing",
+            NamaKategori: "Washing",
+          },
+          {
+            NoSO: "SO.001",
+            IdKategori: 2,
+            Tanggal: "2026-09-01T00:00:00.000Z",
+            IsComplete: 0,
+            DateComplete: null,
+            KodeKategori: "crusher",
+            NamaKategori: "Crusher",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ recordset: [{ total: 2 }] })
+      .mockResolvedValueOnce({
+        recordset: [{ NoSO: "SO.002", labelCount: 10, scannedCount: 10 }],
+      })
+      .mockResolvedValueOnce({
+        recordset: [{ NoSO: "SO.001", labelCount: 4, scannedCount: 1 }],
+      });
+
+    const result = await service.getAllStockOpnameRiwayat({ page: 1 });
+
+    expect(result.currentPage).toBe(1);
+    expect(result.pageSize).toBe(20);
+    expect(result.totalRecords).toBe(2);
+    expect(result.totalPages).toBe(1);
+    expect(result.data).toEqual([
+      {
+        stockOpnameNo: "SO.002",
+        categoryId: 1,
+        categoryCode: "washing",
+        categoryName: "Washing",
+        status: "completed",
+        labelCount: 10,
+        scannedCount: 10,
+        startDate: "2026-09-02T00:00:00.000Z",
+        completedAt: "2026-09-03T00:00:00.000Z",
+      },
+      {
+        stockOpnameNo: "SO.001",
+        categoryId: 2,
+        categoryCode: "crusher",
+        categoryName: "Crusher",
+        status: "in_progress",
+        labelCount: 4,
+        scannedCount: 1,
+        startDate: "2026-09-01T00:00:00.000Z",
+        completedAt: null,
+      },
+    ]);
+  });
+
+  it("returns an empty page when no sesi match", async () => {
+    mQuery
+      .mockResolvedValueOnce({ recordset: [] })
+      .mockResolvedValueOnce({ recordset: [{ total: 0 }] });
+
+    const result = await service.getAllStockOpnameRiwayat({});
+
+    expect(result.data).toEqual([]);
+    expect(result.totalRecords).toBe(0);
+    expect(result.totalPages).toBe(0);
+  });
+
+  it("filters by year/month and status without touching the DB when status is not_started", async () => {
+    const result = await service.getAllStockOpnameRiwayat({
+      year: 2026,
+      month: 9,
+      status: "not_started",
+    });
+
+    // Setiap baris header sudah mewakili sesi, jadi not_started tidak
+    // mungkin ada — hasilnya kosong dan tidak ada query sama sekali.
+    expect(result.data).toEqual([]);
+    expect(result.totalRecords).toBe(0);
+    expect(mQuery).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid month", async () => {
+    await expect(
+      service.getAllStockOpnameRiwayat({ month: 13 }),
+    ).rejects.toThrow("month wajib berupa integer 1-12");
+    expect(mQuery).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown status value", async () => {
+    await expect(
+      service.getAllStockOpnameRiwayat({ status: "selesai" }),
+    ).rejects.toThrow(/status wajib salah satu dari/);
+    expect(mQuery).not.toHaveBeenCalled();
+  });
+
+  it("keeps the row but zeroes the counts when its category has no snapshot config", async () => {
+    mQuery
+      .mockResolvedValueOnce({
+        recordset: [
+          {
+            NoSO: "SO.003",
+            IdKategori: 9,
+            Tanggal: "2026-09-01T00:00:00.000Z",
+            IsComplete: 0,
+            DateComplete: null,
+            KodeKategori: "kategori-tanpa-config",
+            NamaKategori: "Tanpa Config",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ recordset: [{ total: 1 }] });
+
+    const result = await service.getAllStockOpnameRiwayat({});
+
+    expect(result.data).toEqual([
+      {
+        stockOpnameNo: "SO.003",
+        categoryId: 9,
+        categoryCode: "kategori-tanpa-config",
+        categoryName: "Tanpa Config",
+        status: "in_progress",
+        labelCount: 0,
+        scannedCount: 0,
+        startDate: "2026-09-01T00:00:00.000Z",
+        completedAt: null,
+      },
+    ]);
+  });
+});
+
 describe("isUserAllowedForLokasi", () => {
   it("returns true when a row is found for the given NoSO", async () => {
     mQuery.mockResolvedValueOnce({ recordset: [{ found: 1 }] });

@@ -145,6 +145,57 @@ async function listRiwayatHandler(req, res) {
   }
 }
 
+async function listAllRiwayatHandler(req, res) {
+  const { username } = req;
+  const { year, month, status, search, page, pageSize } = req.query;
+
+  console.log(
+    "Fetching riwayat stock-opname all kategori (stock-opname-v2) | Username:",
+    username,
+    "| URL:",
+    req.originalUrl,
+    "| year:",
+    year,
+    "| month:",
+    month,
+    "| status:",
+    status,
+    "| search:",
+    search,
+    "| page:",
+    page,
+    "| pageSize:",
+    pageSize,
+  );
+
+  try {
+    const result = await stockOpnameV2Service.getAllStockOpnameRiwayat({
+      year,
+      month,
+      status,
+      search,
+      page,
+      pageSize,
+    });
+
+    // Sengaja balas 200 walau daftarnya kosong (berbeda dari
+    // listRiwayatHandler per kategori yang balas 404): "belum ada riwayat"
+    // itu kondisi normal, FE cuma perlu daftar kosong untuk ditampilkan.
+    return res.json({
+      success: true,
+      message: "Riwayat stock opname berhasil diambil",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error fetching riwayat stock-opname all kategori:", error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+      code: error.code,
+    });
+  }
+}
+
 async function previewLabelCountHandler(req, res) {
   const { categoryId } = req.query || {};
 
@@ -867,6 +918,7 @@ module.exports = {
   listKategoriHandler,
   listJenisHandler,
   listRiwayatHandler,
+  listAllRiwayatHandler,
   previewLabelCountHandler,
   generateStockOpnameHandler,
   getCompleteSummaryHandler,
