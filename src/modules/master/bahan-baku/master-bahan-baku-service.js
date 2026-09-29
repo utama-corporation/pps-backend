@@ -9,6 +9,7 @@ async function getStokByFilter(whereClause) {
     SELECT
       m.IdBB,
       m.Nama,
+      ISNULL(agg.LabelSisa, 0) AS LabelSisa,
       ISNULL(agg.SakSisa, 0)   AS SakSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
       agg.DateCreateTertua
@@ -16,6 +17,7 @@ async function getStokByFilter(whereClause) {
     LEFT JOIN (
       SELECT
         p.IdJenisPlastik,
+        SUM(CASE WHEN ISNULL(pallet.SakSisa, 0) > 0 THEN 1 ELSE 0 END) AS LabelSisa,
         SUM(pallet.SakSisa)   AS SakSisa,
         SUM(pallet.BeratSisa) AS BeratSisa,
         MIN(CASE WHEN pallet.SakSisa > 0 THEN h.DateCreate END) AS DateCreateTertua
@@ -61,6 +63,7 @@ async function getStokByFilter(whereClause) {
   const items = result.recordset.map((r) => ({
     IdBB: r.IdBB,
     Nama: r.Nama,
+    LabelSisa: typeof r.LabelSisa === "number" ? r.LabelSisa : parseInt(r.LabelSisa, 10) || 0,
     SakSisa: typeof r.SakSisa === "number" ? r.SakSisa : parseInt(r.SakSisa, 10) || 0,
     BeratSisa: Number(
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),

@@ -27,12 +27,14 @@ async function getStokProses() {
     SELECT
       m.IdBonggolan,
       m.NamaBonggolan,
+      ISNULL(agg.LabelSisa, 0) AS LabelSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
       agg.DateCreateTertua
     FROM dbo.MstBonggolan m
     LEFT JOIN (
       SELECT
         b.IdBonggolan,
+        COUNT(1) AS LabelSisa,
         SUM(ISNULL(b.Berat, 0)) AS BeratSisa,
         MIN(b.DateCreate) AS DateCreateTertua
       FROM dbo.Bonggolan b
@@ -47,6 +49,7 @@ async function getStokProses() {
   const items = result.recordset.map((r) => ({
     IdBonggolan: r.IdBonggolan,
     NamaBonggolan: r.NamaBonggolan,
+    LabelSisa: typeof r.LabelSisa === "number" ? r.LabelSisa : parseInt(r.LabelSisa, 10) || 0,
     BeratSisa: Number(
       (typeof r.BeratSisa === "number"
         ? r.BeratSisa

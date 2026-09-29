@@ -36,6 +36,7 @@ async function getStokProses() {
     EffectiveDetail AS (
       SELECT
         h.IdMixer,
+        h.NoMixer,
         h.DateCreate,
         h.Blok,
         h.IdLokasi,
@@ -55,6 +56,7 @@ async function getStokProses() {
     SELECT
       m.IdMixer,
       m.Jenis,
+      ISNULL(agg.LabelSisa, 0) AS LabelSisa,
       ISNULL(agg.SakSisa, 0)   AS SakSisa,
       ISNULL(agg.BeratSisa, 0) AS BeratSisa,
       agg.DateCreateTertua
@@ -62,6 +64,7 @@ async function getStokProses() {
     LEFT JOIN (
       SELECT
         IdMixer,
+        COUNT(DISTINCT NoMixer) AS LabelSisa,
         COUNT(NoSak) AS SakSisa,
         SUM(ISNULL(BeratEfektif, 0)) AS BeratSisa,
         MIN(DateCreate) AS DateCreateTertua
@@ -76,6 +79,7 @@ async function getStokProses() {
   const items = result.recordset.map((r) => ({
     IdMixer: r.IdMixer,
     Jenis: r.Jenis,
+    LabelSisa: typeof r.LabelSisa === "number" ? r.LabelSisa : parseInt(r.LabelSisa, 10) || 0,
     SakSisa: typeof r.SakSisa === "number" ? r.SakSisa : parseInt(r.SakSisa, 10) || 0,
     BeratSisa: Number(
       (typeof r.BeratSisa === "number" ? r.BeratSisa : parseFloat(r.BeratSisa) || 0).toFixed(2),
