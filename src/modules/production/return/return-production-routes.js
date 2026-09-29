@@ -25,6 +25,14 @@ router.put("/return/:noRetur", verifyToken, returnController.updateReturn);
 // routes/return-production-route.js
 router.delete("/return/:noRetur", verifyToken, returnController.deleteReturn);
 
+// ✅ GET ALL outputs (furniture-wip + barang-jadi) untuk satu noRetur
+// Example: GET /api/return/RT.0001/outputs
+router.get(
+  "/return/:noRetur/outputs",
+  verifyToken,
+  returnController.getAllOutputsByNoRetur,
+);
+
 router.get(
   "/return/:noRetur/outputs/furniture-wip",
   verifyToken,

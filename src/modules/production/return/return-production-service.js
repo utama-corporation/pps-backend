@@ -457,6 +457,8 @@ async function fetchOutputsFurnitureWip(noRetur) {
 
   const q = `
     SELECT DISTINCT
+      d.NoRetur,
+      d.NoFurnitureWIP,
       fw.NoFurnitureWIP AS LabelCode,
       fw.DateCreate,
       mcw.Nama AS NamaJenis,
@@ -465,13 +467,31 @@ async function fetchOutputsFurnitureWip(noRetur) {
       N'pcs' AS Uom,
       fw.Blok,
       fw.IdLokasi,
-      ISNULL(fw.Pcs, 0) AS Qty,
+      ISNULL(fwAgg.TotalPcs, 0) AS Qty,
       ISNULL(fw.HasBeenPrinted, 0) AS HasBeenPrinted
     FROM dbo.BJReturFurnitureWIP_d d WITH (NOLOCK)
     LEFT JOIN dbo.FurnitureWIP fw WITH (NOLOCK)
       ON fw.NoFurnitureWIP = d.NoFurnitureWIP
     LEFT JOIN dbo.MstCabinetWIP mcw WITH (NOLOCK)
       ON mcw.IdCabinetWIP = fw.IdFurnitureWIP
+    LEFT JOIN (
+        SELECT
+          x.NoFurnitureWIP,
+          SUM(
+              CASE
+                  WHEN x.IsPartial = 1
+                      THEN ISNULL(x.Pcs,0) - ISNULL(p.TotalPartialPcs,0)
+                  ELSE ISNULL(x.Pcs,0)
+              END
+          ) AS TotalPcs
+        FROM dbo.FurnitureWIP x WITH (NOLOCK)
+        LEFT JOIN (
+            SELECT NoFurnitureWIP, SUM(Pcs) AS TotalPartialPcs
+            FROM dbo.FurnitureWIPPartial
+            GROUP BY NoFurnitureWIP
+        ) p ON p.NoFurnitureWIP = x.NoFurnitureWIP
+        GROUP BY x.NoFurnitureWIP
+    ) fwAgg ON fwAgg.NoFurnitureWIP = fw.NoFurnitureWIP
     WHERE d.NoRetur = @noRetur
     ORDER BY fw.NoFurnitureWIP DESC;
   `;
@@ -820,6 +840,8 @@ async function fetchOutputsBarangJadi(noRetur) {
 
   const q = `
     SELECT DISTINCT
+      d.NoRetur,
+      d.NoBJ,
       bj.NoBJ AS LabelCode,
       bj.DateCreate,
       mbj.NamaBJ AS NamaJenis,
@@ -828,13 +850,31 @@ async function fetchOutputsBarangJadi(noRetur) {
       N'pcs' AS Uom,
       bj.Blok,
       bj.IdLokasi,
-      ISNULL(bj.Pcs, 0) AS Qty,
+      ISNULL(bjAgg.TotalPcs, 0) AS Qty,
       ISNULL(bj.HasBeenPrinted, 0) AS HasBeenPrinted
     FROM dbo.BJReturBarangJadi_d d WITH (NOLOCK)
     LEFT JOIN dbo.BarangJadi bj WITH (NOLOCK)
       ON bj.NoBJ = d.NoBJ
     LEFT JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
       ON mbj.IdBJ = bj.IdBJ
+    LEFT JOIN (
+        SELECT
+          x.NoBJ,
+          SUM(
+              CASE
+                  WHEN x.IsPartial = 1
+                      THEN ISNULL(x.Pcs,0) - ISNULL(p.TotalPartialPcs,0)
+                  ELSE ISNULL(x.Pcs,0)
+              END
+          ) AS TotalPcs
+        FROM dbo.BarangJadi x WITH (NOLOCK)
+        LEFT JOIN (
+            SELECT NoBJ, SUM(Pcs) AS TotalPartialPcs
+            FROM dbo.BarangJadiPartial
+            GROUP BY NoBJ
+        ) p ON p.NoBJ = x.NoBJ
+        GROUP BY x.NoBJ
+    ) bjAgg ON bjAgg.NoBJ = bj.NoBJ
     WHERE d.NoRetur = @noRetur
     ORDER BY bj.NoBJ DESC;
   `;
@@ -844,6 +884,33 @@ async function fetchOutputsBarangJadi(noRetur) {
     ...r,
     ...(r.DateCreate && { DateCreate: formatDate(r.DateCreate) }),
   }));
+}
+
+async function fetchAllOutputs(noRetur) {
+  const [furnitureWip, barangJadi] = await Promise.all([
+    fetchOutputsFurnitureWip(noRetur),
+    fetchOutputsBarangJadi(noRetur),
+  ]);
+
+  const data = [
+    ...furnitureWip.map((r) => ({
+      ...r,
+      kategori: "furniture-wip",
+      noOutput: r.NoFurnitureWIP,
+    })),
+    ...barangJadi.map((r) => ({
+      ...r,
+      kategori: "barang-jadi",
+      noOutput: r.NoBJ,
+    })),
+  ];
+
+  return {
+    data,
+    totalFurnitureWip: furnitureWip.length,
+    totalBarangJadi: barangJadi.length,
+    total: data.length,
+  };
 }
 
 module.exports = {
@@ -858,4 +925,5 @@ module.exports = {
   fetchImportAsGsuByDate,
   fetchImportAsGsuAfterDate,
   executeImportAsGsu,
+  fetchAllOutputs,
 };

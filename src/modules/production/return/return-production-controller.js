@@ -321,6 +321,39 @@ async function importAsGsu(req, res) {
   }
 }
 
+async function getAllOutputsByNoRetur(req, res) {
+  const noRetur = String(req.params.noRetur || "").trim();
+  if (!noRetur) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noRetur is required" });
+  }
+
+  try {
+    const result = await returnService.fetchAllOutputs(noRetur);
+
+    return res.status(200).json({
+      success: true,
+      message: `Outputs untuk retur ${noRetur} berhasil diambil`,
+
+      noRetur,
+
+      totalData: result.total,
+      totalFurnitureWip: result.totalFurnitureWip,
+      totalBarangJadi: result.totalBarangJadi,
+
+      data: result.data,
+    });
+  } catch (e) {
+    console.error("[return.getAllOutputsByNoRetur]", e);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
+  }
+}
+
 module.exports = {
   getAllReturns,
   getReturnsByDate,
@@ -332,4 +365,5 @@ module.exports = {
   getImportAsGsuByDate,
   getImportAsGsuAfterDate,
   importAsGsu,
+  getAllOutputsByNoRetur,
 };

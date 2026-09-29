@@ -57,7 +57,9 @@ Response `200`:
 {
   "success": true,
   "message": "Data kategori berhasil diambil",
-  "data": [ /* kategori + status */ ],
+  "data": [
+    /* kategori + status */
+  ],
   "totalRecords": 0
 }
 ```
@@ -75,7 +77,9 @@ Response `200`:
   "success": true,
   "message": "Data jenis <namaKategori> berhasil diambil",
   "category": { "...": "..." },
-  "data": [ /* jenis */ ],
+  "data": [
+    /* jenis */
+  ],
   "totalRecords": 0
 }
 ```
@@ -90,7 +94,12 @@ Response `200`:
 {
   "success": true,
   "message": "Riwayat stock opname <categoryName> berhasil diambil",
-  "data": { "categoryName": "...", "data": [ /* riwayat */ ] }
+  "data": {
+    "categoryName": "...",
+    "data": [
+      /* riwayat */
+    ]
+  }
 }
 ```
 
@@ -160,7 +169,12 @@ Response `200` (`404` jika belum ada label ter-snapshot):
 {
   "success": true,
   "message": "Data jenis <stockOpnameNo> berhasil diambil",
-  "data": { "stockOpnameNo": "...", "data": [ /* jenis */ ] }
+  "data": {
+    "stockOpnameNo": "...",
+    "data": [
+      /* jenis */
+    ]
+  }
 }
 ```
 
@@ -258,6 +272,10 @@ Setiap item sudah menyertakan `locationCount` (jumlah lokasi berbeda dalam
 blok tersebut) supaya FE tidak perlu hit endpoint `blok/:blok/lokasi` hanya
 untuk mengetahui jumlah lokasinya.
 
+Daftar blok dan `locationCount` dihitung langsung dari tabel snapshot/acuan
+stock opname. Data historis tidak difilter berdasarkan `MstLokasi.Enable`
+atau mapping `MstLokasiJenis`.
+
 Response `200` (`404` jika kosong):
 
 ```json
@@ -327,6 +345,10 @@ ditugaskan ke lokasi manapun pada NoSO ini):
 `totalPcs` menggantikan `totalWeight` untuk kategori `furniturewip`.
 
 ## GET `/transaksi/:stockOpnameNo/blok/:blok/lokasi`
+
+Lokasi dikelompokkan berdasarkan `Blok` dan `IdLokasi` yang tersimpan di tabel
+snapshot. `MstLokasi` hanya di-`LEFT JOIN` untuk mengambil deskripsi, sehingga
+lokasi snapshot tetap ditampilkan walaupun master atau mapping kategori berubah.
 
 Response `200` (`404` jika belum ada lokasi):
 
