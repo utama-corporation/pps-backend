@@ -24,6 +24,7 @@ async function getMasterCabinetMaterials({ idWarehouse }) {
         m.TglSaldoAwal,
         m.IdUOM,
         m.Enable,
+        m.PcsPerLabel,
         u.NamaUOM
       FROM dbo.MstCabinetMaterial m WITH (NOLOCK)
       INNER JOIN dbo.MstUOM u WITH (NOLOCK) ON u.IdUOM = m.IdUOM
@@ -157,6 +158,7 @@ async function getMasterCabinetMaterials({ idWarehouse }) {
       a.Nama,
       a.ItemCode,
       a.NamaUOM,
+      a.PcsPerLabel,
       K.IdWarehouse,
       K.NamaWarehouse,
       K.TglSaldoAwal,
