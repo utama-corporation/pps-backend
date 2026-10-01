@@ -386,6 +386,7 @@ async function getDetailPenerimaanBahanPendukung(noPenerimaan) {
     WHERE dd.NoPenerimaan = @NoPenerimaan
     ORDER BY bp.CreatedAt
   `);
+  
 
   return {
     ...header,

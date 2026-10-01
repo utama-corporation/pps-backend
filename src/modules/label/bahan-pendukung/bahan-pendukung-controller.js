@@ -117,14 +117,19 @@ exports.generatePdf = async (req, res) => {
     const printed = row.HasBeenPrinted || 0;
     const kodeLabel = printed > 0 ? `BP${mm}${yy}CY${printed}` : `BP${mm}${yy}`;
 
+    const lokasi = row.Blok ? `${row.Blok}${row.IdLokasi ?? ""}` : "";
+
     const data = {
       noLabel: row.NoBahanPendukung,
       namaProduk: row.NamaCabinetMaterial,
       kode: row.NoBahanPendukung,
       qty: row.QtyAwal ?? row.Qty,
       tanggal: kodeLabel,
+      batchCode: kodeLabel,
+      createdAt: row.CreatedAt,
+      lokasi,
       createBy: row.CreateBy || "-",
-      watermarkText: "",
+      watermarkText: printed > 0 ? `COPY ${printed}` : "",
     };
 
     const pdfBuffer = await generateLabelPdf(data, buildBahanPendukungLabelHtml, {
