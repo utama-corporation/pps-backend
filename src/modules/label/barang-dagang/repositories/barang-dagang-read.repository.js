@@ -128,6 +128,8 @@ exports.getByNoBarangDagang = async (noBarangDagang) => {
         ISNULL(CAST(b.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
         b.CreateBy,
         b.CreatedAt,
+        b.Blok,
+        b.IdLokasi,
         d.NoPenerimaan
       FROM dbo.BarangDagang b
       LEFT JOIN dbo.MstSupplier sup ON sup.IdSupplier = b.IdSupplier

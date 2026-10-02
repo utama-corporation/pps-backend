@@ -19,7 +19,6 @@
         width: 60mm;
         height: 40mm;
         font-family: Arial, Helvetica, sans-serif;
-        font-size: 8pt;
         color: #000;
         background: #fff;
         overflow: hidden;
@@ -31,32 +30,75 @@
         position: relative;
         width: 60mm;
         height: 40mm;
-        padding: 2.5mm;
+        padding: 2mm 2.4mm;
         display: flex;
-        align-items: stretch;
-        gap: 2.5mm;
+        flex-direction: column;
         overflow: hidden;
       }
 
-      /* Watermark status — diagonal, di belakang seluruh konten */
+      /* Watermark status (COPY n) — diagonal, di belakang seluruh konten */
       .watermark {
         position: absolute;
         top: 50%;
         left: 50%;
-        transform: translate(-50%, -50%) rotate(-18deg);
+        transform: translate(-50%, -50%) rotate(-16deg);
         z-index: 0;
-        font-size: 22pt;
+        font-size: 19pt;
         font-weight: 900;
         letter-spacing: 2px;
-        color: rgba(0, 0, 0, 0.12);
+        color: rgba(0, 0, 0, 0.13);
         white-space: nowrap;
         pointer-events: none;
       }
 
-      /* ── Kiri: QR code ── */
-      .label-qr {
+      /* ── Header: jenis label + nomor label ── */
+      .head {
         position: relative;
         z-index: 1;
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1.5mm;
+        padding-bottom: 0.8mm;
+        border-bottom: 0.35mm solid #000;
+      }
+
+      .head-title {
+        flex: 0 0 auto;
+        font-size: 7pt;
+        font-weight: bold;
+        line-height: 1;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+        border-left: 1.1mm solid #000;
+        padding-left: 1.2mm;
+      }
+
+      .head-no {
+        flex: 1 1 auto;
+        min-width: 0;
+        font-size: 7.5pt;
+        font-weight: bold;
+        line-height: 1;
+        letter-spacing: 0.2px;
+        text-align: right;
+        word-break: break-all;
+      }
+
+      /* ── Body: QR code | detail data ── */
+      .body {
+        position: relative;
+        z-index: 1;
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        align-items: stretch;
+        gap: 2mm;
+        padding: 1.2mm 0 1mm;
+      }
+
+      .label-qr {
         flex: 0 0 auto;
         display: flex;
         align-items: center;
@@ -64,41 +106,25 @@
       }
 
       .label-qr img {
-        width: 25mm;
-        height: 25mm;
+        width: 20mm;
+        height: 20mm;
         display: block;
       }
 
-      /* ── Kanan: detail data ── */
       .label-info {
-        position: relative;
-        z-index: 1;
         flex: 1 1 auto;
         min-width: 0;
         display: flex;
         flex-direction: column;
       }
 
-      /* 1. Nomor label — referensi, kecil & normal */
-      .no-label {
-        flex: 0 0 auto;
-        font-size: 6.5pt;
-        font-weight: normal;
-        line-height: 1.15;
-        word-break: break-all;
-      }
-
-      /* 2. Nama jenis — mengisi sisa ruang, tampil penuh (auto-fit) */
+      /* 1. Nama barang — mengisi sisa ruang, auto-fit (membesar & mengecil) */
       .jenis {
-        position: relative;
         flex: 1 1 auto;
         min-height: 0;
-        margin-top: 1mm;
-        padding: 1mm 0;
-        border-top: 0.3mm solid #000;
-        border-bottom: 0.3mm solid #000;
         display: flex;
         align-items: center;
+        border-bottom: 0.2mm solid #000;
         overflow: hidden;
       }
 
@@ -106,44 +132,107 @@
         width: 100%;
         max-height: 100%;
         overflow: hidden;
-        font-size: 10pt;
+        font-size: 11pt;
         font-weight: bold;
-        line-height: 1.15;
+        line-height: 1.12;
+        letter-spacing: 0.1px;
         word-break: break-word;
         overflow-wrap: anywhere;
       }
 
-      /* 3. Qty + By — satu baris horizontal: qty kiri, by kanan */
-      .by-qty {
+      /* 2. Qty — baris sendiri, nilai sebesar mungkin */
+      .qty-row {
         flex: 0 0 auto;
         margin-top: 1mm;
         display: flex;
-        justify-content: space-between;
         align-items: baseline;
-        font-size: 6.5pt;
-        font-weight: normal;
-        line-height: 1.2;
+        gap: 1.2mm;
+        white-space: nowrap;
+        overflow: hidden;
       }
 
-      .by-qty .qty {
-        word-break: break-all;
+      .qty-row .value {
+        font-size: 11pt;
+        font-weight: bold;
+        line-height: 1.05;
       }
 
-      .by-qty .by {
-        margin-left: 1mm;
-        text-align: right;
-        word-break: break-all;
-      }
-
-      /* 4. Kode BD batch — data terbesar & paling scannable */
-      .batch {
+      /* 3. Baris meta: lokasi (kiri) + pembuat (kanan) */
+      .meta {
         flex: 0 0 auto;
-        margin-top: 1mm;
-        font-size: 12pt;
+        margin-top: 0.9mm;
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 1.5mm;
+        font-size: 6.5pt;
+        line-height: 1.15;
+        overflow: hidden;
+      }
+
+      .meta .lbl {
+        font-style: normal;
+        font-weight: bold;
+        letter-spacing: 0.3px;
+        text-transform: uppercase;
+      }
+
+      .meta .val {
+        font-weight: bold;
+      }
+
+      .meta .lokasi {
+        flex: 0 0 auto;
+        white-space: nowrap;
+      }
+
+      .meta .by {
+        flex: 0 1 auto;
+        min-width: 0;
+        margin-left: auto;
+        text-align: right;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      /* ── Footer: kode batch + tanggal dibuat ── */
+      .foot {
+        position: relative;
+        z-index: 1;
+        flex: 0 0 auto;
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 1.5mm;
+        padding-top: 0.8mm;
+        border-top: 0.2mm solid #000;
+      }
+
+      .foot .batch {
+        flex: 0 0 auto;
+        font-size: 8pt;
         font-weight: bold;
         line-height: 1;
         letter-spacing: 0.3px;
         word-break: break-all;
+      }
+
+      .foot .made {
+        flex: 0 0 auto;
+        font-size: 6.5pt;
+        line-height: 1;
+        text-align: right;
+        white-space: nowrap;
+      }
+
+      /* Caption kecil untuk nilai besar */
+      .cap {
+        font-size: 5.5pt;
+        font-weight: bold;
+        letter-spacing: 0.3px;
+        text-transform: uppercase;
       }
     </style>
   </head>
@@ -151,37 +240,49 @@
     <div class="label">
       <span class="watermark">{{watermarkText}}</span>
 
-      <!-- Kiri: QR code -->
-      <div class="label-qr">
-        <img src="{{qrBase64}}" alt="QR" />
+      <!-- Header: jenis label + nomor label -->
+      <div class="head">
+        <span class="head-title">Barang&nbsp;Dagang</span>
+        <span class="head-no">{{noLabel}}</span>
       </div>
 
-      <!-- Kanan: detail data -->
-      <div class="label-info">
-        <div class="no-label">{{noLabel}}</div>
-
-        <div class="jenis">
-          <span class="jenis-text" id="jenisText">{{namaProduk}}</span>
+      <!-- Body: QR code + detail -->
+      <div class="body">
+        <div class="label-qr">
+          <img src="{{qrBase64}}" alt="QR" />
         </div>
 
-        <div class="by-qty">
-          <span class="qty">{{qty}}</span>
-          <span class="by">By&nbsp;: {{createBy}}</span>
-        </div>
+        <div class="label-info">
+          <div class="jenis">
+            <span class="jenis-text" id="jenisText">{{namaProduk}}</span>
+          </div>
 
-        <div class="batch">{{tanggal}}</div>
+          <div class="qty-row">
+            <span class="cap">Qty</span>
+            <span class="value" id="qtyText">{{qty}}</span>
+          </div>
+
+          <div class="meta">{{metaRows}}</div>
+        </div>
+      </div>
+
+      <!-- Footer: kode batch + tanggal -->
+      <div class="foot">
+        <span class="batch">{{batchCode}}</span>
+        <span class="made">{{createdDate}}</span>
       </div>
     </div>
 
     <script>
-      // Auto-fit nama jenis: kecilkan font sampai muat penuh tanpa terpotong.
+      // Auto-fit nama barang: font diperbesar / diperkecil sampai pas di kotak
+      // (6pt..12pt) supaya nama pendek tetap besar dan nama panjang tidak terpotong.
       (function () {
         var box = document.querySelector(".jenis");
         var txt = document.getElementById("jenisText");
         if (!box || !txt) return;
 
-        var size = 10; // pt, ukuran awal
-        var minSize = 5; // pt, batas terkecil biar tetap terbaca
+        var maxSize = 12; // pt, batas atas
+        var minSize = 6; // pt, batas bawah biar tetap terbaca
         var step = 0.25;
 
         function overflowing() {
@@ -191,10 +292,22 @@
           );
         }
 
+        var size = maxSize;
         txt.style.fontSize = size + "pt";
         while (overflowing() && size > minSize) {
           size -= step;
           txt.style.fontSize = size + "pt";
+        }
+
+        // Qty: satu baris, kecilkan hanya kalau melebar (mis. qty > 6 digit)
+        var qty = document.getElementById("qtyText");
+        if (qty) {
+          var qSize = 11;
+          qty.style.fontSize = qSize + "pt";
+          while (qty.scrollWidth > qty.clientWidth + 0.5 && qSize > 7) {
+            qSize -= 0.25;
+            qty.style.fontSize = qSize + "pt";
+          }
         }
       })();
     </script>
