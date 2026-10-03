@@ -5,6 +5,12 @@ const {
 const { badReq, conflict } = require("../../../core/utils/http-error");
 const { formatYMD } = require("../../../core/shared/tutup-transaksi-guard");
 const { detectCategory } = require("../bongkar-susun-v2-category-registry");
+// Memecah label fisik jadi partial — helper yang sama dipakai penjualan &
+// retur-v3, supaya konvensi "sisa pcs = Pcs parent - SUM(partial)" dan
+// "parent IsPartial = 1, DateUsage tetap NULL" konsisten di semua modul.
+const { createPartial } = require("../../../core/shared/label-partial.helper");
+
+const CATEGORY = "barangjadi";
 
 exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
   const { note, inputs, outputs } = payload;
@@ -64,8 +70,18 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
           b.IdWarehouse,
           b.Blok,
           b.IdLokasi,
-          ISNULL(b.Pcs, 0) AS AvailablePcs
+          ISNULL(b.Pcs, 0) AS ParentPcs,
+          CASE
+            WHEN ISNULL(b.Pcs, 0) - ISNULL(bjp.TotalPartialPcs, 0) < 0
+              THEN 0
+            ELSE ISNULL(b.Pcs, 0) - ISNULL(bjp.TotalPartialPcs, 0)
+          END AS AvailablePcs
         FROM dbo.BarangJadi b WITH (UPDLOCK, HOLDLOCK)
+        LEFT JOIN (
+          SELECT NoBJ, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+          FROM dbo.BarangJadiPartial WITH (UPDLOCK, HOLDLOCK)
+          GROUP BY NoBJ
+        ) bjp ON bjp.NoBJ = b.NoBJ
         WHERE b.NoBJ IN (
           SELECT j.code FROM OPENJSON(@CodesJson)
           WITH (code varchar(50) '$.code') AS j
@@ -79,7 +95,23 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
       );
     }
 
-    const totalPcsInput = inputDataRes.recordset.reduce(
+    // Label yang sudah pernah dipecah (IsPartial = 1) boleh dipakai, tapi
+    // hanya sebesar sisa pcs-nya — pcs yang sudah dialokasikan ke partial
+    // lain (penjualan/retur-v3/bongkar-susun sebelumnya) tidak boleh ikut
+    // dibongkar lagi. Sisa pcs dihitung dengan rumus yang sama dipakai
+    // label-service & penjualan: Pcs parent - SUM(BarangJadiPartial.Pcs).
+    for (const row of inputDataRes.recordset) {
+      if (Number(row.AvailablePcs || 0) <= 0) {
+        throw badReq(
+          `Label ${row.NoBJ} sudah habis pcs-nya (sisa 0 pcs), tidak bisa dibongkar susun`,
+        );
+      }
+    }
+
+    // Bongkar susun tidak memilih sebagian pcs dari label — seluruh sisa pcs
+    // input selalu dipakai, jadi total input = total output (tidak ada
+    // parsial di sisi output).
+const totalPcsInput = inputDataRes.recordset.reduce(
       (sum, row) => sum + Number(row.AvailablePcs || 0),
       0,
     );
@@ -173,15 +205,62 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
         VALUES (@NoBongkarSusun, @Tanggal, @IdUsername, @Note)
       `);
 
+    // Catat input sekaligus pcs yang terpakai + kode partial yang dibuat.
+    //
+    // Label yang SUDAH pernah dipecah (sisa pcs < Pcs asli) dicatat baris
+    // BarangJadiPartial baru berisi sisa pcs yang baru dipakai siklus ini.
+    // Baris itulah yang membuat "pcs ini dipakai bongkar susun" punya jejak
+    // sendiri, dan NoPartial di baris input ini yang jadi backlink untuk
+    // hapus transaksi. Label yang belum pernah dipecah TIDAK dapat baris
+    // partial (NoPartial NULL) — itu konsumsi penuh atas label utuh,
+    // konvensi yang sama dipakai penjualan.
+    const inputRows = [];
+    const createdPartials = [];
+
+    for (const row of inputDataRes.recordset) {
+      const availablePcs = Number(row.AvailablePcs || 0);
+      const parentPcs = Number(row.ParentPcs || 0);
+      const wasPartial = parentPcs > availablePcs;
+
+      let noPartial = null;
+      if (wasPartial) {
+        noPartial = await createPartial(tx, CATEGORY, row.NoBJ, availablePcs);
+        createdPartials.push({
+          labelCode: row.NoBJ,
+          noBJPartial: noPartial,
+          pcs: availablePcs,
+          totalPcs: parentPcs,
+        });
+      }
+
+      inputRows.push({
+        code: row.NoBJ,
+        pcs: Math.trunc(availablePcs),
+        noPartial,
+      });
+    }
+
     await new sql.Request(tx)
       .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
-      .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson).query(`
-        INSERT INTO dbo.BongkarSusunInputBarangJadi (NoBongkarSusun, NoBJ)
-        SELECT @NoBongkarSusun, j.code
-        FROM OPENJSON(@CodesJson)
-        WITH (code varchar(50) '$.code') AS j
+      .input(
+        "RowsJson",
+        sql.NVarChar(sql.MAX),
+        JSON.stringify(inputRows),
+      ).query(`
+        INSERT INTO dbo.BongkarSusunInputBarangjadi (
+          NoBongkarSusun, NoBJ, NoPartial, Pcs
+        )
+        SELECT
+          @NoBongkarSusun,
+          JSON_VALUE(j.[value], '$.code'),
+          JSON_VALUE(j.[value], '$.noPartial'),
+          TRY_CAST(JSON_VALUE(j.[value], '$.pcs') AS int)
+        FROM OPENJSON(@RowsJson) AS j
       `);
 
+    // Semua input sudah tidak menyisakan pcs (sisa habis terpakai), jadi
+    // parent ditandai terpakai. Baris partial milik penjualan/retur-v3/
+    // siklus sebelumnya TIDAK dihapus di sini.
     await new sql.Request(tx)
       .input("Tanggal", sql.Date, nowDate)
       .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson).query(`
@@ -271,6 +350,9 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
       totalPcsOutput,
       inputs,
       outputs: createdOutputs,
+      // Input yang pemakaiannya tercatat sebagai baris BarangJadiPartial
+      // (label yang sudah pernah dipecah sebelumnya).
+      partials: createdPartials,
       audit: { actorId, requestId },
     };
   } catch (e) {

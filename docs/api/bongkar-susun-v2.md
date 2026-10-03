@@ -134,6 +134,61 @@ Contoh:
 | `outputs[].pcs`     | number              | Jumlah pcs output             |
 | Balance             | pcs                 | Berdasarkan total pcs         |
 
+#### Label yang sudah pernah di-partial
+
+Label barang jadi yang sebelumnya sudah dipecah oleh modul lain
+(penjualan / retur-v3) **boleh** dipakai sebagai input, dan tidak lagi
+ditolak dengan `409`. Yang dipakai adalah seluruh **sisa** pcs label tsb:
+
+```
+sisaPcs = BarangJadi.Pcs - SUM(BarangJadiPartial.Pcs)
+```
+
+`GET /label/:labelCode` mengembalikan nilai `sisaPcs` itu di field `pcs`,
+plus flag `isPartial`. Client cukup memakai `pcs` apa adanya — tidak perlu
+menghitung sendiri.
+
+Bongkar susun **tidak memilih sebagian pcs** dari label: seluruh sisa pcs
+input selalu dipakai, jadi `totalPcsInput` = `totalPcsOutput` selalu.
+Tidak ada payload `partials` dari client untuk kategori ini.
+
+#### Pencatatan partial pada input
+
+Untuk label yang **sudah pernah dipecah** sebelumnya (`sisaPcs < Pcs` asli),
+pcs yang dipakai siklus ini dicatat sebagai baris baru di
+`dbo.BarangJadiPartial` (prefix `BL.`). Gunanya: pcs tersebut punya jejak
+"dipakai oleh bongkar susun" sendiri, terpisah dari baris partial milik
+penjualan / retur-v3.
+
+Kode partial itu disimpan di kolom `NoPartial`, dan pcs yang terpakai di
+kolom `Pcs`, pada baris input-nya sendiri:
+
+```
+BongkarSusunInputBarangJadi (NoBongkarSusun, NoBJ, NoPartial, Pcs)
+```
+
+| Kondisi label input   | `NoPartial` | `Pcs` |
+| --------------------- | ----------- | ----- |
+| Utuh (belum pernah di-partial) | `NULL` | pcs asli label |
+| Sudah pernah di-partial | `BL.xxxxxxxx` | sisa pcs yang dipakai |
+
+Hapus bongkar-susun memakai `NoPartial` tersebut sebagai backlink: baris
+`BarangJadiPartial` yang dibuat transaksi itu dihapus, `DateUsage` di-reset
+`NULL`, dan `IsPartial` diturunkan ke `0` kalau tidak ada partial lain
+tersisa untuk label tersebut. Partial dari penjualan / retur-v3 tidak ikut
+terhapus - pcs-nya tetap terpakai dan sisa pcs parent tetap benar.
+
+Kolom ini ditambahkan di
+`V20261003120000__add_nopartial_pcs_to_bongkarsusuninputbarangjadi.sql`.
+
+> Catatan: `PK_BongkarSusunInputBarangjadi` ada pada `NoBJ` saja, jadi satu
+> label barang jadi hanya boleh tercatat sebagai input di SATU transaksi
+> bongkar-susun. Karena setelah dipakai label selalu selesai
+> (`DateUsage` terisi) dan tidak bisa di-scan lagi, ini tidak menjadi
+> masalah pada alur normal — delete transaksi melepas barisnya.
+
+Label dengan sisa 0 pcs ditolak (`400`) karena tidak ada yang bisa dibongkar.
+
 ### 9) Bonggolan
 
 | Field               | Format             | Keterangan                    |

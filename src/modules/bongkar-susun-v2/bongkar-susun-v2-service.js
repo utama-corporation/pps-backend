@@ -688,23 +688,26 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
                 INNER JOIN dbo.BarangJadi b ON b.NoBJ = ibj.NoBJ
                 WHERE ibj.NoBongkarSusun = h.NoBongkarSusun
               ) THEN CAST(0 AS bit)
-              WHEN ABS(
+WHEN ABS(
                 ISNULL((
                   SELECT SUM(
-                    CASE
-                      WHEN b.IsPartial = 1 THEN
-                        CASE
-                          WHEN ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0) < 0 THEN 0
-                          ELSE ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0)
-                        END
-                      ELSE ISNULL(b.Pcs, 0)
-                    END
+                    COALESCE(
+                      ibj.Pcs,
+                      CASE
+                        WHEN b.IsPartial = 1 THEN
+                          CASE
+                            WHEN ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0) < 0 THEN 0
+                            ELSE ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0)
+                          END
+                        ELSE ISNULL(b.Pcs, 0)
+                      END
+                    )
                   )
-                  FROM dbo.BongkarSusunInputBarangJadi ibj
-                  INNER JOIN dbo.BarangJadi b ON b.NoBJ = ibj.NoBJ
+                  FROM dbo.BongkarSusunInputBarangjadi ibj
+                  INNER JOIN dbo.Barangjadi b ON b.NoBJ = ibj.NoBJ
                   LEFT JOIN (
                     SELECT NoBJ, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
-                    FROM dbo.BarangJadiPartial
+                    FROM dbo.BarangjadiPartial
                     GROUP BY NoBJ
                   ) bp ON bp.NoBJ = b.NoBJ
                   WHERE ibj.NoBongkarSusun = h.NoBongkarSusun
@@ -712,7 +715,7 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
                 ISNULL((
                   SELECT SUM(ISNULL(b.Pcs, 0))
                   FROM dbo.BongkarSusunOutputBarangjadi obj
-                  INNER JOIN dbo.BarangJadi b ON b.NoBJ = obj.NoBJ
+                  INNER JOIN dbo.Barangjadi b ON b.NoBJ = obj.NoBJ
                   WHERE obj.NoBongkarSusun = h.NoBongkarSusun
                 ), 0)
               ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
@@ -1058,16 +1061,34 @@ exports.getDetail = async (noBongkarSusun) => {
         'barangJadi'          AS category,
         b.IdBJ                AS idJenis,
         mbj.NamaBJ            AS namaJenis,
-        CASE
-          WHEN b.IsPartial = 1 THEN
-            CASE
-              WHEN ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0) < 0
-                THEN 0
-              ELSE ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0)
-            END
-          ELSE ISNULL(b.Pcs, 0)
-        END AS pcs,
-        ISNULL(b.Berat, 0)    AS berat
+        -- Pcs yang benar-benar terpakai siklus ini. Ibj.Pcs diisi pada create
+        -- (kolom Pcs hasil migrasi V20261003120000) jadi dipakai duluan.
+        -- Fallback Pcs - SUM(partial) hanya untuk baris input lama yang
+        -- dibuat sebelum kolom itu ada.
+        --
+        -- PENTING: fallback TIDAK boleh dipakai untuk baris baru. Create
+        -- sudah menambahkan baris BarangJadiPartial berisi pcs yang dipakai,
+        -- jadi Pcs - SUM(partial) = 0 dan pcs-nya akan hilang sama sekali.
+        COALESCE(
+          ibj.Pcs,
+          CASE
+            WHEN b.IsPartial = 1 THEN
+              CASE
+                WHEN ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0) < 0
+                  THEN 0
+                ELSE ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0)
+              END
+            ELSE ISNULL(b.Pcs, 0)
+          END
+        ) AS pcs,
+        ISNULL(b.Berat, 0)    AS berat,
+        -- Tanda input ini hasil konsumsi label yang SUDAH pernah dipecah.
+        -- NoPartial diisi create handler hanya untuk kasus itu; label utuh
+        -- yang sekali pakai penuh punya NoPartial NULL.
+        CAST(CASE WHEN ibj.NoPartial IS NOT NULL THEN 1 ELSE 0 END AS bit) AS isPartial,
+        ibj.NoPartial         AS noPartial,
+        -- Pcs asli label, supaya client bisa menampilkan "9 / 15 pcs".
+        ISNULL(b.Pcs, 0)      AS totalPcs
       FROM dbo.BongkarSusunInputBarangJadi ibj
       INNER JOIN dbo.BarangJadi b ON b.NoBJ = ibj.NoBJ
       INNER JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = b.IdBJ
@@ -1882,6 +1903,27 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
       );
 
     if (inputsBarangJadiRes.recordset.length > 0) {
+      // Kembalikan pcs yang dicatat sebagai partial oleh transaksi ini.
+      // NoPartial di baris input adalah backlink ke BarangJadiPartial yang
+      // dibuat create handler, jadi hanya baris milik bongkar-susun ini yang
+      // terhapus — partial dari penjualan/retur-v3 (yang tidak tercatat di
+      // sini) tetap utuh dan sisa pcs parent tetap benar.
+      //
+      // WAJIB sebelum baris input dihapus: NoPartial disimpan di sana.
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .query(`
+          DELETE FROM dbo.BarangJadiPartial
+          WHERE NoBJPartial IN (
+            SELECT NoPartial FROM dbo.BongkarSusunInputBarangjadi
+            WHERE NoBongkarSusun = @NoBongkarSusun AND NoPartial IS NOT NULL
+          )
+        `);
+
+      // Sisakan lagi label yang sebelumnya dipecah: tanpa partial di atas,
+      // Pcs parent = sisa sebenarnya lagi. IsPartial diturunkan ke 0 kalau
+      // tidak ada partial lain tersisa untuk label itu, supaya label tidak
+      // dilaporkan "sudah pernah dipecah" padahal sudah utuh lagi.
       const inBarangJadiJson = JSON.stringify(
         inputsBarangJadiRes.recordset.map((r) => ({ code: r.NoBJ })),
       );
@@ -1895,6 +1937,24 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
             SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
           )
         `);
+
+      await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        inBarangJadiJson,
+      ).query(`
+          UPDATE b
+          SET b.IsPartial = CAST(CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM dbo.BarangJadiPartial bp
+                  WHERE bp.NoBJ = b.NoBJ
+                ) THEN 1 ELSE 0 END AS bit)
+          FROM dbo.BarangJadi b
+          WHERE b.NoBJ IN (
+            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
+          )
+        `);
+
       await new sql.Request(tx)
         .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
         .query(
@@ -2455,12 +2515,30 @@ function getReportQuery() {
         C.NamaBJ AS Nama,
         CONCAT('BJ|', A.NoBJ),
         NULL,
-        ISNULL(B.Pcs, 0)
+        -- Pcs yang terpakai, bukan Pcs asli label. Lihat catatan di
+        -- getDetail: COALESCE dengan A.Pcs (isi untuk baris baru), fallback
+        -- rumus sisa untuk baris lama sebelum migrasi V20261003120000.
+        COALESCE(
+            A.Pcs,
+            CASE
+                WHEN B.IsPartial = 1 THEN
+                    CASE
+                        WHEN ISNULL(B.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0) < 0 THEN 0
+                        ELSE ISNULL(B.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0)
+                    END
+                ELSE ISNULL(B.Pcs, 0)
+            END
+        )
     FROM BongkarSusunInputBarangJadi A
     LEFT JOIN BarangJadi B 
         ON B.NoBJ = A.NoBJ
     LEFT JOIN MstBarangJadi C 
         ON C.IdBJ = B.IdBJ
+    LEFT JOIN (
+        SELECT NoBJ, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+        FROM BarangJadiPartial
+        GROUP BY NoBJ
+    ) bp ON bp.NoBJ = A.NoBJ
 
     UNION ALL
 

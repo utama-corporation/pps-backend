@@ -8,10 +8,23 @@ GO
    Action: CONSUME_FULL / UNCONSUME_FULL / UPDATE
    GROUPING: 1 row audit per (NoBongkarSusun, NoBJ) per statement
    PK JSON: { NoBongkarSusun, NoBJ }
-   NewData/OldData: array of {NoBongkarSusun, NoBJ, Pcs, Berat, IsPartial}
+   NewData/OldData: array of {
+     NoBongkarSusun, NoBJ, PcsDipakai, NoPartial, Pcs, Berat, IsPartial
+   }
+
+   PcsDipakai / NoPartial (kolom yang ditambahkan di
+   V20261003120000__add_nopartial_pcs_to_bongkarsusuninputbarangjadi):
+     - PcsDipakai = pcs yang dipakai siklus ini untuk label tsb. Untuk label
+       yang sudah pernah di-partial nilainya = seluruh sisa pcs, jadi bisa
+       saja < Pcs.
+     - NoPartial  = BarangJadiPartial.NoBJPartial yang dibuat transaksi ini.
+       NULL = label input tidak pernah dipecah sebelumnya (konsumsi penuh
+       atas label utuh).
 
    Enrichment:
    - Pcs, Berat, IsPartial diambil dari dbo.BarangJadi (bj.Pcs, bj.Berat, bj.IsPartial)
+     => Pcs di situ = Pcs ASLI label, bukan pcs yang terpakai. Bandingkan
+     Pcs vs PcsDipakai untuk melihat apakah label itu sudah pernah dipecah.
 */
 CREATE OR ALTER TRIGGER [dbo].[tr_Audit_BongkarSusunInputBarangJadi]
 ON [dbo].[BongkarSusunInputBarangJadi]
@@ -57,6 +70,8 @@ BEGIN
       SELECT
         x.NoBongkarSusun,
         x.NoBJ,
+        CAST(x.Pcs AS int)              AS PcsDipakai,
+        x.NoPartial,
         CAST(bj.Pcs AS int)             AS Pcs,
         CAST(bj.Berat AS decimal(18,3)) AS Berat,
         CAST(bj.IsPartial AS bit)       AS IsPartial
@@ -95,6 +110,8 @@ BEGIN
       SELECT
         x.NoBongkarSusun,
         x.NoBJ,
+        CAST(x.Pcs AS int)              AS PcsDipakai,
+        x.NoPartial,
         CAST(bj.Pcs AS int)             AS Pcs,
         CAST(bj.Berat AS decimal(18,3)) AS Berat,
         CAST(bj.IsPartial AS bit)       AS IsPartial
@@ -136,6 +153,8 @@ BEGIN
         SELECT
           d.NoBongkarSusun,
           d.NoBJ,
+          CAST(d.Pcs AS int)              AS PcsDipakai,
+          d.NoPartial,
           CAST(bj.Pcs AS int)             AS Pcs,
           CAST(bj.Berat AS decimal(18,3)) AS Berat,
           CAST(bj.IsPartial AS bit)       AS IsPartial
@@ -151,6 +170,8 @@ BEGIN
         SELECT
           i.NoBongkarSusun,
           i.NoBJ,
+          CAST(i.Pcs AS int)              AS PcsDipakai,
+          i.NoPartial,
           CAST(bj.Pcs AS int)             AS Pcs,
           CAST(bj.Berat AS decimal(18,3)) AS Berat,
           CAST(bj.IsPartial AS bit)       AS IsPartial
