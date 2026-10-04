@@ -2,6 +2,8 @@ const express = require("express");
 const router = express.Router();
 
 const verifyToken = require("../../../core/middleware/verify-token");
+const attachPermissions = require("../../../core/middleware/attach-permissions");
+const requirePermission = require("../../../core/middleware/require-permission");
 const ctrl = require("./crusher-production-controller");
 
 router.get("/crusher", verifyToken, ctrl.getAllProduksi);
@@ -25,9 +27,12 @@ router.post(
   ctrl.splitProduksiTime,
 );
 
+// Kunci produksi: IsComplete 0 -> 1. Butuh permission produksi_crusher:lock.
 router.patch(
   "/crusher/:noCrusherProduksi/complete",
   verifyToken,
+  attachPermissions,
+  requirePermission("produksi_crusher:lock"),
   ctrl.completeProduksi,
 );
 
@@ -35,6 +40,8 @@ router.patch(
 router.patch(
   "/crusher/:noCrusherProduksi/uncomplete",
   verifyToken,
+  attachPermissions,
+  requirePermission("produksi_crusher:lock"),
   ctrl.uncompleteProduksi,
 );
 

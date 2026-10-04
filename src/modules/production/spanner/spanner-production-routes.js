@@ -3,6 +3,8 @@ const express = require("express");
 const router = express.Router();
 
 const verifyToken = require("../../../core/middleware/verify-token");
+const attachPermissions = require("../../../core/middleware/attach-permissions");
+const requirePermission = require("../../../core/middleware/require-permission");
 const spannerController = require("./spanner-production-controller");
 
 // ✅ GET ALL Spanner (pagination + search)
@@ -30,6 +32,8 @@ router.post(
 router.patch(
   "/spanner/:noProduksi/complete",
   verifyToken,
+  attachPermissions,
+  requirePermission("produksi_spanner:lock"),
   spannerController.completeProduksi,
 );
 
@@ -37,6 +41,8 @@ router.patch(
 router.patch(
   "/spanner/:noProduksi/uncomplete",
   verifyToken,
+  attachPermissions,
+  requirePermission("produksi_spanner:lock"),
   spannerController.uncompleteProduksi,
 );
 

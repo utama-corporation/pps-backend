@@ -691,6 +691,7 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
 WHEN ABS(
                 ISNULL((
                   SELECT SUM(
+<<<<<<< Updated upstream
                     COALESCE(
                       ibj.Pcs,
                       CASE
@@ -702,6 +703,17 @@ WHEN ABS(
                         ELSE ISNULL(b.Pcs, 0)
                       END
                     )
+=======
+                    CASE
+                      WHEN b.IsPartial = 1 THEN
+                        CASE
+                          WHEN bsbp.UsedPartialPcs IS NOT NULL THEN bsbp.UsedPartialPcs
+                          WHEN ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0) < 0 THEN 0
+                          ELSE ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0)
+                        END
+                      ELSE ISNULL(b.Pcs, 0)
+                    END
+>>>>>>> Stashed changes
                   )
                   FROM dbo.BongkarSusunInputBarangjadi ibj
                   INNER JOIN dbo.Barangjadi b ON b.NoBJ = ibj.NoBJ
@@ -710,6 +722,18 @@ WHEN ABS(
                     FROM dbo.BarangjadiPartial
                     GROUP BY NoBJ
                   ) bp ON bp.NoBJ = b.NoBJ
+                  LEFT JOIN (
+                    SELECT
+                      bip.NoBongkarSusun,
+                      bjp.NoBJ,
+                      SUM(ISNULL(bjp.Pcs, 0)) AS UsedPartialPcs
+                    FROM dbo.BongkarSusunInputBarangJadiPartial bip
+                    INNER JOIN dbo.BarangJadiPartial bjp
+                      ON bjp.NoBJPartial = bip.NoBJPartial
+                    GROUP BY bip.NoBongkarSusun, bjp.NoBJ
+                  ) bsbp
+                    ON bsbp.NoBongkarSusun = ibj.NoBongkarSusun
+                   AND bsbp.NoBJ = ibj.NoBJ
                   WHERE ibj.NoBongkarSusun = h.NoBongkarSusun
                 ), 0) -
                 ISNULL((
@@ -1061,6 +1085,7 @@ exports.getDetail = async (noBongkarSusun) => {
         'barangJadi'          AS category,
         b.IdBJ                AS idJenis,
         mbj.NamaBJ            AS namaJenis,
+<<<<<<< Updated upstream
         -- Pcs yang benar-benar terpakai siklus ini. Ibj.Pcs diisi pada create
         -- (kolom Pcs hasil migrasi V20261003120000) jadi dipakai duluan.
         -- Fallback Pcs - SUM(partial) hanya untuk baris input lama yang
@@ -1089,6 +1114,22 @@ exports.getDetail = async (noBongkarSusun) => {
         ibj.NoPartial         AS noPartial,
         -- Pcs asli label, supaya client bisa menampilkan "9 / 15 pcs".
         ISNULL(b.Pcs, 0)      AS totalPcs
+=======
+        CASE
+          WHEN b.IsPartial = 1 THEN
+            CASE
+              -- Input partial: nilai input transaksi berasal dari partial
+              -- yang tertaut ke NoBongkarSusun ini.
+              WHEN bsbp.UsedPartialPcs IS NOT NULL THEN bsbp.UsedPartialPcs
+              WHEN ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0) < 0
+                THEN 0
+              ELSE ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0)
+            END
+          ELSE ISNULL(b.Pcs, 0)
+        END AS pcs,
+        ISNULL(b.Berat, 0)    AS berat,
+        CASE WHEN b.IsPartial = 1 THEN 1 ELSE 0 END AS isPartial
+>>>>>>> Stashed changes
       FROM dbo.BongkarSusunInputBarangJadi ibj
       INNER JOIN dbo.BarangJadi b ON b.NoBJ = ibj.NoBJ
       INNER JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = b.IdBJ
@@ -1097,6 +1138,18 @@ exports.getDetail = async (noBongkarSusun) => {
         FROM dbo.BarangJadiPartial
         GROUP BY NoBJ
       ) bp ON bp.NoBJ = b.NoBJ
+      LEFT JOIN (
+        SELECT
+          bip.NoBongkarSusun,
+          bjp.NoBJ,
+          SUM(ISNULL(bjp.Pcs, 0)) AS UsedPartialPcs
+        FROM dbo.BongkarSusunInputBarangJadiPartial bip
+        INNER JOIN dbo.BarangJadiPartial bjp
+          ON bjp.NoBJPartial = bip.NoBJPartial
+        GROUP BY bip.NoBongkarSusun, bjp.NoBJ
+      ) bsbp
+        ON bsbp.NoBongkarSusun = ibj.NoBongkarSusun
+       AND bsbp.NoBJ = ibj.NoBJ
       WHERE ibj.NoBongkarSusun = @NoBongkarSusun
     `);
 
@@ -1937,6 +1990,7 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
             SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
           )
         `);
+<<<<<<< Updated upstream
 
       await new sql.Request(tx).input(
         "CodesJson",
@@ -1955,6 +2009,24 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
           )
         `);
 
+=======
+      // Input partial: hapus baris BarangJadiPartial yang dibuat transaksi ini
+      // agar sisa pcs label kembali seperti sebelum bongkar susun.
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .query(`
+          DECLARE @Partials TABLE (NoBJPartial varchar(50));
+          INSERT INTO @Partials (NoBJPartial)
+          SELECT NoBJPartial FROM dbo.BongkarSusunInputBarangJadiPartial
+          WHERE NoBongkarSusun = @NoBongkarSusun;
+
+          DELETE FROM dbo.BongkarSusunInputBarangJadiPartial
+          WHERE NoBongkarSusun = @NoBongkarSusun;
+
+          DELETE FROM dbo.BarangJadiPartial
+          WHERE NoBJPartial IN (SELECT NoBJPartial FROM @Partials);
+        `);
+>>>>>>> Stashed changes
       await new sql.Request(tx)
         .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
         .query(
@@ -2530,15 +2602,39 @@ function getReportQuery() {
             END
         )
     FROM BongkarSusunInputBarangJadi A
-    LEFT JOIN BarangJadi B 
+    LEFT JOIN BarangJadi B
         ON B.NoBJ = A.NoBJ
-    LEFT JOIN MstBarangJadi C 
+    LEFT JOIN MstBarangJadi C
         ON C.IdBJ = B.IdBJ
+<<<<<<< Updated upstream
     LEFT JOIN (
         SELECT NoBJ, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
         FROM BarangJadiPartial
         GROUP BY NoBJ
     ) bp ON bp.NoBJ = A.NoBJ
+=======
+    WHERE ISNULL(B.IsPartial, 0) <> 1
+
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'INPUT',
+        'BARANGJADI',
+        ISNULL(F.IdBJ, 0),
+        G.NamaBJ AS Nama,
+        CONCAT('BJP|', A.NoBJPartial),
+        NULL,
+        ISNULL(E.Pcs, 0)
+    FROM BongkarSusunInputBarangJadiPartial A
+    INNER JOIN BarangJadiPartial E
+        ON E.NoBJPartial = A.NoBJPartial
+    INNER JOIN BarangJadi F
+        ON F.NoBJ = E.NoBJ
+    INNER JOIN MstBarangJadi G
+        ON G.IdBJ = F.IdBJ
+    WHERE ISNULL(F.IsPartial, 0) = 1
+>>>>>>> Stashed changes
 
     UNION ALL
 

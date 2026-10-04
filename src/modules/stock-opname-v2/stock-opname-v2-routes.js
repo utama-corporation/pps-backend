@@ -168,7 +168,7 @@ router.get(
 router.get(
   "/stock-opname-v2/transaksi/:stockOpnameNo/blok",
   verifyToken,
-  stockOpnameV2Controller.listBlokHandler,
+  stockOpnameV2Controller.listBlokHandler, 
 );
 
 // Dipakai app scan: daftar lokasi (lintas blok) pada NoSO ini, discope

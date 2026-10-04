@@ -70,18 +70,37 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
           b.IdWarehouse,
           b.Blok,
           b.IdLokasi,
+<<<<<<< Updated upstream
           ISNULL(b.Pcs, 0) AS ParentPcs,
           CASE
             WHEN ISNULL(b.Pcs, 0) - ISNULL(bjp.TotalPartialPcs, 0) < 0
               THEN 0
             ELSE ISNULL(b.Pcs, 0) - ISNULL(bjp.TotalPartialPcs, 0)
+=======
+          b.IsPartial,
+          CASE
+            WHEN ISNULL(b.IsPartial, 0) = 1 THEN
+              CASE
+                WHEN ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0) < 0
+                  THEN 0
+                ELSE ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0)
+              END
+            ELSE ISNULL(b.Pcs, 0)
+>>>>>>> Stashed changes
           END AS AvailablePcs
         FROM dbo.BarangJadi b WITH (UPDLOCK, HOLDLOCK)
         LEFT JOIN (
           SELECT NoBJ, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+<<<<<<< Updated upstream
           FROM dbo.BarangJadiPartial WITH (UPDLOCK, HOLDLOCK)
           GROUP BY NoBJ
         ) bjp ON bjp.NoBJ = b.NoBJ
+=======
+          FROM dbo.BarangJadiPartial
+          GROUP BY NoBJ
+        ) bp
+          ON bp.NoBJ = b.NoBJ
+>>>>>>> Stashed changes
         WHERE b.NoBJ IN (
           SELECT j.code FROM OPENJSON(@CodesJson)
           WITH (code varchar(50) '$.code') AS j
@@ -258,9 +277,63 @@ const totalPcsInput = inputDataRes.recordset.reduce(
         FROM OPENJSON(@RowsJson) AS j
       `);
 
+<<<<<<< Updated upstream
     // Semua input sudah tidak menyisakan pcs (sisa habis terpakai), jadi
     // parent ditandai terpakai. Baris partial milik penjualan/retur-v3/
     // siklus sebelumnya TIDAK dihapus di sini.
+=======
+    // Label partial: sisa pcs yang dibongkar dicatat sebagai baris
+    // BarangJadiPartial baru, lalu ditautkan ke transaksi ini.
+    const inputPartialRows = inputDataRes.recordset.filter(
+      (row) =>
+        (row.IsPartial === true || row.IsPartial === 1) &&
+        Number(row.AvailablePcs || 0) > 0,
+    );
+
+    const genBjPartial = () =>
+      generateNextCode(tx, {
+        tableName: "BarangJadiPartial",
+        columnName: "NoBJPartial",
+        prefix: "BL.",
+        width: 10,
+      });
+
+    for (const row of inputPartialRows) {
+      let noBJPartial = await genBjPartial();
+      const partialExist = await new sql.Request(tx)
+        .input("No", sql.VarChar(50), noBJPartial)
+        .query(
+          `SELECT 1 FROM dbo.BarangJadiPartial WITH (UPDLOCK,HOLDLOCK) WHERE NoBJPartial=@No`,
+        );
+      if (partialExist.recordset.length > 0) {
+        noBJPartial = await genBjPartial();
+        const partialExist2 = await new sql.Request(tx)
+          .input("No", sql.VarChar(50), noBJPartial)
+          .query(
+            `SELECT 1 FROM dbo.BarangJadiPartial WITH (UPDLOCK,HOLDLOCK) WHERE NoBJPartial=@No`,
+          );
+        if (partialExist2.recordset.length > 0) {
+          throw conflict("Gagal generate NoBJPartial unik, coba lagi");
+        }
+      }
+
+      await new sql.Request(tx)
+        .input("NoBJPartial", sql.VarChar(50), noBJPartial)
+        .input("NoBJ", sql.VarChar(50), row.NoBJ)
+        .input("Pcs", sql.Int, Math.trunc(Number(row.AvailablePcs))).query(`
+          INSERT INTO dbo.BarangJadiPartial (NoBJPartial, NoBJ, Pcs)
+          VALUES (@NoBJPartial, @NoBJ, @Pcs)
+        `);
+
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .input("NoBJPartial", sql.VarChar(50), noBJPartial).query(`
+          INSERT INTO dbo.BongkarSusunInputBarangJadiPartial (NoBongkarSusun, NoBJPartial)
+          VALUES (@NoBongkarSusun, @NoBJPartial)
+        `);
+    }
+
+>>>>>>> Stashed changes
     await new sql.Request(tx)
       .input("Tanggal", sql.Date, nowDate)
       .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson).query(`

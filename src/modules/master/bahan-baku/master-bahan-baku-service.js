@@ -57,7 +57,7 @@ async function getStokByFilter(whereClause) {
     ) agg
       ON agg.IdJenisPlastik = m.IdBB
     WHERE ${whereClause}
-    ORDER BY m.Nama;
+    ORDER BY DateCreateTertua ASC, m.Nama ASC;
   `);
 
   const items = result.recordset.map((r) => ({

@@ -112,7 +112,7 @@ exports.getPalletByNoBahanBaku = async (nobahanbaku) => {
         p.NoBahanBaku,
         p.NoPallet,
         p.IdJenisPlastik,
-        jp.Jenis AS NamaJenisPlastik,
+        COALESCE(mbb.Nama, jp.Jenis) AS NamaJenisPlastik,
         p.IdWarehouse,
         w.NamaWarehouse,
         p.Keterangan,
@@ -153,6 +153,7 @@ exports.getPalletByNoBahanBaku = async (nobahanbaku) => {
         AS bit) AS IsEmpty
 
       FROM dbo.BahanBakuPallet_h p
+      LEFT JOIN dbo.MstBahanBaku mbb ON mbb.IdBB = p.IdJenisPlastik
       LEFT JOIN dbo.MstJenisPlastik jp ON jp.IdJenisPlastik = p.IdJenisPlastik
       LEFT JOIN dbo.MstWarehouse w     ON w.IdWarehouse     = p.IdWarehouse
 
@@ -517,7 +518,7 @@ exports.getByPalletForPdf = async (NoBahanBaku, NoPallet) => {
           h.CreateBy,
           s.NmSupplier AS NamaSupplier,
           p.NoPallet,
-          jp.Jenis AS NamaJenisPlastik,
+          COALESCE(mbb.Nama, jp.Jenis) AS NamaJenisPlastik,
           ISNULL(CAST(p.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
           ISNULL(dAgg.SakSisa, 0)   AS SakSisa,
           ISNULL(dAgg.BeratSisa, 0) AS BeratSisa
@@ -525,6 +526,7 @@ exports.getByPalletForPdf = async (NoBahanBaku, NoPallet) => {
         LEFT JOIN dbo.MstSupplier s         ON s.IdSupplier     = h.IdSupplier
         LEFT JOIN dbo.BahanBakuPallet_h p   ON p.NoBahanBaku    = h.NoBahanBaku
                                            AND p.NoPallet        = @NoPallet
+        LEFT JOIN dbo.MstBahanBaku mbb      ON mbb.IdBB = p.IdJenisPlastik
         LEFT JOIN dbo.MstJenisPlastik jp    ON jp.IdJenisPlastik = p.IdJenisPlastik
         OUTER APPLY (
           SELECT

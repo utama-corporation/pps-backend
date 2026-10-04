@@ -20,7 +20,7 @@ router.get(
   ctrl.getLabelByIdWashing,
 );
 
-// GET only active (IsEnable = 1)
+// GET all rows from MstWashing (jenis washing)
 router.get("/", ctrl.getAllActive);
 
 module.exports = router;

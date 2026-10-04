@@ -2,6 +2,8 @@
 const express = require("express");
 const router = express.Router();
 const verifyToken = require("../../../core/middleware/verify-token");
+const attachPermissions = require("../../../core/middleware/attach-permissions");
+const requirePermission = require("../../../core/middleware/require-permission");
 const brokerProduksiController = require("./broker-production-controller");
 
 // GET /broker?page=1&pageSize=20
@@ -24,9 +26,12 @@ router.post(
   brokerProduksiController.splitProduksiTime,
 );
 
+// Kunci produksi: IsComplete 0 -> 1. Butuh permission produksi_broker:lock.
 router.patch(
   "/broker/:noProduksi/complete",
   verifyToken,
+  attachPermissions,
+  requirePermission("produksi_broker:lock"),
   brokerProduksiController.completeProduksi,
 );
 
@@ -34,6 +39,8 @@ router.patch(
 router.patch(
   "/broker/:noProduksi/uncomplete",
   verifyToken,
+  attachPermissions,
+  requirePermission("produksi_broker:lock"),
   brokerProduksiController.uncompleteProduksi,
 );
 

@@ -147,4 +147,111 @@ async function complete(req, res) {
   }
 }
 
-module.exports = { list, getDetail, createHeader, addPallets, remove, timStatus, complete };
+function sendError(res, error, logLabel) {
+  const statusCode = error.statusCode || 500;
+  console.error(logLabel, error);
+  return res.status(statusCode).json({
+    success: false,
+    message: statusCode === 500 ? "Internal Server Error" : error.message,
+    ...(statusCode === 500 ? { error: error.message } : {}),
+  });
+}
+
+async function formOptions(req, res) {
+  try {
+    const data = await service.getFormOptions(req.query.kodeKategori);
+    return res.status(200).json({ success: true, message: "Opsi form berhasil diambil", data });
+  } catch (error) {
+    return sendError(res, error, "Error get form options PenerimaanBahanBaku:");
+  }
+}
+
+async function potongan(req, res) {
+  try {
+    const data = await service.getPotongan(req.params.idSupplier);
+    return res.status(200).json({ success: true, message: "Aturan potongan berhasil diambil", data });
+  } catch (error) {
+    return sendError(res, error, "Error get potongan PenerimaanBahanBaku:");
+  }
+}
+
+function editHandler(label, message, run, status = 200) {
+  return async (req, res) => {
+    const ctx = buildCtx(req);
+    try {
+      const data = await run(req, ctx);
+      return res.status(status).json({ success: true, message, data, meta: { audit: ctx } });
+    } catch (error) {
+      return sendError(res, error, `Error ${label} PenerimaanBahanBaku:`);
+    }
+  };
+}
+
+const updatePallet = editHandler("ubah pallet", "Pallet berhasil diubah", (req, ctx) =>
+  service.updatePalletPenerimaan(
+    req.params.noPenerimaan,
+    req.params.noBahanBaku,
+    req.params.noPallet,
+    req.body || {},
+    ctx,
+  ),
+);
+
+const removePallet = editHandler("hapus pallet", "Pallet berhasil dihapus", (req, ctx) =>
+  service.deletePalletPenerimaan(
+    req.params.noPenerimaan,
+    req.params.noBahanBaku,
+    req.params.noPallet,
+    ctx,
+  ),
+);
+
+const addSaks = editHandler(
+  "tambah sak",
+  "Sak berhasil ditambahkan",
+  (req, ctx) =>
+    service.addSaksPenerimaan(
+      req.params.noPenerimaan,
+      req.params.noBahanBaku,
+      req.params.noPallet,
+      req.body || {},
+      ctx,
+    ),
+  201,
+);
+
+const removeSak = editHandler("hapus sak", "Sak berhasil dihapus", (req, ctx) =>
+  service.deleteSakPenerimaan(
+    req.params.noPenerimaan,
+    req.params.noBahanBaku,
+    req.params.noPallet,
+    req.params.noSak,
+    ctx,
+  ),
+);
+
+async function laporan(req, res) {
+  try {
+    const data = await service.getLaporanPenerimaan(req.params.noPenerimaan);
+    return res.status(200).json({ success: true, message: "Laporan berhasil diambil", data });
+  } catch (error) {
+    return sendError(res, error, "Error get laporan PenerimaanBahanBaku:");
+  }
+}
+
+module.exports = {
+  updatePallet,
+  removePallet,
+  addSaks,
+  removeSak,
+  laporan,
+  list,
+  getDetail,
+  createHeader,
+  addPallets,
+  remove,
+  timStatus,
+  complete,
+  formOptions,
+  potongan,
+};

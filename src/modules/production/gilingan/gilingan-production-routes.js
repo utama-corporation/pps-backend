@@ -3,6 +3,8 @@ const express = require("express");
 const router = express.Router();
 
 const verifyToken = require("../../../core/middleware/verify-token");
+const attachPermissions = require("../../../core/middleware/attach-permissions");
+const requirePermission = require("../../../core/middleware/require-permission");
 const gilinganProduksiController = require("./gilingan-production-controller");
 
 // GET GilinganProduksi_h by date (YYYY-MM-DD)
@@ -24,6 +26,8 @@ router.post(
 router.patch(
   "/gilingan/:noProduksi/complete",
   verifyToken,
+  attachPermissions,
+  requirePermission("produksi_gilingan:lock"),
   gilinganProduksiController.completeProduksi,
 );
 
@@ -31,6 +35,8 @@ router.patch(
 router.patch(
   "/gilingan/:noProduksi/uncomplete",
   verifyToken,
+  attachPermissions,
+  requirePermission("produksi_gilingan:lock"),
   gilinganProduksiController.uncompleteProduksi,
 );
 

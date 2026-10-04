@@ -657,7 +657,8 @@ async function getGilinganByNoProduksi({
       CROSS JOIN CurrentCtx c
       WHERE gh.IdMesin = m.IdMesin
         AND CONVERT(date, gh.Tanggal) = c.CurrentDate
-        AND gh.Shift = (SELECT TOP 1 NoShift FROM ActiveShift)
+        AND gh.HourStart IS NOT NULL
+        AND gh.HourEnd IS NOT NULL
         AND (
           (
             gh.HourStart <= gh.HourEnd
@@ -841,7 +842,8 @@ async function getMixerByNoProduksi({
       CROSS JOIN CurrentCtx c
       WHERE mh.IdMesin = m.IdMesin
         AND CONVERT(date, mh.TglProduksi) = c.CurrentDate
-        AND mh.Shift = (SELECT TOP 1 NoShift FROM ActiveShift)
+        AND mh.HourStart IS NOT NULL
+        AND mh.HourEnd IS NOT NULL
         AND (
           (
             mh.HourStart <= mh.HourEnd

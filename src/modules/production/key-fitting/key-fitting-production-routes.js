@@ -3,6 +3,8 @@ const express = require("express");
 const router = express.Router();
 
 const verifyToken = require("../../../core/middleware/verify-token");
+const attachPermissions = require("../../../core/middleware/attach-permissions");
+const requirePermission = require("../../../core/middleware/require-permission");
 const keyFittingController = require("./key-fitting-production-controller");
 
 // Example: GET /api/key-fitting/key-fitting?page=1&pageSize=20&search=PK.
@@ -25,10 +27,12 @@ router.post(
   keyFittingController.splitProduksiTime,
 );
 
-// routes/key-fitting-production-route.js
+// Kunci produksi: IsComplete 0 -> 1. Butuh permission produksi_pasangkunci:lock.
 router.patch(
   "/key-fitting/:noProduksi/complete",
   verifyToken,
+  attachPermissions,
+  requirePermission("produksi_pasangkunci:lock"),
   keyFittingController.completeProduksi,
 );
 
@@ -36,6 +40,8 @@ router.patch(
 router.patch(
   "/key-fitting/:noProduksi/uncomplete",
   verifyToken,
+  attachPermissions,
+  requirePermission("produksi_pasangkunci:lock"),
   keyFittingController.uncompleteProduksi,
 );
 
