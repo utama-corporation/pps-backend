@@ -8,7 +8,6 @@ exports.getLabelInfoBarangJadi = async (labelCode) => {
     throw conflict(`Label ${row.NoBJ} sudah terpakai`);
   }
 
-<<<<<<< Updated upstream
   // Label yang sudah pernah dipecah (IsPartial = 1) TIDAK lagi otomatis
   // ditolak: operator boleh scan label fisik yang masih ada di gudang.
   // getByNoBJ sudah menghitung sisa pcs di field Pcs
@@ -19,12 +18,6 @@ exports.getLabelInfoBarangJadi = async (labelCode) => {
 
   if (remainingPcs <= 0) {
     throw conflict(`Label ${row.NoBJ} sudah habis, tidak ada pcs tersisa`);
-=======
-  // Label partial boleh dibongkar susun: row.Pcs sudah berisi sisa pcs
-  // (Pcs - total BarangJadiPartial), sama seperti furniture WIP.
-  if (Number(row.Pcs || 0) <= 0) {
-    throw conflict(`Label ${row.NoBJ} tidak memiliki sisa pcs`);
->>>>>>> Stashed changes
   }
 
   return {

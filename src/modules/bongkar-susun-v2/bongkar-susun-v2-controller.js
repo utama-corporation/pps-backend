@@ -7,6 +7,9 @@ const {
   makeRequestId,
 } = require("../../core/utils/http-context");
 
+// Kategori yang mendukung input partial (override jumlah terpakai per label)
+const PARTIAL_CATEGORIES = new Set(["barangJadi", "furnitureWip", "mixer"]);
+
 function makeCtx(req) {
   return {
     actorId: getActorId(req),
@@ -66,7 +69,7 @@ async function getDetail(req, res) {
 
 // POST /bongkar-susun-v2
 async function create(req, res) {
-  const { note, inputs, outputs } = req.body || {};
+  const { note, inputs, outputs, inputsPartial } = req.body || {};
   const ctx = makeCtx(req);
 
   if (!ctx.actorId) {
@@ -106,10 +109,22 @@ async function create(req, res) {
     });
   }
 
+  if (
+    Array.isArray(inputsPartial) &&
+    inputsPartial.length > 0 &&
+    !PARTIAL_CATEGORIES.has(category)
+  ) {
+    return res.status(400).json({
+      success: false,
+      message:
+        "Input partial hanya didukung untuk kategori barangJadi, furnitureWip, dan mixer",
+    });
+  }
+
   try {
     const result = await service.createBongkarSusunByCategory(
       category,
-      { note, inputs, outputs },
+      { note, inputs, outputs, inputsPartial },
       ctx,
     );
 

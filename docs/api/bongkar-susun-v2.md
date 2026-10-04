@@ -36,6 +36,32 @@ Format umum:
 }
 ```
 
+Kategori **barangJadi, furnitureWip, dan mixer** mendukung field opsional
+`inputsPartial` untuk memilih **sebagian** qty dari sisa label (pcs untuk
+barangJadi/furnitureWip, kg untuk mixer):
+
+```json
+{
+  "note": "opsional",
+  "inputs": ["BA.0000040338"],
+  "inputsPartial": [{ "labelCode": "BA.0000040338", "qty": 10 }],
+  "outputs": [{ "...": "..." }]
+}
+```
+
+| Field                   | Format                           | Keterangan                                            |
+| ----------------------- | -------------------------------- | ----------------------------------------------------- |
+| `inputs`                | array kode label                 | **Semua** label input — termasuk yang di-override     |
+| `inputsPartial`         | `[{ labelCode, qty }]`, opsional | Override qty terpakai per label (≤ sisa label)        |
+| `inputsPartial[].qty`    | number > 0                       | qty terpakai (pcs / kg); sisanya (`sisa - qty`) hidup |
+
+Label yang `qty`-nya kurang dari sisa **tidak** ditandai `DateUsage` —
+sisanya masih bisa dipakai transaksi berikutnya. Label tanpa override
+tetap memakai seluruh sisa seperti biasa.
+
+> `inputsPartial` ditolak dengan `400` untuk kategori selain barangJadi,
+> furnitureWip, dan mixer.
+
 ### 1) Bahan Baku
 
 | Field                    | Format               | Keterangan                                            |
@@ -107,23 +133,31 @@ Contoh:
 
 ### 6) Mixer
 
-| Field                    | Format             | Keterangan                    |
-| ------------------------ | ------------------ | ----------------------------- |
-| `inputs`                 | `["H.0000025312"]` | Label mixer                   |
-| `outputs[].idJenis`      | number             | Harus sama dengan jenis input |
-| `outputs[].saks`         | array              | Daftar sak output             |
-| `outputs[].saks[].noSak` | number             | Nomor sak                     |
-| `outputs[].saks[].berat` | number             | Berat per sak                 |
-| Balance                  | berat              | Berdasarkan total berat       |
+| Field                    | Format                              | Keterangan                                            |
+| ------------------------ | ----------------------------------- | ----------------------------------------------------- |
+| `inputs`                 | `["H.0000025312"]`                  | Label mixer                                           |
+| `inputsPartial`          | `[{ labelCode, qty }]`, opsional    | Override berat terpakai per label (kg, ≤ sisa)        |
+| `outputs[].idJenis`      | number                              | Harus sama dengan jenis input                         |
+| `outputs[].saks`         | array                               | Daftar sak output                                     |
+| `outputs[].saks[].noSak` | number                              | Nomor sak                                             |
+| `outputs[].saks[].berat` | number                              | Berat per sak                                         |
+| Balance                  | berat                               | Berdasarkan total berat                               |
+
+Dengan `inputsPartial`, berat terpakai dialokasikan first-fit ke sak-sak
+label berurutan `NoSak`: sak yang habis dialokasi penuh ditandai
+`DateUsage`, sak terakhir yang dialokasi sebagian dicatat baris
+`MixerPartial` (berisi kg terpakai, backlink
+`BongkarSusunInputMixerPartial`), dan sisanya tetap hidup.
 
 ### 7) Furniture WIP
 
-| Field               | Format              | Keterangan                    |
-| ------------------- | ------------------- | ----------------------------- |
-| `inputs`            | `["BB.0000044552"]` | Label furniture WIP           |
-| `outputs[].idJenis` | number              | Harus sama dengan jenis input |
-| `outputs[].pcs`     | number              | Jumlah pcs output             |
-| Balance             | pcs                 | Berdasarkan total pcs         |
+| Field               | Format                              | Keterangan                         |
+| ------------------- | ----------------------------------- | ---------------------------------- |
+| `inputs`            | `["BB.0000044552"]`                 | Label furniture WIP                |
+| `inputsPartial`     | `[{ labelCode, qty }]`, opsional    | Override pcs terpakai per label    |
+| `outputs[].idJenis` | number                              | Harus sama dengan jenis input      |
+| `outputs[].pcs`     | number                              | Jumlah pcs output                  |
+| Balance             | pcs                                 | Berdasarkan total pcs              |
 
 ### 8) Barang Jadi
 
@@ -148,9 +182,11 @@ sisaPcs = BarangJadi.Pcs - SUM(BarangJadiPartial.Pcs)
 plus flag `isPartial`. Client cukup memakai `pcs` apa adanya — tidak perlu
 menghitung sendiri.
 
-Bongkar susun **tidak memilih sebagian pcs** dari label: seluruh sisa pcs
-input selalu dipakai, jadi `totalPcsInput` = `totalPcsOutput` selalu.
-Tidak ada payload `partials` dari client untuk kategori ini.
+Secara default seluruh sisa pcs input dipakai, jadi `totalPcsInput` =
+`totalPcsOutput`. Untuk memakai **sebagian** sisa saja, client mengirim
+`inputsPartial` (lihat format umum): label tetap ada di `inputs`, hanya
+jumlah pcs-nya yang di-override. Label dengan sisa tersisa tidak
+di-`DateUsage` sehingga masih bisa dipakai lagi.
 
 #### Pencatatan partial pada input
 
@@ -167,10 +203,18 @@ kolom `Pcs`, pada baris input-nya sendiri:
 BongkarSusunInputBarangJadi (NoBongkarSusun, NoBJ, NoPartial, Pcs)
 ```
 
+Baris partial itu juga ditautkan ke transaksi lewat tabel
+`dbo.BongkarSusunInputBarangJadiPartial (NoBongkarSusun, NoBJPartial)` —
+struktur sama dengan furnitureWip/mixer, dipakai join partial pada
+`GET /:noBongkarSusun` dan pengecekan balance daftar transaksi. Hapus
+transaksi membersihkan link ini lebih dulu (FK ke `BarangJadiPartial`)
+sebelum baris partial-nya dihapus.
+
 | Kondisi label input   | `NoPartial` | `Pcs` |
 | --------------------- | ----------- | ----- |
-| Utuh (belum pernah di-partial) | `NULL` | pcs asli label |
-| Sudah pernah di-partial | `BL.xxxxxxxx` | sisa pcs yang dipakai |
+| Utuh, dipakai penuh | `NULL` | pcs asli label |
+| Utuh, dipakai sebagian (`inputsPartial`) | `BL.xxxxxxxx` | pcs yang dipakai |
+| Sudah pernah di-partial | `BL.xxxxxxxx` | pcs yang dipakai (≤ sisa) |
 
 Hapus bongkar-susun memakai `NoPartial` tersebut sebagai backlink: baris
 `BarangJadiPartial` yang dibuat transaksi itu dihapus, `DateUsage` di-reset

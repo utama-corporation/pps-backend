@@ -5,9 +5,14 @@ const {
 const { badReq, conflict } = require("../../../core/utils/http-error");
 const { formatYMD } = require("../../../core/shared/tutup-transaksi-guard");
 const { detectCategory } = require("../bongkar-susun-v2-category-registry");
+const { createPartial } = require("../../../core/shared/label-partial.helper");
+const {
+  parseInputsPartial,
+  resolveUsedQty,
+} = require("../inputs-partial.helper");
 
 exports.createBongkarSusunFurnitureWip = async (payload, ctx) => {
-  const { note, inputs, outputs } = payload;
+  const { note, inputs, outputs, inputsPartial } = payload;
   const { actorId, actorUsername, requestId } = ctx;
 
   if (!Array.isArray(inputs) || inputs.length === 0) {
@@ -37,6 +42,8 @@ exports.createBongkarSusunFurnitureWip = async (payload, ctx) => {
       throw badReq(`outputs[${i}].pcs wajib diisi dan lebih dari 0`);
     }
   }
+
+  const partialMap = parseInputsPartial(inputsPartial, inputs);
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -95,8 +102,23 @@ exports.createBongkarSusunFurnitureWip = async (payload, ctx) => {
       );
     }
 
+    // pcs yang dipakai siklus ini per label: seluruh sisa pcs, kecuali label
+    // yang di-override inputsPartial (operator memilih memakai sebagian dari
+    // sisa). Label dengan used < available menyisakan pcs — tidak di-DateUsage.
+    const usedByCode = new Map();
+    for (const row of inputDataRes.recordset) {
+      if (Number(row.AvailablePcs || 0) <= 0) {
+        throw badReq(`Label ${row.NoFurnitureWIP} tidak memiliki sisa pcs`);
+      }
+      usedByCode.set(
+        row.NoFurnitureWIP,
+        Math.trunc(resolveUsedQty(partialMap, row.NoFurnitureWIP, row.AvailablePcs)),
+      );
+    }
+    const usedPcsOf = (row) => usedByCode.get(row.NoFurnitureWIP);
+
     const totalPcsInput = inputDataRes.recordset.reduce(
-      (sum, row) => sum + Number(row.AvailablePcs || 0),
+      (sum, row) => sum + usedPcsOf(row),
       0,
     );
 
@@ -106,7 +128,7 @@ exports.createBongkarSusunFurnitureWip = async (payload, ctx) => {
       if (!inputByJenis[k]) {
         inputByJenis[k] = { pcs: 0 };
       }
-      inputByJenis[k].pcs += Number(row.AvailablePcs || 0);
+      inputByJenis[k].pcs += usedPcsOf(row);
     }
 
     const outputByJenis = {};
@@ -190,59 +212,51 @@ exports.createBongkarSusunFurnitureWip = async (payload, ctx) => {
         WITH (code varchar(50) '$.code') AS j
       `);
 
-    const inputPartialRows = inputDataRes.recordset.filter(
-      (row) =>
-        (row.IsPartial === true || row.IsPartial === 1) &&
-        Number(row.AvailablePcs || 0) > 0,
-    );
+    // Label yang SUDAH pernah dipecah (IsPartial = 1) dan label utuh yang
+    // dipakai SEBAGIAN (override inputsPartial) dicatat baris
+    // FurnitureWIPPartial baru berisi pcs terpakai + ditautkan ke transaksi
+    // ini lewat BongkarSusunInputFurnitureWIPPartial — backlink yang dipakai
+    // hapus transaksi untuk mengembalikan pcs. createPartial menandai parent
+    // IsPartial = 1 (DateUsage tetap NULL) supaya sisa pcsnya terhitung.
+    for (const row of inputDataRes.recordset) {
+      const used = usedPcsOf(row);
+      const available = Number(row.AvailablePcs || 0);
+      const wasPartial = row.IsPartial === true || row.IsPartial === 1;
+      if (!wasPartial && used >= available) continue;
 
-    const genFurnitureWipPartial = () =>
-      generateNextCode(tx, {
-        tableName: "FurnitureWIPPartial",
-        columnName: "NoFurnitureWIPPartial",
-        prefix: "BC.",
-        width: 10,
-      });
-
-    for (const row of inputPartialRows) {
-      let noFurnitureWIPPartial = await genFurnitureWipPartial();
-      const partialExist = await new sql.Request(tx)
-        .input("No", sql.VarChar(50), noFurnitureWIPPartial)
-        .query(
-          `SELECT 1 FROM dbo.FurnitureWIPPartial WITH (UPDLOCK,HOLDLOCK) WHERE NoFurnitureWIPPartial=@No`,
-        );
-      if (partialExist.recordset.length > 0) {
-        noFurnitureWIPPartial = await genFurnitureWipPartial();
-        const partialExist2 = await new sql.Request(tx)
-          .input("No", sql.VarChar(50), noFurnitureWIPPartial)
-          .query(
-            `SELECT 1 FROM dbo.FurnitureWIPPartial WITH (UPDLOCK,HOLDLOCK) WHERE NoFurnitureWIPPartial=@No`,
-          );
-        if (partialExist2.recordset.length > 0) {
-          throw conflict("Gagal generate NoFurnitureWIPPartial unik, coba lagi");
-        }
-      }
-
-      await new sql.Request(tx)
-        .input("NoFurnitureWIPPartial", sql.VarChar(50), noFurnitureWIPPartial)
-        .input("NoFurnitureWIP", sql.VarChar(50), row.NoFurnitureWIP)
-        .input("Pcs", sql.Decimal(18, 3), Number(row.AvailablePcs)).query(`
-          INSERT INTO dbo.FurnitureWIPPartial (NoFurnitureWIPPartial, NoFurnitureWIP, Pcs)
-          VALUES (@NoFurnitureWIPPartial, @NoFurnitureWIP, @Pcs)
-        `);
+      const noFurnitureWIPPartial = await createPartial(
+        tx,
+        "furniturewip",
+        row.NoFurnitureWIP,
+        used,
+      );
 
       await new sql.Request(tx)
         .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
-        .input("NoFurnitureWIPPartial", sql.VarChar(50), noFurnitureWIPPartial)
-        .query(`
+        .input(
+          "NoFurnitureWIPPartial",
+          sql.VarChar(50),
+          noFurnitureWIPPartial,
+        ).query(`
           INSERT INTO dbo.BongkarSusunInputFurnitureWIPPartial (NoBongkarSusun, NoFurnitureWIPPartial)
           VALUES (@NoBongkarSusun, @NoFurnitureWIPPartial)
         `);
     }
 
-    await new sql.Request(tx)
-      .input("Tanggal", sql.Date, nowDate)
-      .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson).query(`
+    // Label yang sisa pcs-nya habis terpakai (used == available) ditandai
+    // terpakai. Label dengan sisa tersisa (override inputsPartial) TIDAK —
+    // sisanya masih bisa dipakai siklus berikutnya.
+    const fullyUsedCodes = inputDataRes.recordset
+      .filter((row) => usedPcsOf(row) >= Number(row.AvailablePcs || 0))
+      .map((row) => ({ code: row.NoFurnitureWIP }));
+    if (fullyUsedCodes.length > 0) {
+      await new sql.Request(tx)
+        .input("Tanggal", sql.Date, nowDate)
+        .input(
+          "CodesJson",
+          sql.NVarChar(sql.MAX),
+          JSON.stringify(fullyUsedCodes),
+        ).query(`
         UPDATE dbo.FurnitureWIP
         SET DateUsage = @Tanggal
         WHERE NoFurnitureWIP IN (
@@ -251,6 +265,7 @@ exports.createBongkarSusunFurnitureWip = async (payload, ctx) => {
         )
         AND DateUsage IS NULL
       `);
+    }
 
     const refRow = inputDataRes.recordset[0];
     const createdOutputs = [];

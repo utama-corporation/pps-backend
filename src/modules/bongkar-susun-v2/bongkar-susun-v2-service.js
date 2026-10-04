@@ -691,7 +691,6 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
 WHEN ABS(
                 ISNULL((
                   SELECT SUM(
-<<<<<<< Updated upstream
                     COALESCE(
                       ibj.Pcs,
                       CASE
@@ -703,17 +702,6 @@ WHEN ABS(
                         ELSE ISNULL(b.Pcs, 0)
                       END
                     )
-=======
-                    CASE
-                      WHEN b.IsPartial = 1 THEN
-                        CASE
-                          WHEN bsbp.UsedPartialPcs IS NOT NULL THEN bsbp.UsedPartialPcs
-                          WHEN ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0) < 0 THEN 0
-                          ELSE ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0)
-                        END
-                      ELSE ISNULL(b.Pcs, 0)
-                    END
->>>>>>> Stashed changes
                   )
                   FROM dbo.BongkarSusunInputBarangjadi ibj
                   INNER JOIN dbo.Barangjadi b ON b.NoBJ = ibj.NoBJ
@@ -1085,7 +1073,6 @@ exports.getDetail = async (noBongkarSusun) => {
         'barangJadi'          AS category,
         b.IdBJ                AS idJenis,
         mbj.NamaBJ            AS namaJenis,
-<<<<<<< Updated upstream
         -- Pcs yang benar-benar terpakai siklus ini. Ibj.Pcs diisi pada create
         -- (kolom Pcs hasil migrasi V20261003120000) jadi dipakai duluan.
         -- Fallback Pcs - SUM(partial) hanya untuk baris input lama yang
@@ -1114,22 +1101,6 @@ exports.getDetail = async (noBongkarSusun) => {
         ibj.NoPartial         AS noPartial,
         -- Pcs asli label, supaya client bisa menampilkan "9 / 15 pcs".
         ISNULL(b.Pcs, 0)      AS totalPcs
-=======
-        CASE
-          WHEN b.IsPartial = 1 THEN
-            CASE
-              -- Input partial: nilai input transaksi berasal dari partial
-              -- yang tertaut ke NoBongkarSusun ini.
-              WHEN bsbp.UsedPartialPcs IS NOT NULL THEN bsbp.UsedPartialPcs
-              WHEN ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0) < 0
-                THEN 0
-              ELSE ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0)
-            END
-          ELSE ISNULL(b.Pcs, 0)
-        END AS pcs,
-        ISNULL(b.Berat, 0)    AS berat,
-        CASE WHEN b.IsPartial = 1 THEN 1 ELSE 0 END AS isPartial
->>>>>>> Stashed changes
       FROM dbo.BongkarSusunInputBarangJadi ibj
       INNER JOIN dbo.BarangJadi b ON b.NoBJ = ibj.NoBJ
       INNER JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = b.IdBJ
@@ -1525,6 +1496,11 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
       throw e;
     }
 
+    // Guard output label: kategori yang output-nya tidak bisa dihapus
+    // (washing / crusher / bahan baku) menolak delete. Barang jadi, furniture
+    // WIP & mixer dikecualikan — ketiganya punya jalur delete sendiri yang
+    // menghapus label output, mengosongkan DateUsage input, dan mengembalikan
+    // baris partial milik transaksi ini (lihat blok delete masing-masing).
     const outputGuard = await new sql.Request(tx).input(
       "NoBongkarSusun",
       sql.VarChar(50),
@@ -1534,11 +1510,8 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
           EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputWashing      WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
           OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBroker    WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
           OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputCrusher   WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
-          OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputGilingan   WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
+          OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputGilingan  WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
           OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBonggolan  WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
-          OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputMixer      WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
-          OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputFurnitureWIP WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
-          OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBarangjadi WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
           OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBahanBaku  WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
         THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS HasOutput;
       `);
@@ -1824,6 +1797,39 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
         );
     }
 
+    // Kembalikan berat yang dicatat sebagai partial oleh transaksi ini.
+    // BongkarSusunInputMixerPartial adalah backlink ke MixerPartial yang
+    // dibuat create handler, jadi hanya baris milik bongkar-susun ini yang
+    // terhapus — partial dari modul lain tetap utuh. Link dihapus duluan
+    // supaya aman kalau ada FK ke MixerPartial.
+    const linkMixerPartialRes = await new sql.Request(tx)
+      .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+      .query(
+        `SELECT NoMixerPartial FROM dbo.BongkarSusunInputMixerPartial WHERE NoBongkarSusun = @NoBongkarSusun`,
+      );
+    const mixerPartialCodes = linkMixerPartialRes.recordset.map(
+      (r) => r.NoMixerPartial,
+    );
+    if (mixerPartialCodes.length > 0) {
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .query(
+          `DELETE FROM dbo.BongkarSusunInputMixerPartial WHERE NoBongkarSusun = @NoBongkarSusun`,
+        );
+
+      await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        JSON.stringify(mixerPartialCodes.map((c) => ({ code: c }))),
+      ).query(`
+          DELETE FROM dbo.MixerPartial
+          WHERE NoMixerPartial IN (
+            SELECT j.code FROM OPENJSON(@CodesJson)
+            WITH (code varchar(50) '$.code') AS j
+          )
+        `);
+    }
+
     const outputsFurnitureWipRes = await new sql.Request(tx)
       .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
       .query(
@@ -1884,6 +1890,43 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
           code: r.NoFurnitureWIP,
         })),
       );
+
+      // Kembalikan pcs yang dicatat sebagai partial oleh transaksi ini.
+      // BongkarSusunInputFurnitureWIPPartial adalah backlink ke
+      // FurnitureWIPPartial yang dibuat create handler, jadi hanya baris
+      // milik bongkar-susun ini yang terhapus — partial dari modul lain
+      // (penjualan/inject) tetap utuh dan sisa pcs parent tetap benar.
+      // Link dihapus duluan supaya aman kalau ada FK ke FurnitureWIPPartial.
+      const linkFurnitureWipPartialRes = await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .query(
+          `SELECT NoFurnitureWIPPartial FROM dbo.BongkarSusunInputFurnitureWIPPartial WHERE NoBongkarSusun = @NoBongkarSusun`,
+        );
+      const furnitureWipPartialCodes = linkFurnitureWipPartialRes.recordset.map(
+        (r) => r.NoFurnitureWIPPartial,
+      );
+      if (furnitureWipPartialCodes.length > 0) {
+        await new sql.Request(tx)
+          .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+          .query(
+            `DELETE FROM dbo.BongkarSusunInputFurnitureWIPPartial WHERE NoBongkarSusun = @NoBongkarSusun`,
+          );
+
+        await new sql.Request(tx).input(
+          "CodesJson",
+          sql.NVarChar(sql.MAX),
+          JSON.stringify(
+            furnitureWipPartialCodes.map((c) => ({ code: c })),
+          ),
+        ).query(`
+            DELETE FROM dbo.FurnitureWIPPartial
+            WHERE NoFurnitureWIPPartial IN (
+              SELECT j.code FROM OPENJSON(@CodesJson)
+              WITH (code varchar(50) '$.code') AS j
+            )
+          `);
+      }
+
       await new sql.Request(tx).input(
         "CodesJson",
         sql.NVarChar(sql.MAX),
@@ -1894,6 +1937,27 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
             SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
           )
         `);
+
+      // IsPartial diturunkan ke 0 kalau tidak ada partial lain tersisa
+      // untuk label itu, supaya label tidak dilaporkan "sudah pernah
+      // dipecah" padahal sudah utuh lagi — konvensi sama dgn hapus barangJadi.
+      await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        inFurnitureWipJson,
+      ).query(`
+          UPDATE f
+          SET f.IsPartial = CAST(CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM dbo.FurnitureWIPPartial fp
+                  WHERE fp.NoFurnitureWIP = f.NoFurnitureWIP
+                ) THEN 1 ELSE 0 END AS bit)
+          FROM dbo.FurnitureWIP f
+          WHERE f.NoFurnitureWIP IN (
+            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
+          )
+        `);
+
       await new sql.Request(tx)
         .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
         .query(
@@ -1962,6 +2026,14 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
       // terhapus — partial dari penjualan/retur-v3 (yang tidak tercatat di
       // sini) tetap utuh dan sisa pcs parent tetap benar.
       //
+      // Link dihapus duluan supaya aman ada FK dari
+      // BongkarSusunInputBarangJadiPartial ke BarangJadiPartial.
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .query(
+          `DELETE FROM dbo.BongkarSusunInputBarangJadiPartial WHERE NoBongkarSusun = @NoBongkarSusun`,
+        );
+
       // WAJIB sebelum baris input dihapus: NoPartial disimpan di sana.
       await new sql.Request(tx)
         .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
@@ -1990,7 +2062,6 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
             SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
           )
         `);
-<<<<<<< Updated upstream
 
       await new sql.Request(tx).input(
         "CodesJson",
@@ -2009,24 +2080,6 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
           )
         `);
 
-=======
-      // Input partial: hapus baris BarangJadiPartial yang dibuat transaksi ini
-      // agar sisa pcs label kembali seperti sebelum bongkar susun.
-      await new sql.Request(tx)
-        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
-        .query(`
-          DECLARE @Partials TABLE (NoBJPartial varchar(50));
-          INSERT INTO @Partials (NoBJPartial)
-          SELECT NoBJPartial FROM dbo.BongkarSusunInputBarangJadiPartial
-          WHERE NoBongkarSusun = @NoBongkarSusun;
-
-          DELETE FROM dbo.BongkarSusunInputBarangJadiPartial
-          WHERE NoBongkarSusun = @NoBongkarSusun;
-
-          DELETE FROM dbo.BarangJadiPartial
-          WHERE NoBJPartial IN (SELECT NoBJPartial FROM @Partials);
-        `);
->>>>>>> Stashed changes
       await new sql.Request(tx)
         .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
         .query(
@@ -2606,35 +2659,11 @@ function getReportQuery() {
         ON B.NoBJ = A.NoBJ
     LEFT JOIN MstBarangJadi C
         ON C.IdBJ = B.IdBJ
-<<<<<<< Updated upstream
     LEFT JOIN (
         SELECT NoBJ, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
         FROM BarangJadiPartial
         GROUP BY NoBJ
     ) bp ON bp.NoBJ = A.NoBJ
-=======
-    WHERE ISNULL(B.IsPartial, 0) <> 1
-
-    UNION ALL
-
-    SELECT
-        A.NoBongkarSusun,
-        'INPUT',
-        'BARANGJADI',
-        ISNULL(F.IdBJ, 0),
-        G.NamaBJ AS Nama,
-        CONCAT('BJP|', A.NoBJPartial),
-        NULL,
-        ISNULL(E.Pcs, 0)
-    FROM BongkarSusunInputBarangJadiPartial A
-    INNER JOIN BarangJadiPartial E
-        ON E.NoBJPartial = A.NoBJPartial
-    INNER JOIN BarangJadi F
-        ON F.NoBJ = E.NoBJ
-    INNER JOIN MstBarangJadi G
-        ON G.IdBJ = F.IdBJ
-    WHERE ISNULL(F.IsPartial, 0) = 1
->>>>>>> Stashed changes
 
     UNION ALL
 
