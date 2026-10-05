@@ -67,14 +67,22 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
         SELECT
           b.NoBJ,
           b.IdBJ,
+          b.IsPartial,
           b.IdWarehouse,
           b.Blok,
           b.IdLokasi,
           ISNULL(b.Pcs, 0) AS ParentPcs,
+          -- Sisa pcs yang masih boleh dipakai. Rumus & gate IsPartial sama
+          -- dengan furnitureWip (create-furniture-wip.handler.js), jadi angka
+          -- yang dilihat operator saat scan = angka yang dipakai di sini.
           CASE
-            WHEN ISNULL(b.Pcs, 0) - ISNULL(bjp.TotalPartialPcs, 0) < 0
-              THEN 0
-            ELSE ISNULL(b.Pcs, 0) - ISNULL(bjp.TotalPartialPcs, 0)
+            WHEN ISNULL(b.IsPartial, 0) = 1 THEN
+              CASE
+                WHEN ISNULL(b.Pcs, 0) - ISNULL(bjp.TotalPartialPcs, 0) < 0
+                  THEN 0
+                ELSE ISNULL(b.Pcs, 0) - ISNULL(bjp.TotalPartialPcs, 0)
+              END
+            ELSE ISNULL(b.Pcs, 0)
           END AS AvailablePcs
         FROM dbo.BarangJadi b WITH (UPDLOCK, HOLDLOCK)
         LEFT JOIN (
@@ -111,7 +119,7 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
     // Bongkar susun tidak memilih sebagian pcs dari label — seluruh sisa pcs
     // input selalu dipakai, jadi total input = total output (tidak ada
     // parsial di sisi output).
-const totalPcsInput = inputDataRes.recordset.reduce(
+    const totalPcsInput = inputDataRes.recordset.reduce(
       (sum, row) => sum + Number(row.AvailablePcs || 0),
       0,
     );
@@ -205,58 +213,55 @@ const totalPcsInput = inputDataRes.recordset.reduce(
         VALUES (@NoBongkarSusun, @Tanggal, @IdUsername, @Note)
       `);
 
-    // Catat input sekaligus pcs yang terpakai + kode partial yang dibuat.
-    //
-    // Label yang SUDAH pernah dipecah (sisa pcs < Pcs asli) dicatat baris
-    // BarangJadiPartial baru berisi sisa pcs yang baru dipakai siklus ini.
-    // Baris itulah yang membuat "pcs ini dipakai bongkar susun" punya jejak
-    // sendiri, dan NoPartial di baris input ini yang jadi backlink untuk
-    // hapus transaksi. Label yang belum pernah dipecah TIDAK dapat baris
-    // partial (NoPartial NULL) — itu konsumsi penuh atas label utuh,
-    // konvensi yang sama dipakai penjualan.
-    const inputRows = [];
-    const createdPartials = [];
-
-    for (const row of inputDataRes.recordset) {
-      const availablePcs = Number(row.AvailablePcs || 0);
-      const parentPcs = Number(row.ParentPcs || 0);
-      const wasPartial = parentPcs > availablePcs;
-
-      let noPartial = null;
-      if (wasPartial) {
-        noPartial = await createPartial(tx, CATEGORY, row.NoBJ, availablePcs);
-        createdPartials.push({
-          labelCode: row.NoBJ,
-          noBJPartial: noPartial,
-          pcs: availablePcs,
-          totalPcs: parentPcs,
-        });
-      }
-
-      inputRows.push({
-        code: row.NoBJ,
-        pcs: Math.trunc(availablePcs),
-        noPartial,
-      });
-    }
-
+    // Tabel input cuma menyimpan labelnya - pcs & kode partial dicatat di
+    // tabel link BongkarSusunInputBarangJadiPartial, sama seperti furnitureWip
+    // (BongkarSusunInputFurnitureWIPPartial).
     await new sql.Request(tx)
       .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
-      .input(
-        "RowsJson",
-        sql.NVarChar(sql.MAX),
-        JSON.stringify(inputRows),
-      ).query(`
-        INSERT INTO dbo.BongkarSusunInputBarangjadi (
-          NoBongkarSusun, NoBJ, NoPartial, Pcs
-        )
-        SELECT
-          @NoBongkarSusun,
-          JSON_VALUE(j.[value], '$.code'),
-          JSON_VALUE(j.[value], '$.noPartial'),
-          TRY_CAST(JSON_VALUE(j.[value], '$.pcs') AS int)
-        FROM OPENJSON(@RowsJson) AS j
+      .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson).query(`
+        INSERT INTO dbo.BongkarSusunInputBarangjadi (NoBongkarSusun, NoBJ)
+        SELECT @NoBongkarSusun, j.code
+        FROM OPENJSON(@CodesJson)
+        WITH (code varchar(50) '$.code') AS j
       `);
+
+    // Label yang SUDAH pernah dipecah (IsPartial = 1) dicatat baris
+    // BarangJadiPartial baru berisi sisa pcs yang dipakai siklus ini. Baris
+    // itulah yang membuat "pcs ini dipakai bongkar susun" punya jejak sendiri,
+    // dan baris di tabel link yang jadi backlink untuk hapus transaksi.
+    // Label yang belum pernah dipecah TIDAK dapat baris partial - itu
+    // konsumsi penuh atas label utuh.
+    const inputPartialRows = inputDataRes.recordset.filter(
+      (row) =>
+        (row.IsPartial === true || row.IsPartial === 1) &&
+        Number(row.AvailablePcs || 0) > 0,
+    );
+
+    const createdPartials = [];
+
+    for (const row of inputPartialRows) {
+      const noBJPartial = await createPartial(
+        tx,
+        CATEGORY,
+        row.NoBJ,
+        Number(row.AvailablePcs || 0),
+      );
+
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .input("NoBJPartial", sql.VarChar(50), noBJPartial)
+        .query(`
+          INSERT INTO dbo.BongkarSusunInputBarangJadiPartial (NoBongkarSusun, NoBJPartial)
+          VALUES (@NoBongkarSusun, @NoBJPartial)
+        `);
+
+      createdPartials.push({
+        labelCode: row.NoBJ,
+        noBJPartial,
+        pcs: Number(row.AvailablePcs || 0),
+        totalPcs: Number(row.ParentPcs || 0),
+      });
+    }
 
     // Semua input sudah tidak menyisakan pcs (sisa habis terpakai), jadi
     // parent ditandai terpakai. Baris partial milik penjualan/retur-v3/
