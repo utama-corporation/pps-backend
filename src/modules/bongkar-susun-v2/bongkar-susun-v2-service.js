@@ -691,8 +691,12 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
 WHEN ABS(
                 ISNULL((
                   SELECT SUM(
+                    -- Untuk input parsial barangJadi, sumber nilai input
+                    -- transaksi harus dari partial yang tertaut ke
+                    -- NoBongkarSusun ini lewat tabel link
+                    -- dbo.BongkarSusunInputBarangJadiPartial.
                     COALESCE(
-                      ibj.Pcs,
+                      bsbp.UsedPartialPcs,
                       CASE
                         WHEN b.IsPartial = 1 THEN
                           CASE
@@ -712,13 +716,13 @@ WHEN ABS(
                   ) bp ON bp.NoBJ = b.NoBJ
                   LEFT JOIN (
                     SELECT
-                      bip.NoBongkarSusun,
+bibj.NoBongkarSusun,
                       bjp.NoBJ,
                       SUM(ISNULL(bjp.Pcs, 0)) AS UsedPartialPcs
-                    FROM dbo.BongkarSusunInputBarangJadiPartial bip
-                    INNER JOIN dbo.BarangJadiPartial bjp
-                      ON bjp.NoBJPartial = bip.NoBJPartial
-                    GROUP BY bip.NoBongkarSusun, bjp.NoBJ
+                    FROM dbo.BongkarSusunInputBarangJadiPartial bibj
+                    INNER JOIN dbo.BarangjadiPartial bjp
+                      ON bjp.NoBJPartial = bibj.NoBJPartial
+                    GROUP BY bibj.NoBongkarSusun, bjp.NoBJ
                   ) bsbp
                     ON bsbp.NoBongkarSusun = ibj.NoBongkarSusun
                    AND bsbp.NoBJ = ibj.NoBJ
@@ -1073,16 +1077,18 @@ exports.getDetail = async (noBongkarSusun) => {
         'barangJadi'          AS category,
         b.IdBJ                AS idJenis,
         mbj.NamaBJ            AS namaJenis,
-        -- Pcs yang benar-benar terpakai siklus ini. Ibj.Pcs diisi pada create
-        -- (kolom Pcs hasil migrasi V20261003120000) jadi dipakai duluan.
-        -- Fallback Pcs - SUM(partial) hanya untuk baris input lama yang
-        -- dibuat sebelum kolom itu ada.
+        -- Pcs yang benar-benar terpakai siklus ini. Sumbernya = pcs di baris
+        -- BarangJadiPartial yang tertaut ke NoBongkarSusun ini lewat
+        -- dbo.BongkarSusunInputBarangJadiPartial (pola yang sama dengan
+        -- furnitureWip yang memakai BongkarSusunInputFurnitureWIPPartial).
         --
-        -- PENTING: fallback TIDAK boleh dipakai untuk baris baru. Create
-        -- sudah menambahkan baris BarangJadiPartial berisi pcs yang dipakai,
-        -- jadi Pcs - SUM(partial) = 0 dan pcs-nya akan hilang sama sekali.
+        -- PENTING: fallback "Pcs - SUM(partial)" hanya untuk baris input yang
+        -- TIDAK punya baris link, yaitu label utuh yang sekali pakai penuh.
+        -- Jangan dipakai untuk baris parsial: create sudah menambahkan baris
+        -- BarangJadiPartial berisi pcs yang dipakai, jadi Pcs - SUM(partial)
+        -- akan menghasilkan 0 dan pcs-nya hilang.
         COALESCE(
-          ibj.Pcs,
+          bsbp.UsedPartialPcs,
           CASE
             WHEN b.IsPartial = 1 THEN
               CASE
@@ -1095,10 +1101,11 @@ exports.getDetail = async (noBongkarSusun) => {
         ) AS pcs,
         ISNULL(b.Berat, 0)    AS berat,
         -- Tanda input ini hasil konsumsi label yang SUDAH pernah dipecah.
-        -- NoPartial diisi create handler hanya untuk kasus itu; label utuh
-        -- yang sekali pakai penuh punya NoPartial NULL.
-        CAST(CASE WHEN ibj.NoPartial IS NOT NULL THEN 1 ELSE 0 END AS bit) AS isPartial,
-        ibj.NoPartial         AS noPartial,
+        -- Baris link di BongkarSusunInputBarangJadiPartial dibuat create
+        -- handler hanya untuk kasus itu; label utuh yang sekali pakai penuh
+        -- tidak punya baris link.
+        CAST(CASE WHEN bsbp.NoBJPartial IS NOT NULL THEN 1 ELSE 0 END AS bit) AS isPartial,
+        bsbp.NoBJPartial      AS noPartial,
         -- Pcs asli label, supaya client bisa menampilkan "9 / 15 pcs".
         ISNULL(b.Pcs, 0)      AS totalPcs
       FROM dbo.BongkarSusunInputBarangJadi ibj
@@ -1111,13 +1118,14 @@ exports.getDetail = async (noBongkarSusun) => {
       ) bp ON bp.NoBJ = b.NoBJ
       LEFT JOIN (
         SELECT
-          bip.NoBongkarSusun,
+bibj.NoBongkarSusun,
           bjp.NoBJ,
-          SUM(ISNULL(bjp.Pcs, 0)) AS UsedPartialPcs
-        FROM dbo.BongkarSusunInputBarangJadiPartial bip
-        INNER JOIN dbo.BarangJadiPartial bjp
-          ON bjp.NoBJPartial = bip.NoBJPartial
-        GROUP BY bip.NoBongkarSusun, bjp.NoBJ
+          MIN(bjp.NoBJPartial)         AS NoBJPartial,
+          SUM(ISNULL(bjp.Pcs, 0))      AS UsedPartialPcs
+        FROM dbo.BongkarSusunInputBarangJadiPartial bibj
+        INNER JOIN dbo.BarangjadiPartial bjp
+          ON bjp.NoBJPartial = bibj.NoBJPartial
+        GROUP BY bibj.NoBongkarSusun, bjp.NoBJ
       ) bsbp
         ON bsbp.NoBongkarSusun = ibj.NoBongkarSusun
        AND bsbp.NoBJ = ibj.NoBJ
@@ -2021,29 +2029,45 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
 
     if (inputsBarangJadiRes.recordset.length > 0) {
       // Kembalikan pcs yang dicatat sebagai partial oleh transaksi ini.
-      // NoPartial di baris input adalah backlink ke BarangJadiPartial yang
-      // dibuat create handler, jadi hanya baris milik bongkar-susun ini yang
-      // terhapus — partial dari penjualan/retur-v3 (yang tidak tercatat di
-      // sini) tetap utuh dan sisa pcs parent tetap benar.
+      // Baris di dbo.BongkarSusunInputBarangJadiPartial adalah backlink ke
+      // BarangJadiPartial yang dibuat create handler, jadi hanya baris milik
+      // bongkar-susun ini yang terhapus — partial dari penjualan/retur-v3
+      // (yang tidak tercatat di sini) tetap utuh dan sisa pcs parent tetap
+      // benar.
       //
-      // Link dihapus duluan supaya aman ada FK dari
-      // BongkarSusunInputBarangJadiPartial ke BarangJadiPartial.
+// Kumpulkan kode partial milik transaksi ini DULU, sebelum baris link
+      // dihapus: ada FK BongkarSusunInputBarangjadiPartial.NoBJPartial ->
+      // BarangJadiPartial.NoBJPartial (NO ACTION), jadi baris link wajib dihapus
+      // lebih dulu. Karena tabel input tidak lagi menyimpan NoPartial, kode
+      // partialnya harus disalin ke memori sebelum link dibuang.
+      const linkPartialsRes = await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .query(
+          `SELECT NoBJPartial FROM dbo.BongkarSusunInputBarangjadiPartial WHERE NoBongkarSusun = @NoBongkarSusun`,
+        );
+      const linkPartials = (linkPartialsRes.recordset || []).map(
+        (r) => r.NoBJPartial,
+      );
+
       await new sql.Request(tx)
         .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
         .query(
-          `DELETE FROM dbo.BongkarSusunInputBarangJadiPartial WHERE NoBongkarSusun = @NoBongkarSusun`,
+          `DELETE FROM dbo.BongkarSusunInputBarangjadiPartial WHERE NoBongkarSusun = @NoBongkarSusun`,
         );
 
-      // WAJIB sebelum baris input dihapus: NoPartial disimpan di sana.
-      await new sql.Request(tx)
-        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
-        .query(`
-          DELETE FROM dbo.BarangJadiPartial
-          WHERE NoBJPartial IN (
-            SELECT NoPartial FROM dbo.BongkarSusunInputBarangjadi
-            WHERE NoBongkarSusun = @NoBongkarSusun AND NoPartial IS NOT NULL
-          )
-        `);
+      if (linkPartials.length > 0) {
+        const partialJson = JSON.stringify(linkPartials.map((c) => ({ code: c })));
+        await new sql.Request(tx)
+          .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+          .input("CodesJson", sql.NVarChar(sql.MAX), partialJson)
+          .query(`
+            DELETE FROM dbo.BarangJadiPartial
+            WHERE NoBJPartial IN (
+              SELECT j.code FROM OPENJSON(@CodesJson)
+              WITH (code varchar(50) '$.code') AS j
+            )
+          `);
+      }
 
       // Sisakan lagi label yang sebelumnya dipecah: tanpa partial di atas,
       // Pcs parent = sisa sebenarnya lagi. IsPartial diturunkan ke 0 kalau
@@ -2640,30 +2664,38 @@ function getReportQuery() {
         C.NamaBJ AS Nama,
         CONCAT('BJ|', A.NoBJ),
         NULL,
-        -- Pcs yang terpakai, bukan Pcs asli label. Lihat catatan di
-        -- getDetail: COALESCE dengan A.Pcs (isi untuk baris baru), fallback
-        -- rumus sisa untuk baris lama sebelum migrasi V20261003120000.
-        COALESCE(
-            A.Pcs,
-            CASE
-                WHEN B.IsPartial = 1 THEN
-                    CASE
-                        WHEN ISNULL(B.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0) < 0 THEN 0
-                        ELSE ISNULL(B.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0)
-                    END
-                ELSE ISNULL(B.Pcs, 0)
-            END
-        )
+        -- Label utuh: pcs terpakai = Pcs asli label. Baris input yang punya
+        -- baris di BongkarSusunInputBarangJadiPartial punya block sendiri
+        -- di bawah (pola yang sama dengan FURNITURE WIP).
+        ISNULL(B.Pcs, 0)
     FROM BongkarSusunInputBarangJadi A
     LEFT JOIN BarangJadi B
         ON B.NoBJ = A.NoBJ
     LEFT JOIN MstBarangJadi C
         ON C.IdBJ = B.IdBJ
-    LEFT JOIN (
-        SELECT NoBJ, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
-        FROM BarangJadiPartial
-        GROUP BY NoBJ
-    ) bp ON bp.NoBJ = A.NoBJ
+    WHERE ISNULL(B.IsPartial, 0) <> 1
+
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'INPUT',
+        'BARANGJADI',
+        ISNULL(B.IdBJ, 0),
+        C.NamaBJ AS Nama,
+        CONCAT('BJ|', E.NoBJ),
+        NULL,
+        -- Label yang sudah pernah dipecah: pcs terpakai = pcs di baris
+        -- BarangJadiPartial yang tertaut lewat tabel link.
+        ISNULL(E.Pcs, 0)
+    FROM BongkarSusunInputBarangJadiPartial A
+    INNER JOIN BarangJadiPartial E
+        ON E.NoBJPartial = A.NoBJPartial
+    INNER JOIN BarangJadi B
+        ON B.NoBJ = E.NoBJ
+    INNER JOIN MstBarangJadi C
+        ON C.IdBJ = B.IdBJ
+    WHERE ISNULL(B.IsPartial, 0) = 1
 
     UNION ALL
 

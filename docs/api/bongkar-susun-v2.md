@@ -190,40 +190,43 @@ di-`DateUsage` sehingga masih bisa dipakai lagi.
 
 #### Pencatatan partial pada input
 
-Untuk label yang **sudah pernah dipecah** sebelumnya (`sisaPcs < Pcs` asli),
+Untuk label yang **sudah pernah dipecah** sebelumnya (`IsPartial = 1`),
 pcs yang dipakai siklus ini dicatat sebagai baris baru di
 `dbo.BarangJadiPartial` (prefix `BL.`). Gunanya: pcs tersebut punya jejak
 "dipakai oleh bongkar susun" sendiri, terpisah dari baris partial milik
 penjualan / retur-v3.
 
-Kode partial itu disimpan di kolom `NoPartial`, dan pcs yang terpakai di
-kolom `Pcs`, pada baris input-nya sendiri:
+Kode partial-nya dicatat di **tabel link**, persis seperti kategori
+furnitureWip (`BongkarSusunInputFurnitureWIPPartial`):
 
 ```
-BongkarSusunInputBarangJadi (NoBongkarSusun, NoBJ, NoPartial, Pcs)
+BongkarSusunInputBarangjadi            (NoBongkarSusun, NoBJ)
++ BongkarSusunInputBarangJadiPartial (NoBongkarSusun, NoBJPartial)
 ```
 
-Baris partial itu juga ditautkan ke transaksi lewat tabel
-`dbo.BongkarSusunInputBarangJadiPartial (NoBongkarSusun, NoBJPartial)` —
-struktur sama dengan furnitureWip/mixer, dipakai join partial pada
-`GET /:noBongkarSusun` dan pengecekan balance daftar transaksi. Hapus
-transaksi membersihkan link ini lebih dulu (FK ke `BarangJadiPartial`)
-sebelum baris partial-nya dihapus.
+`BongkarSusunInputBarangjadi` hanya menyimpan labelnya. Pcs yang terpakai
+dibaca dari `BarangJadiPartial.Pcs` milik baris link tsb:
 
-| Kondisi label input   | `NoPartial` | `Pcs` |
-| --------------------- | ----------- | ----- |
-| Utuh, dipakai penuh | `NULL` | pcs asli label |
-| Utuh, dipakai sebagian (`inputsPartial`) | `BL.xxxxxxxx` | pcs yang dipakai |
-| Sudah pernah di-partial | `BL.xxxxxxxx` | pcs yang dipakai (≤ sisa) |
+| Kondisi label input   | Baris di tabel link | Sumber `pcs` |
+| --------------------- | ------------------- | ------------ |
+| Utuh, dipakai penuh | tidak ada | `BarangJadi.Pcs` |
+| Utuh, dipakai sebagian (`inputsPartial`) | ada (`BL.xxxxxxxx`) | `BarangJadiPartial.Pcs` |
+| Sudah pernah di-partial | ada (`BL.xxxxxxxx`) | `BarangJadiPartial.Pcs` |
 
-Hapus bongkar-susun memakai `NoPartial` tersebut sebagai backlink: baris
+Hapus transaksi membersihkan link ini lebih dulu (ada FK
+`BongkarSusunInputBarangJadiPartial.NoBJPartial` →
+`BarangJadiPartial.NoBJPartial`) sebelum baris partial-nya dihapus.
+
+Hapus bongkar-susun memakai baris link tersebut sebagai backlink: baris
 `BarangJadiPartial` yang dibuat transaksi itu dihapus, `DateUsage` di-reset
 `NULL`, dan `IsPartial` diturunkan ke `0` kalau tidak ada partial lain
 tersisa untuk label tersebut. Partial dari penjualan / retur-v3 tidak ikut
 terhapus - pcs-nya tetap terpakai dan sisa pcs parent tetap benar.
 
-Kolom ini ditambahkan di
-`V20261003120000__add_nopartial_pcs_to_bongkarsusuninputbarangjadi.sql`.
+Tabel link dibuat di
+`V20261005093716__create_bongkarsusun_input_barangjadi_partial.sql`, yang
+sekaligus memindahkan isi lama kolom `NoPartial` / `Pcs` (dari
+`V20261003120000`) lalu membuang kedua kolom itu.
 
 > Catatan: `PK_BongkarSusunInputBarangjadi` ada pada `NoBJ` saja, jadi satu
 > label barang jadi hanya boleh tercatat sebagai input di SATU transaksi
