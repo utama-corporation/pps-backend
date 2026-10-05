@@ -31,7 +31,7 @@ router.patch(
   "/packing/:noPacking/complete",
   verifyToken,
   attachPermissions,
-  requirePermission("produksi_packing:lock"),
+  requirePermission("packing:lock"),
   packingController.completeProduksi,
 );
 
@@ -40,7 +40,7 @@ router.patch(
   "/packing/:noPacking/uncomplete",
   verifyToken,
   attachPermissions,
-  requirePermission("produksi_packing:lock"),
+  requirePermission("packing:lock"),
   packingController.uncompleteProduksi,
 );
 

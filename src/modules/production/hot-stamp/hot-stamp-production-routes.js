@@ -29,7 +29,7 @@ router.patch(
   "/hot-stamp/:noProduksi/complete",
   verifyToken,
   attachPermissions,
-  requirePermission("produksi_stamping:lock"),
+  requirePermission("hotstamping:lock"),
   hotStampingController.completeProduksi,
 );
 
@@ -38,7 +38,7 @@ router.patch(
   "/hot-stamp/:noProduksi/uncomplete",
   verifyToken,
   attachPermissions,
-  requirePermission("produksi_stamping:lock"),
+  requirePermission("hotstamping:lock"),
   hotStampingController.uncompleteProduksi,
 );
 

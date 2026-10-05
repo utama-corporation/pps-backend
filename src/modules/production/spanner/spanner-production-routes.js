@@ -33,7 +33,7 @@ router.patch(
   "/spanner/:noProduksi/complete",
   verifyToken,
   attachPermissions,
-  requirePermission("produksi_spanner:lock"),
+  requirePermission("spanner:lock"),
   spannerController.completeProduksi,
 );
 
@@ -42,7 +42,7 @@ router.patch(
   "/spanner/:noProduksi/uncomplete",
   verifyToken,
   attachPermissions,
-  requirePermission("produksi_spanner:lock"),
+  requirePermission("spanner:lock"),
   spannerController.uncompleteProduksi,
 );
 

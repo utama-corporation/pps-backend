@@ -32,7 +32,7 @@ router.patch(
   "/key-fitting/:noProduksi/complete",
   verifyToken,
   attachPermissions,
-  requirePermission("produksi_pasangkunci:lock"),
+  requirePermission("pasangkunci:lock"),
   keyFittingController.completeProduksi,
 );
 
@@ -41,7 +41,7 @@ router.patch(
   "/key-fitting/:noProduksi/uncomplete",
   verifyToken,
   attachPermissions,
-  requirePermission("produksi_pasangkunci:lock"),
+  requirePermission("pasangkunci:lock"),
   keyFittingController.uncompleteProduksi,
 );
 
