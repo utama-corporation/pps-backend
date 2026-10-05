@@ -325,7 +325,7 @@ async function listPenerimaanBarangDagang({ page = 1, pageSize = 20, filter = ""
     OUTER APPLY (
       SELECT
         COUNT(1) AS JumlahItem,
-        SUM(ISNULL(bd.Qty, 0)) AS TotalQty
+        SUM(ISNULL(bd.QtyAwal, bd.Qty)) AS TotalQty
       FROM dbo.PenerimaanBarangDagang_d dd
       INNER JOIN dbo.BarangDagang bd ON bd.NoBarangDagang = dd.NoBarangDagang
       WHERE dd.NoPenerimaan = h.NoPenerimaan
@@ -368,10 +368,17 @@ async function getDetailPenerimaanBarangDagang(noPenerimaan) {
       sup.NmSupplier AS NamaSupplier,
       bd.IdBarangDagang,
       md.NamaBarangDagang,
-      bd.Qty,
+      -- Layar penerimaan memakai QtyAwal (data pembelian), bukan Qty (stok
+      -- live). Sama seperti penerimaan bahan pendukung.
+      ISNULL(bd.QtyAwal, bd.Qty) AS Qty,
       bd.QtyAwal,
+      -- Stok live, untuk badge status pemakaian (terpakai sebagian / habis).
+      bd.Qty AS QtySisa,
       bd.Keterangan,
-      bd.HasBeenPrinted
+      ISNULL(CAST(bd.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
+      -- dipakai app untuk menentukan boleh/tidaknya menu "Ubah Data":
+      -- label hanya bisa diedit selama belum dicetak DAN belum terpakai.
+      CASE WHEN bd.DateUsage IS NULL THEN CAST(0 AS bit) ELSE CAST(1 AS bit) END AS Used
     FROM dbo.PenerimaanBarangDagang_d dd
     INNER JOIN dbo.BarangDagang bd ON bd.NoBarangDagang = dd.NoBarangDagang
     LEFT JOIN dbo.MstSupplier sup ON sup.IdSupplier = bd.IdSupplier
@@ -419,7 +426,8 @@ async function deletePenerimaanBarangDagang(noPenerimaan, ctx) {
         SELECT 1
         FROM dbo.PenerimaanBarangDagang_d dd
         INNER JOIN dbo.BarangDagang bd ON bd.NoBarangDagang = dd.NoBarangDagang
-        WHERE dd.NoPenerimaan = @NoPenerimaan AND bd.DateUsage IS NOT NULL
+        WHERE dd.NoPenerimaan = @NoPenerimaan
+          AND (bd.DateUsage IS NOT NULL OR ISNULL(bd.Qty, 0) <> ISNULL(bd.QtyAwal, bd.Qty))
       `);
     if (usedRows.recordset.length > 0) {
       throw conflict(

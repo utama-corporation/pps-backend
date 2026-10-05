@@ -90,6 +90,7 @@ exports.getExistingForUpdate = async (tx, noBarangDagang) => {
     SELECT TOP 1
       NoBarangDagang, IdSupplier, IdBarangDagang,
       Qty, QtyAwal, Keterangan, IsPartial, DateUsage,
+      ISNULL(CAST(HasBeenPrinted AS int), 0) AS HasBeenPrinted,
       CreateBy, CreatedAt, Blok, IdLokasi
     FROM dbo.BarangDagang WITH (UPDLOCK, HOLDLOCK)
     WHERE NoBarangDagang = @NoBarangDagang;
@@ -99,7 +100,7 @@ exports.getExistingForUpdate = async (tx, noBarangDagang) => {
 
 exports.getHeaderForDelete = async (tx, noBarangDagang) => {
   const res = await new sql.Request(tx).input("NoBarangDagang", sql.VarChar(50), noBarangDagang).query(`
-    SELECT TOP 1 NoBarangDagang, CreatedAt, DateUsage
+    SELECT TOP 1 NoBarangDagang, CreatedAt, DateUsage, Qty, QtyAwal
     FROM dbo.BarangDagang WITH (UPDLOCK, HOLDLOCK)
     WHERE NoBarangDagang = @NoBarangDagang;
   `);

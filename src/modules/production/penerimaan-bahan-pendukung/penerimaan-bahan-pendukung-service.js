@@ -378,7 +378,10 @@ async function getDetailPenerimaanBahanPendukung(noPenerimaan) {
       ISNULL(bp.QtyAwal, bp.Qty) AS Qty,
       bp.Qty AS QtySisa,
       bp.Keterangan,
-      bp.HasBeenPrinted
+      ISNULL(CAST(bp.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
+      -- dipakai app untuk menentukan boleh/tidaknya menu "Ubah Data":
+      -- label hanya bisa diedit selama belum dicetak DAN belum terpakai.
+      CASE WHEN bp.DateUsage IS NULL THEN CAST(0 AS bit) ELSE CAST(1 AS bit) END AS Used
     FROM dbo.PenerimaanBahanPendukung_d dd
     INNER JOIN dbo.BahanPendukung bp ON bp.NoBahanPendukung = dd.NoBahanPendukung
     LEFT JOIN dbo.MstSupplier sup ON sup.IdSupplier = bp.IdSupplier
@@ -427,7 +430,8 @@ async function deletePenerimaanBahanPendukung(noPenerimaan, ctx) {
         SELECT 1
         FROM dbo.PenerimaanBahanPendukung_d dd
         INNER JOIN dbo.BahanPendukung bp ON bp.NoBahanPendukung = dd.NoBahanPendukung
-        WHERE dd.NoPenerimaan = @NoPenerimaan AND bp.DateUsage IS NOT NULL
+        WHERE dd.NoPenerimaan = @NoPenerimaan
+          AND (bp.DateUsage IS NOT NULL OR ISNULL(bp.Qty, 0) <> ISNULL(bp.QtyAwal, bp.Qty))
       `);
     if (usedRows.recordset.length > 0) {
       throw conflict(

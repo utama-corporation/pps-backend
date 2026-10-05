@@ -88,7 +88,8 @@ exports.getExistingForUpdate = async (tx, noBahanPendukung) => {
   const res = await new sql.Request(tx).input("NoBahanPendukung", sql.VarChar(50), noBahanPendukung).query(`
     SELECT TOP 1
       NoBahanPendukung, IdSupplier, IdCabinetMaterial,
-      Qty, Keterangan, IsPartial, DateUsage,
+      Qty, QtyAwal, Keterangan, IsPartial, DateUsage,
+      ISNULL(CAST(HasBeenPrinted AS int), 0) AS HasBeenPrinted,
       CreateBy, CreatedAt, Blok, IdLokasi
     FROM dbo.BahanPendukung WITH (UPDLOCK, HOLDLOCK)
     WHERE NoBahanPendukung = @NoBahanPendukung;
@@ -98,7 +99,7 @@ exports.getExistingForUpdate = async (tx, noBahanPendukung) => {
 
 exports.getHeaderForDelete = async (tx, noBahanPendukung) => {
   const res = await new sql.Request(tx).input("NoBahanPendukung", sql.VarChar(50), noBahanPendukung).query(`
-    SELECT TOP 1 NoBahanPendukung, CreatedAt, DateUsage
+    SELECT TOP 1 NoBahanPendukung, CreatedAt, DateUsage, Qty, QtyAwal
     FROM dbo.BahanPendukung WITH (UPDLOCK, HOLDLOCK)
     WHERE NoBahanPendukung = @NoBahanPendukung;
   `);

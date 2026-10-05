@@ -37,11 +37,18 @@ exports.insertBahanPendukungHeader = async (
 };
 
 exports.updateBahanPendukungHeader = async (tx, noBahanPendukung, merged) => {
+  // Kolom yang ditulis adalah QtyAwal (snapshot kuantitas dari pembelian),
+  // bukan Qty (stok live yang dipotong oleh konsumsi parsial produksi).
+  //
+  // Qty ikut ditulis karena service menjamin Qty == QtyAwal saat update —
+  // label yang sudah pernah konsumsi sebagian ditolak lebih dulu — sehingga
+  // menulis keduanya hanya menjaga kedua kolom tetap sinkron.
   await new sql.Request(tx)
     .input("NoBahanPendukung", sql.VarChar(50), noBahanPendukung)
     .input("IdSupplier", sql.Int, merged.IdSupplier)
     .input("IdCabinetMaterial", sql.Int, merged.IdCabinetMaterial)
     .input("Qty", sql.Decimal(18, 3), merged.Qty)
+    .input("QtyAwal", sql.Decimal(18, 3), merged.QtyAwal)
     .input("Keterangan", sql.NVarChar(200), merged.Keterangan ?? null)
     .input("IsPartial", sql.Bit, merged.IsPartial ?? 0)
     .input("Blok", sql.VarChar(50), merged.Blok ?? null)
@@ -52,6 +59,7 @@ exports.updateBahanPendukungHeader = async (tx, noBahanPendukung, merged) => {
         IdSupplier = @IdSupplier,
         IdCabinetMaterial = @IdCabinetMaterial,
         Qty = @Qty,
+        QtyAwal = @QtyAwal,
         Keterangan = @Keterangan,
         IsPartial = @IsPartial,
         Blok = @Blok,

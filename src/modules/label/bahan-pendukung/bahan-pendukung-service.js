@@ -61,12 +61,48 @@ exports.updateBahanPendukung = async (noBahanPendukung, payload) => {
       useLock: true,
     });
 
+    // Label yang sudah dicetak atau sudah terpakai tidak boleh diubah —
+    // data di server akan tidak cocok dengan label fisik yang sudah keluar.
+    if (current.HasBeenPrinted > 0) {
+      const err = conflict(
+        "Cannot update: Bahan Pendukung sudah dicetak. Data hanya bisa diubah selama label belum dicetak.",
+      );
+      err.code = "BP_ALREADY_PRINTED";
+      throw err;
+    }
+
+    if (current.DateUsage) {
+      const err = conflict(
+        "Cannot update: Bahan Pendukung sudah dipakai (DateUsage IS NOT NULL).",
+      );
+      err.code = "BP_ALREADY_USED";
+      throw err;
+    }
+
+    // Konsumsi parsial produksi memotong Qty (stok live) tanpa mengisi
+    // DateUsage, jadi Qty < QtyAwal menandai label yang sudah terpakai
+    // sebagian. QtyAwal-nya tidak boleh disentuh lagi — kalau tidak, nilai
+    // yang dikoreksi bukan lagi data pembelian aslinya.
+    if (Number(current.Qty) !== Number(current.QtyAwal ?? current.Qty)) {
+      const err = conflict(
+        "Cannot update: Bahan Pendukung sudah dipakai sebagian (Qty < QtyAwal).",
+      );
+      err.code = "BP_ALREADY_PARTIAL";
+      throw err;
+    }
+
     const merged = {
       IdSupplier: hasOwn(header, "IdSupplier") ? header.IdSupplier : current.IdSupplier,
       IdCabinetMaterial: hasOwn(header, "IdCabinetMaterial")
         ? header.IdCabinetMaterial
         : current.IdCabinetMaterial,
-      Qty: hasOwn(header, "Qty") ? header.Qty : current.Qty,
+      // QtyAwal = kolom yang berasal dari pembelian. Qty ikut ditulis (lihat
+      // updateBahanPendukungHeader) dan nilainya mengikuti QtyAwal karena guard
+      // di atas menjamin keduanya masih sama.
+      QtyAwal: hasOwn(header, "QtyAwal")
+        ? header.QtyAwal
+        : current.QtyAwal ?? current.Qty,
+      Qty: hasOwn(header, "QtyAwal") ? header.QtyAwal : current.Qty,
       Keterangan: hasOwn(header, "Keterangan") ? header.Keterangan : current.Keterangan,
       IsPartial: hasOwn(header, "IsPartial") ? header.IsPartial : current.IsPartial,
       Blok: hasOwn(header, "Blok") ? header.Blok : current.Blok,
@@ -75,6 +111,7 @@ exports.updateBahanPendukung = async (noBahanPendukung, payload) => {
 
     if (!merged.IdCabinetMaterial) throw badReq("IdCabinetMaterial cannot be empty");
     if (!merged.IdSupplier) throw badReq("IdSupplier cannot be empty");
+    if (!(Number(merged.QtyAwal) > 0)) throw badReq("QtyAwal harus lebih besar dari 0");
 
     await writeRepo.updateBahanPendukungHeader(tx, noBahanPendukung, merged);
 
@@ -133,6 +170,17 @@ exports.deleteBahanPendukung = async (noBahanPendukung, payload) => {
     if (head.DateUsage) {
       const err = conflict("Cannot delete: Bahan Pendukung already used (DateUsage IS NOT NULL).");
       err.code = "BP_ALREADY_USED";
+      throw err;
+    }
+
+    // Konsumsi parsial produksi memotong Qty tanpa mengisi DateUsage, jadi
+    // label yang sudah separuh habis masih lolos cek DateUsage. Hapus baris
+    // seperti ini akan menghilangkan sisa stok yang masih tercatat di produksi.
+    if (Number(head.Qty) !== Number(head.QtyAwal ?? head.Qty)) {
+      const err = conflict(
+        "Cannot delete: Bahan Pendukung sudah dipakai sebagian (Qty < QtyAwal).",
+      );
+      err.code = "BP_ALREADY_PARTIAL";
       throw err;
     }
 
