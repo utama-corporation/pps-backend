@@ -6,9 +6,13 @@ const { badReq, conflict } = require("../../../core/utils/http-error");
 const { formatYMD } = require("../../../core/shared/tutup-transaksi-guard");
 const { detectCategory } = require("../bongkar-susun-v2-category-registry");
 const mixerService = require("../../label/mixer/mixer-service");
+const {
+  parseInputsPartial,
+  resolveUsedQty,
+} = require("../inputs-partial.helper");
 
 exports.createBongkarSusunMixer = async (payload, ctx) => {
-  const { note, inputs, outputs } = payload;
+  const { note, inputs, outputs, inputsPartial } = payload;
   const { actorId, actorUsername, requestId } = ctx;
 
   if (!Array.isArray(inputs) || inputs.length === 0) {
@@ -77,6 +81,8 @@ exports.createBongkarSusunMixer = async (payload, ctx) => {
       sakSet.add(k);
     }
   }
+
+  const partialMap = parseInputsPartial(inputsPartial, inputCodes);
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -169,6 +175,7 @@ exports.createBongkarSusunMixer = async (payload, ctx) => {
           WITH (code varchar(50) '$.code') AS j
         )
         AND d.DateUsage IS NULL
+        ORDER BY d.NoSak
       `);
 
     if (inputDataRes.recordset.length !== inputCodes.length) {
@@ -185,8 +192,66 @@ exports.createBongkarSusunMixer = async (payload, ctx) => {
     }
     const inputIdJenis = Array.from(inputJenisSet)[0];
 
+    // qty berat (kg) yang dipakai siklus ini per label: seluruh sisa berat,
+    // kecuali label yang di-override inputsPartial. Alokasi first-fit ke
+    // sak-sak label berurutan (NoSak) — sak yang habis dialokasi penuh,
+    // sak terakhir boleh sebagian; sisa berat sak tetap hidup.
+    const hintByKey = new Map();
+    for (const input of normalizedInputs) {
+      if (!Array.isArray(input.saks)) continue;
+      for (const sak of input.saks) {
+        const noSak = Number(sak?.noSak);
+        if (!Number.isFinite(noSak) || noSak <= 0) continue;
+        const isPartialRaw = sak?.isPartial ?? sak?.IsPartial;
+        const isPartial =
+          isPartialRaw === true ||
+          isPartialRaw === 1 ||
+          String(isPartialRaw).trim() === "1";
+        hintByKey.set(`${input.code}::${Math.trunc(noSak)}`, isPartial);
+      }
+    }
+
+    const saksByLabel = new Map();
+    for (const row of inputSaksRes.recordset) {
+      const list = saksByLabel.get(row.NoMixer) || [];
+      list.push(row);
+      saksByLabel.set(row.NoMixer, list);
+    }
+
+    const sakAlloc = [];
+    const usedByLabel = new Map();
+    for (const row of inputDataRes.recordset) {
+      const available = Number(row.AvailableBerat || 0);
+      const used = resolveUsedQty(partialMap, row.NoMixer, available);
+      usedByLabel.set(row.NoMixer, used);
+      let remaining = used;
+      const saks = saksByLabel.get(row.NoMixer) || [];
+      for (const sak of saks) {
+        const sakAvailable = Number(sak.AvailableBerat || 0);
+        if (sakAvailable <= 0) continue;
+        const take = Math.min(remaining, sakAvailable);
+        if (take <= 0) continue;
+        const key = `${row.NoMixer}::${Number(sak.NoSak)}`;
+        const rowIsPartial = sak.IsPartial === true || sak.IsPartial === 1;
+        const hinted = hintByKey.get(key);
+        sakAlloc.push({
+          code: row.NoMixer,
+          noSak: Number(sak.NoSak),
+          available: sakAvailable,
+          used: take,
+          isPartial: hinted === undefined ? rowIsPartial : hinted,
+        });
+        remaining -= take;
+      }
+      if (remaining > 0.001) {
+        throw badReq(
+          `Sisa berat label ${row.NoMixer} tidak mencukupi untuk dialokasikan`,
+        );
+      }
+    }
+
     const totalBeratInput = inputDataRes.recordset.reduce(
-      (sum, row) => sum + Number(row.AvailableBerat || 0),
+      (sum, row) => sum + usedByLabel.get(row.NoMixer),
       0,
     );
 
@@ -265,61 +330,18 @@ exports.createBongkarSusunMixer = async (payload, ctx) => {
         VALUES (@NoBongkarSusun, @Tanggal, @IdUsername, @Note)
       `);
 
+    const usedSaksJson = JSON.stringify(
+      sakAlloc.map((a) => ({ code: a.code, noSak: a.noSak })),
+    );
+
     await new sql.Request(tx)
       .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
-      .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson).query(`
+      .input("SaksJson", sql.NVarChar(sql.MAX), usedSaksJson).query(`
         INSERT INTO dbo.BongkarSusunInputMixer (NoBongkarSusun, NoMixer, NoSak)
-        SELECT @NoBongkarSusun, src.NoMixer, src.NoSak
-        FROM (
-          SELECT
-            d.NoMixer,
-            d.NoSak,
-            ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0) AS AvailableBerat
-          FROM dbo.Mixer_d d
-          LEFT JOIN (
-            SELECT
-              NoMixer,
-              NoSak,
-              SUM(ISNULL(Berat, 0)) AS TotalPartial
-            FROM dbo.MixerPartial
-            GROUP BY NoMixer, NoSak
-          ) mp
-            ON mp.NoMixer = d.NoMixer
-           AND mp.NoSak = d.NoSak
-          WHERE d.NoMixer IN (
-            SELECT j.code FROM OPENJSON(@CodesJson)
-            WITH (code varchar(50) '$.code') AS j
-          )
-          AND d.DateUsage IS NULL
-        ) src
-        WHERE src.AvailableBerat > 0
+        SELECT @NoBongkarSusun, j.code, j.noSak
+        FROM OPENJSON(@SaksJson)
+        WITH (code varchar(50) '$.code', noSak int '$.noSak') AS j
       `);
-
-    const partialHintByKey = new Map();
-    for (const input of normalizedInputs) {
-      if (!Array.isArray(input.saks)) continue;
-      for (const sak of input.saks) {
-        const noSak = Number(sak?.noSak);
-        if (!Number.isFinite(noSak) || noSak <= 0) continue;
-        const isPartialRaw = sak?.isPartial ?? sak?.IsPartial;
-        const isPartial =
-          isPartialRaw === true ||
-          isPartialRaw === 1 ||
-          String(isPartialRaw).trim() === "1";
-        partialHintByKey.set(
-          `${input.code}::${Math.trunc(noSak)}`,
-          isPartial ? 1 : 0,
-        );
-      }
-    }
-
-    const inputPartialSaks = inputSaksRes.recordset.filter((row) => {
-      const key = `${row.NoMixer}::${Number(row.NoSak)}`;
-      const hintedIsPartial = partialHintByKey.get(key);
-      const rowIsPartial = row.IsPartial === true || row.IsPartial === 1;
-      const isPartial = hintedIsPartial === 1 ? true : rowIsPartial;
-      return isPartial && Number(row.AvailableBerat || 0) > 0;
-    });
 
     const genMixerPartial = () =>
       generateNextCode(tx, {
@@ -329,7 +351,14 @@ exports.createBongkarSusunMixer = async (payload, ctx) => {
         width: 10,
       });
 
-    for (const row of inputPartialSaks) {
+    // Baris MixerPartial dicatat untuk sak yang diambil sebagian atau sak
+    // yang sudah pernah dipecah — berisi qty terpakai + ditautkan lewat
+    // BongkarSusunInputMixerPartial (backlink hapus transaksi). Sak utuh
+    // yang habis dipakai penuh tidak butuh baris partial.
+    for (const a of sakAlloc) {
+      if (a.used <= 0) continue;
+      if (!a.isPartial && a.used >= a.available - 0.001) continue;
+
       let noMixerPartial = await genMixerPartial();
       const partialExist = await new sql.Request(tx)
         .input("No", sql.VarChar(50), noMixerPartial)
@@ -350,9 +379,9 @@ exports.createBongkarSusunMixer = async (payload, ctx) => {
 
       await new sql.Request(tx)
         .input("NoMixerPartial", sql.VarChar(50), noMixerPartial)
-        .input("NoMixer", sql.VarChar(50), row.NoMixer)
-        .input("NoSak", sql.Int, Number(row.NoSak))
-        .input("Berat", sql.Decimal(18, 3), Number(row.AvailableBerat)).query(`
+        .input("NoMixer", sql.VarChar(50), a.code)
+        .input("NoSak", sql.Int, a.noSak)
+        .input("Berat", sql.Decimal(18, 3), Number(a.used)).query(`
           INSERT INTO dbo.MixerPartial (NoMixerPartial, NoMixer, NoSak, Berat)
           VALUES (@NoMixerPartial, @NoMixer, @NoSak, @Berat)
         `);
@@ -365,8 +394,13 @@ exports.createBongkarSusunMixer = async (payload, ctx) => {
         `);
     }
 
+    // Tandai terpakai: sak yang dialokasi transaksi ini habis penuh —
+    // utuh tanpa baris partial pasti habis; sak yang punya baris partial
+    // habis bila sisa beratnya 0. Sak yang tidak dialokasi hanya ditandai
+    // bila sisa beratnya sudah 0 (dipakai partial lain sebelumnya).
     await new sql.Request(tx)
       .input("Tanggal", sql.Date, nowDate)
+      .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
       .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson).query(`
         UPDATE d
         SET d.DateUsage = @Tanggal
@@ -387,8 +421,37 @@ exports.createBongkarSusunMixer = async (payload, ctx) => {
         )
         AND d.DateUsage IS NULL
         AND (
-          ISNULL(d.IsPartial, 0) = 0
-          OR (ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0)) <= 0
+          (
+            EXISTS (
+              SELECT 1
+              FROM dbo.BongkarSusunInputMixer im
+              WHERE im.NoBongkarSusun = @NoBongkarSusun
+                AND im.NoMixer = d.NoMixer
+                AND im.NoSak = d.NoSak
+            )
+            AND (
+              NOT EXISTS (
+                SELECT 1
+                FROM dbo.BongkarSusunInputMixerPartial bip
+                INNER JOIN dbo.MixerPartial mp2
+                  ON mp2.NoMixerPartial = bip.NoMixerPartial
+                WHERE bip.NoBongkarSusun = @NoBongkarSusun
+                  AND mp2.NoMixer = d.NoMixer
+                  AND mp2.NoSak = d.NoSak
+              )
+              OR (ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0)) <= 0
+            )
+          )
+          OR (
+            NOT EXISTS (
+              SELECT 1
+              FROM dbo.BongkarSusunInputMixer im
+              WHERE im.NoBongkarSusun = @NoBongkarSusun
+                AND im.NoMixer = d.NoMixer
+                AND im.NoSak = d.NoSak
+            )
+            AND (ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0)) <= 0
+          )
         )
       `);
 

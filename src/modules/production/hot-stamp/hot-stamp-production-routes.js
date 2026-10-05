@@ -3,6 +3,8 @@ const express = require("express");
 const router = express.Router();
 
 const verifyToken = require("../../../core/middleware/verify-token");
+const attachPermissions = require("../../../core/middleware/attach-permissions");
+const requirePermission = require("../../../core/middleware/require-permission");
 const hotStampingController = require("./hot-stamp-production-controller");
 
 // GET HotStamping_h by date (YYYY-MM-DD)
@@ -26,6 +28,8 @@ router.post(
 router.patch(
   "/hot-stamp/:noProduksi/complete",
   verifyToken,
+  attachPermissions,
+  requirePermission("hotstamping:lock"),
   hotStampingController.completeProduksi,
 );
 
@@ -33,6 +37,8 @@ router.patch(
 router.patch(
   "/hot-stamp/:noProduksi/uncomplete",
   verifyToken,
+  attachPermissions,
+  requirePermission("hotstamping:lock"),
   hotStampingController.uncompleteProduksi,
 );
 

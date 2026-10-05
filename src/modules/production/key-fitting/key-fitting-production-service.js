@@ -461,6 +461,8 @@ async function createKeyFittingProduksi(payload, ctx) {
 async function updateKeyFittingProduksi(noProduksi, payload, ctx) {
   if (!noProduksi) throw badReq("noProduksi wajib");
 
+  const body = payload && typeof payload === "object" ? payload : {};
+
   // Guard: jenis output header tidak boleh diubah bila produksi sudah
   // memiliki data input atau output.
   await assertOutputJenisChangeAllowed({
@@ -472,8 +474,6 @@ async function updateKeyFittingProduksi(noProduksi, payload, ctx) {
     outputPk: "NoProduksi",
     fetchInputs,
   });
-
-  const body = payload && typeof payload === "object" ? payload : {};
 
   // ===============================
   // Validasi ctx / audit

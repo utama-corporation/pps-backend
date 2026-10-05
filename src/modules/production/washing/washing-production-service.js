@@ -179,7 +179,7 @@ async function getAllProduksi(
         ''
       ) AS NamaOperators,
       h.OutputJenisId,
-      jp.Jenis AS OutputJenisNama,
+      mw.Nama AS OutputJenisNama,
       h.TglProduksi,
       h.JamKerja,
       h.Shift,
@@ -210,7 +210,7 @@ async function getAllProduksi(
 
     FROM dbo.WashingProduksi_h h WITH (NOLOCK)
     LEFT JOIN dbo.MstMesin     ms WITH (NOLOCK) ON ms.IdMesin    = h.IdMesin
-    LEFT JOIN dbo.MstJenisPlastik jp WITH (NOLOCK) ON jp.IdJenisPlastik = h.OutputJenisId
+    LEFT JOIN dbo.MstWashing   mw WITH (NOLOCK) ON mw.IdWashing  = h.OutputJenisId
     LEFT JOIN dbo.MstRegu rg WITH (NOLOCK) ON rg.IdRegu = h.IdRegu
 
     -- bikin LastClosed selalu 1 row juga saat tabel tutup transaksi kosong
@@ -1208,9 +1208,9 @@ async function completeWashingProduksi(noProduksi, ctx) {
       sql.VarChar(50),
       no,
     ).query(`
-        SELECT TOP 1 h.NoProduksi, h.IsComplete, h.TglProduksi, jp.Jenis AS OutputJenisNama
+        SELECT TOP 1 h.NoProduksi, h.IsComplete, h.TglProduksi, mw.Nama AS OutputJenisNama
         FROM dbo.WashingProduksi_h h WITH (UPDLOCK, HOLDLOCK)
-        LEFT JOIN dbo.MstJenisPlastik jp WITH (NOLOCK) ON jp.IdJenisPlastik = h.OutputJenisId
+        LEFT JOIN dbo.MstWashing mw WITH (NOLOCK) ON mw.IdWashing = h.OutputJenisId
         WHERE h.NoProduksi = @NoProduksi;
       `);
 
@@ -1514,7 +1514,7 @@ async function queryRawInputs(noProduksi) {
       bb.BeratAct AS BeratAct,
       bb.IsPartial AS IsPartial,
       bbh.IdJenisPlastik AS IdJenis,
-      jpb.Jenis          AS NamaJenis
+      mbb.Nama           AS NamaJenis
     FROM dbo.WashingProduksiInput ibb WITH (NOLOCK)
     LEFT JOIN dbo.BahanBaku_d bb            WITH (NOLOCK)
       ON bb.NoBahanBaku = ibb.NoBahanBaku
@@ -1523,8 +1523,8 @@ async function queryRawInputs(noProduksi) {
     LEFT JOIN dbo.BahanBakuPallet_h bbh     WITH (NOLOCK)
       ON bbh.NoBahanBaku = ibb.NoBahanBaku
      AND bbh.NoPallet    = ibb.NoPallet
-    LEFT JOIN dbo.MstJenisPlastik jpb       WITH (NOLOCK)
-      ON jpb.IdJenisPlastik = bbh.IdJenisPlastik
+    LEFT JOIN dbo.MstBahanBaku mbb          WITH (NOLOCK)
+      ON mbb.IdBB = bbh.IdJenisPlastik
     WHERE ibb.NoProduksi = @no
 
     UNION ALL
@@ -1559,15 +1559,15 @@ async function queryRawInputs(noProduksi) {
       pdet.NoSak,
       pdet.Berat,
       bbh.IdJenisPlastik AS IdJenis,
-      jpp.Jenis          AS NamaJenis
+      mbb.Nama           AS NamaJenis
     FROM dbo.WashingProduksiInputBBPartial pmap WITH (NOLOCK)
     LEFT JOIN dbo.BahanBakuPartial pdet WITH (NOLOCK)
       ON pdet.NoBBPartial = pmap.NoBBPartial
     LEFT JOIN dbo.BahanBakuPallet_h bbh WITH (NOLOCK)
       ON bbh.NoBahanBaku = pdet.NoBahanBaku
      AND bbh.NoPallet    = pdet.NoPallet
-    LEFT JOIN dbo.MstJenisPlastik jpp WITH (NOLOCK)
-      ON jpp.IdJenisPlastik = bbh.IdJenisPlastik
+    LEFT JOIN dbo.MstBahanBaku mbb WITH (NOLOCK)
+      ON mbb.IdBB = bbh.IdJenisPlastik
     WHERE pmap.NoProduksi = @no
     ORDER BY pmap.NoBBPartial DESC;
 
@@ -1868,10 +1868,10 @@ async function getFormulaInputsByNoProduksi(noProduksi) {
     SELECT TOP 1
       h.NoProduksi,
       h.OutputJenisId AS OutputId,
-      jp.Jenis AS OutputNama
+      mw.Nama AS OutputNama
     FROM dbo.WashingProduksi_h h WITH (NOLOCK)
-    LEFT JOIN dbo.MstJenisPlastik jp WITH (NOLOCK)
-      ON jp.IdJenisPlastik = h.OutputJenisId
+    LEFT JOIN dbo.MstWashing mw WITH (NOLOCK)
+      ON mw.IdWashing = h.OutputJenisId
     WHERE h.NoProduksi = @NoProduksi;
   `);
 
@@ -1988,7 +1988,7 @@ async function validateLabel(labelCode) {
           d.DateUsage,
           d.IsPartial,
           ph.IdJenisPlastik      AS idJenis,
-          jp.Jenis               AS namaJenis
+          mbb.Nama               AS namaJenis
 
         FROM dbo.BahanBaku_d AS d WITH (NOLOCK)
         LEFT JOIN PartialAgg AS pa
@@ -1998,8 +1998,8 @@ async function validateLabel(labelCode) {
         LEFT JOIN dbo.BahanBakuPallet_h AS ph WITH (NOLOCK)
           ON ph.NoBahanBaku = d.NoBahanBaku
          AND ph.NoPallet    = d.NoPallet
-        LEFT JOIN dbo.MstJenisPlastik AS jp WITH (NOLOCK)
-          ON jp.IdJenisPlastik = ph.IdJenisPlastik
+        LEFT JOIN dbo.MstBahanBaku AS mbb WITH (NOLOCK)
+          ON mbb.IdBB = ph.IdJenisPlastik
         WHERE d.NoBahanBaku = @noBahanBaku
           AND d.NoPallet    = @noPallet
           AND d.DateUsage IS NULL
@@ -2453,10 +2453,10 @@ async function splitProduksiTime(selector, payload, ctx) {
 
       SELECT
         o.*,
-        jp.Jenis AS OutputJenisNama
+        mw.Nama AS OutputJenisNama
       FROM @out o
-      LEFT JOIN dbo.MstJenisPlastik jp WITH (NOLOCK)
-        ON jp.IdJenisPlastik = o.OutputJenisId;
+      LEFT JOIN dbo.MstWashing mw WITH (NOLOCK)
+        ON mw.IdWashing = o.OutputJenisId;
     `);
 
     await new sql.Request(tx)

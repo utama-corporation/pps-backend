@@ -6,7 +6,7 @@ async function getAllActive() {
   const request = pool.request();
 
   const query = `
-    SELECT TOP (1000)
+    SELECT
       IdWashing,
       Nama,
       IdUOM,
@@ -18,7 +18,6 @@ async function getAllActive() {
       IsReject,
       IsDisableMinMax
     FROM [dbo].[MstWashing]
-    WHERE ISNULL(IsEnable, 1) = 1
     ORDER BY Nama ASC;
   `;
 

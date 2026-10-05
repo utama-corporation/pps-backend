@@ -2,6 +2,8 @@
 const express = require("express");
 const router = express.Router();
 const verifyToken = require("../../../core/middleware/verify-token");
+const attachPermissions = require("../../../core/middleware/attach-permissions");
+const requirePermission = require("../../../core/middleware/require-permission");
 const washingProduksiController = require("./washing-production-controller");
 
 // GET /washing?page=1&pageSize=20
@@ -25,9 +27,12 @@ router.post(
   washingProduksiController.splitProduksiTime,
 );
 
+// Kunci produksi: IsComplete 0 -> 1. Butuh permission produksi_washing:lock.
 router.patch(
   "/washing/:noProduksi/complete",
   verifyToken,
+  attachPermissions,
+  requirePermission("produksi_washing:lock"),
   washingProduksiController.completeProduksi,
 );
 
@@ -35,6 +40,8 @@ router.patch(
 router.patch(
   "/washing/:noProduksi/uncomplete",
   verifyToken,
+  attachPermissions,
+  requirePermission("produksi_washing:lock"),
   washingProduksiController.uncompleteProduksi,
 );
 

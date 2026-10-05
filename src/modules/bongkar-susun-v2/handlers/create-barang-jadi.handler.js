@@ -9,11 +9,15 @@ const { detectCategory } = require("../bongkar-susun-v2-category-registry");
 // retur-v3, supaya konvensi "sisa pcs = Pcs parent - SUM(partial)" dan
 // "parent IsPartial = 1, DateUsage tetap NULL" konsisten di semua modul.
 const { createPartial } = require("../../../core/shared/label-partial.helper");
+const {
+  parseInputsPartial,
+  resolveUsedQty,
+} = require("../inputs-partial.helper");
 
 const CATEGORY = "barangjadi";
 
 exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
-  const { note, inputs, outputs } = payload;
+  const { note, inputs, outputs, inputsPartial } = payload;
   const { actorId, actorUsername, requestId } = ctx;
 
   if (!Array.isArray(inputs) || inputs.length === 0) {
@@ -43,6 +47,8 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
       throw badReq(`outputs[${i}].pcs wajib diisi dan lebih dari 0`);
     }
   }
+
+  const partialMap = parseInputsPartial(inputsPartial, inputs);
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -116,11 +122,20 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
       }
     }
 
-    // Bongkar susun tidak memilih sebagian pcs dari label — seluruh sisa pcs
-    // input selalu dipakai, jadi total input = total output (tidak ada
-    // parsial di sisi output).
+// pcs yang dipakai siklus ini per label: seluruh sisa pcs, kecuali label
+    // yang di-override inputsPartial (operator memilih memakai sebagian dari
+    // sisa). Label dengan used < available menyisakan pcs — tidak di-DateUsage.
+    const usedByCode = new Map();
+    for (const row of inputDataRes.recordset) {
+      usedByCode.set(
+        row.NoBJ,
+        Math.trunc(resolveUsedQty(partialMap, row.NoBJ, row.AvailablePcs)),
+      );
+    }
+    const usedPcsOf = (row) => usedByCode.get(row.NoBJ);
+
     const totalPcsInput = inputDataRes.recordset.reduce(
-      (sum, row) => sum + Number(row.AvailablePcs || 0),
+      (sum, row) => sum + usedPcsOf(row),
       0,
     );
 
@@ -137,7 +152,7 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
     for (const row of inputDataRes.recordset) {
       const k = refIdBJ;
       if (!inputByJenis[k]) inputByJenis[k] = { pcs: 0 };
-      inputByJenis[k].pcs += Number(row.AvailablePcs || 0);
+      inputByJenis[k].pcs += usedPcsOf(row);
     }
 
     const outputByJenis = {};
@@ -213,9 +228,50 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
         VALUES (@NoBongkarSusun, @Tanggal, @IdUsername, @Note)
       `);
 
-    // Tabel input cuma menyimpan labelnya - pcs & kode partial dicatat di
-    // tabel link BongkarSusunInputBarangJadiPartial, sama seperti furnitureWip
-    // (BongkarSusunInputFurnitureWIPPartial).
+// Tabel input hanya menyimpan labelnya. Pcs yang terpakai + kode partial
+    // dicatat di tabel link BongkarSusunInputBarangJadiPartial — struktur yang
+    // sama dengan furnitureWip/mixer, dipakai query balance & join partial di
+    // detail.
+    //
+    // Baris BarangJadiPartial dibuat untuk dua kasus:
+    //  - label yang SUDAH pernah dipecah (sisa pcs < Pcs asli): sisa pcs yang
+    //    dipakai siklus ini dicatat sebagai baris baru.
+    //  - label utuh yang hanya dipakai SEBAGIAN (override inputsPartial).
+    // Label utuh yang dipakai penuh TIDAK dapat baris partial — konsumsi penuh,
+    // konvensi yang sama dipakai penjualan.
+    const createdPartials = [];
+
+    for (const row of inputDataRes.recordset) {
+      const availablePcs = Number(row.AvailablePcs || 0);
+      const parentPcs = Number(row.ParentPcs || 0);
+      const usedPcs = usedPcsOf(row);
+      const wasPartial = parentPcs > availablePcs;
+
+      if (wasPartial || usedPcs < availablePcs) {
+        const noBJPartial = await createPartial(
+          tx,
+          CATEGORY,
+          row.NoBJ,
+          Math.trunc(usedPcs),
+        );
+
+        await new sql.Request(tx)
+          .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+          .input("NoBJPartial", sql.VarChar(50), noBJPartial)
+          .query(`
+            INSERT INTO dbo.BongkarSusunInputBarangjadiPartial (NoBongkarSusun, NoBJPartial)
+            VALUES (@NoBongkarSusun, @NoBJPartial)
+          `);
+
+        createdPartials.push({
+          labelCode: row.NoBJ,
+          noBJPartial,
+          pcs: Math.trunc(usedPcs),
+          totalPcs: parentPcs,
+        });
+      }
+    }
+
     await new sql.Request(tx)
       .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
       .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson).query(`
@@ -225,50 +281,21 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
         WITH (code varchar(50) '$.code') AS j
       `);
 
-    // Label yang SUDAH pernah dipecah (IsPartial = 1) dicatat baris
-    // BarangJadiPartial baru berisi sisa pcs yang dipakai siklus ini. Baris
-    // itulah yang membuat "pcs ini dipakai bongkar susun" punya jejak sendiri,
-    // dan baris di tabel link yang jadi backlink untuk hapus transaksi.
-    // Label yang belum pernah dipecah TIDAK dapat baris partial - itu
-    // konsumsi penuh atas label utuh.
-    const inputPartialRows = inputDataRes.recordset.filter(
-      (row) =>
-        (row.IsPartial === true || row.IsPartial === 1) &&
-        Number(row.AvailablePcs || 0) > 0,
-    );
-
-    const createdPartials = [];
-
-    for (const row of inputPartialRows) {
-      const noBJPartial = await createPartial(
-        tx,
-        CATEGORY,
-        row.NoBJ,
-        Number(row.AvailablePcs || 0),
-      );
-
+// Label yang sisa pcs-nya habis terpakai (used == available) ditandai
+    // terpakai. Label dengan sisa tersisa (override inputsPartial) TIDAK —
+    // sisanya masih bisa dipakai siklus berikutnya. Baris partial milik
+    // penjualan/retur-v3/siklus sebelumnya TIDAK dihapus di sini.
+    const fullyUsedCodes = inputDataRes.recordset
+      .filter((row) => usedPcsOf(row) >= Number(row.AvailablePcs || 0))
+      .map((row) => ({ code: row.NoBJ }));
+    if (fullyUsedCodes.length > 0) {
       await new sql.Request(tx)
-        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
-        .input("NoBJPartial", sql.VarChar(50), noBJPartial)
-        .query(`
-          INSERT INTO dbo.BongkarSusunInputBarangJadiPartial (NoBongkarSusun, NoBJPartial)
-          VALUES (@NoBongkarSusun, @NoBJPartial)
-        `);
-
-      createdPartials.push({
-        labelCode: row.NoBJ,
-        noBJPartial,
-        pcs: Number(row.AvailablePcs || 0),
-        totalPcs: Number(row.ParentPcs || 0),
-      });
-    }
-
-    // Semua input sudah tidak menyisakan pcs (sisa habis terpakai), jadi
-    // parent ditandai terpakai. Baris partial milik penjualan/retur-v3/
-    // siklus sebelumnya TIDAK dihapus di sini.
-    await new sql.Request(tx)
-      .input("Tanggal", sql.Date, nowDate)
-      .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson).query(`
+        .input("Tanggal", sql.Date, nowDate)
+        .input(
+          "CodesJson",
+          sql.NVarChar(sql.MAX),
+          JSON.stringify(fullyUsedCodes),
+).query(`
         UPDATE dbo.BarangJadi
         SET DateUsage = @Tanggal
         WHERE NoBJ IN (
@@ -277,6 +304,7 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
         )
         AND DateUsage IS NULL
       `);
+    }
 
     const createdOutputs = [];
 

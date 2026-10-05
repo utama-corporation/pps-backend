@@ -2,6 +2,8 @@
 const express = require("express");
 const router = express.Router();
 const verifyToken = require("../../../core/middleware/verify-token");
+const attachPermissions = require("../../../core/middleware/attach-permissions");
+const requirePermission = require("../../../core/middleware/require-permission");
 const injectProduksiController = require("./inject-production-controller");
 
 // ✅ GET ALL InjectProduksi_h (paged)
@@ -110,6 +112,8 @@ router.post(
 router.patch(
   "/inject/:noProduksi/complete",
   verifyToken,
+  attachPermissions,
+  requirePermission("injectproduksi:lock"),
   injectProduksiController.completeProduksi,
 );
 
@@ -117,6 +121,8 @@ router.patch(
 router.patch(
   "/inject/:noProduksi/uncomplete",
   verifyToken,
+  attachPermissions,
+  requirePermission("injectproduksi:lock"),
   injectProduksiController.uncompleteProduksi,
 );
 

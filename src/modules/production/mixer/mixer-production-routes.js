@@ -35,14 +35,14 @@ router.post(
 
 router.patch(
   "/mixer/:noProduksi/complete",
-  requirePermission("produksi_mixer:update"),
+  requirePermission("produksi_mixer:lock"),
   mixerProduksiController.completeProduksi,
 );
 
 // Batalkan complete: IsComplete 1 -> 0 (produksi bisa diedit lagi).
 router.patch(
   "/mixer/:noProduksi/uncomplete",
-  requirePermission("produksi_mixer:update"),
+  requirePermission("produksi_mixer:lock"),
   mixerProduksiController.uncompleteProduksi,
 );
 

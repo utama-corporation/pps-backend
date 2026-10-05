@@ -9,22 +9,29 @@
 --   BongkarSusunInputBarangjadi       (NoBongkarSusun, NoBJ)
 --   + BongkarSusunInputBarangJadiPartial (NoBongkarSusun, NoBJPartial)
 --
--- Struktur BongkarSusunInputBarangjadiPartial meniru
+-- Struktur BongkarSusunInputBarangJadiPartial meniru
 -- BongkarSusunInputFurnitureWIPPartial: PK komposit (NoBongkarSusun,
 -- NoBJPartial) + FK ke BongkarSusun_h dan BarangJadiPartial.
 --
--- Konsekuensinya tabel input kembali storing labelnya saja:
+-- Konsekuensinya tabel input kembali menyimpan labelnya saja:
 --   - label utuh yang sekali pakai penuh  -> tanpa baris di tabel link,
 --     pcs terpakai = BarangJadi.Pcs
 --   - label yang sudah pernah dipecah     -> ada baris di tabel link,
 --     pcs terpakai = BarangJadiPartial.Pcs milik baris itu
--- Ini eliminates "pcs terjual ganda": satu label = satu baris input.
+-- Tidak ada "pcs terjual ganda": satu label = satu baris input.
 --
 -- Baris lama dimigrasikan dulu dari kolom NoPartial yang masih ada, baru
 -- kolomnya dibuang (join ke BarangJadiPartial dipakai sebagai filter supaya
 -- kode partial yang tidak ada induknya tidak ikut pindah).
 --
--- Idempotent: guard OBJECT_ID / COL_LENGTH.
+-- GERBANG: kalau setelah backfill masih ada baris input yang NoPartial-nya
+-- belum punya baris link, script berhenti dengan error dan kolom TIDAK
+-- dibuang. Pindahkan baris-baris itu manual, lalu jalankan ulang.
+--
+-- Idempotent: guard OBJECT_ID / COL_LENGTH. Semua pernyataan yang menyebut
+-- NoPartial/Pcs dibungkus EXEC() karena SQL Server men-compile seluruh batch
+-- SEBELUM jalan - guarded IF biasa tetap gagal dengan "Invalid column name"
+-- kalau kolomnya sudah tidak ada.
 -- ================================================================
 
 -- Trigger audit lama masih membaca kolom NoPartial/Pcs. Lepas dulu supaya
@@ -63,19 +70,43 @@ GO
 -- pakai penuh tidak punya jejak partial.
 IF COL_LENGTH('dbo.BongkarSusunInputBarangjadi', 'NoPartial') IS NOT NULL
 BEGIN
-    INSERT INTO dbo.BongkarSusunInputBarangJadiPartial (NoBongkarSusun, NoBJPartial)
-    SELECT DISTINCT ibj.NoBongkarSusun, ibj.NoPartial
-    FROM dbo.BongkarSusunInputBarangjadi ibj
-    INNER JOIN dbo.BongkarSusun_h bsh
-        ON bsh.NoBongkarSusun = ibj.NoBongkarSusun
-    INNER JOIN dbo.BarangJadiPartial bjp
-        ON bjp.NoBJPartial = ibj.NoPartial
-    WHERE ibj.NoPartial IS NOT NULL
-      AND NOT EXISTS (
-          SELECT 1 FROM dbo.BongkarSusunInputBarangJadiPartial t
-          WHERE t.NoBongkarSusun = ibj.NoBongkarSusun
-            AND t.NoBJPartial = ibj.NoPartial
-      );
+    EXEC('
+        INSERT INTO dbo.BongkarSusunInputBarangJadiPartial (NoBongkarSusun, NoBJPartial)
+        SELECT DISTINCT ibj.NoBongkarSusun, ibj.NoPartial
+        FROM dbo.BongkarSusunInputBarangjadi ibj
+        INNER JOIN dbo.BongkarSusun_h bsh
+            ON bsh.NoBongkarSusun = ibj.NoBongkarSusun
+        INNER JOIN dbo.BarangJadiPartial bjp
+            ON bjp.NoBJPartial = ibj.NoPartial
+        WHERE ibj.NoPartial IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM dbo.BongkarSusunInputBarangJadiPartial t
+              WHERE t.NoBongkarSusun = ibj.NoBongkarSusun
+                AND t.NoBJPartial = ibj.NoPartial
+          );
+    ');
+END
+GO
+
+-- GERBANG: berhenti di sini, jangan drop kolom, kalau masih ada baris input
+-- yang NoPartial-nya belum punya baris link. Berarti backfill di atas tidak
+-- bisa memindahkannya (mis. NoBongkarSusun tidak ada di header, atau kodenya
+-- tidak ada di BarangJadiPartial) dan pcs-nya akan hilang begitu kolomnya
+-- dibuang. Selesaikan dulu baris-baris itu, lalu jalankan ulang.
+IF COL_LENGTH('dbo.BongkarSusunInputBarangjadi', 'NoPartial') IS NOT NULL
+BEGIN
+    EXEC('
+        IF EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunInputBarangjadi ibj
+            LEFT JOIN dbo.BongkarSusunInputBarangJadiPartial l
+                ON l.NoBongkarSusun = ibj.NoBongkarSusun
+               AND l.NoBJPartial = ibj.NoPartial
+            WHERE ibj.NoPartial IS NOT NULL
+              AND l.NoBJPartial IS NULL
+        )
+            THROW 50001, ''Migrasi dibatalkan: masih ada baris input yang NoPartial-nya belum punya baris di BongkarSusunInputBarangJadiPartial. Pindahkan manual, lalu jalankan ulang.'', 1;
+    ');
 END
 GO
 
@@ -83,9 +114,9 @@ GO
 -- di BarangJadiPartial.Pcs (kolom itu yang jadi sumbernya), sama seperti
 -- FurnitureWIPPartial.Pcs pada kategori furnitureWip.
 IF COL_LENGTH('dbo.BongkarSusunInputBarangjadi', 'NoPartial') IS NOT NULL
-    ALTER TABLE dbo.BongkarSusunInputBarangjadi DROP COLUMN NoPartial;
+    EXEC('ALTER TABLE dbo.BongkarSusunInputBarangjadi DROP COLUMN NoPartial;');
 GO
 
 IF COL_LENGTH('dbo.BongkarSusunInputBarangjadi', 'Pcs') IS NOT NULL
-    ALTER TABLE dbo.BongkarSusunInputBarangjadi DROP COLUMN Pcs;
+    EXEC('ALTER TABLE dbo.BongkarSusunInputBarangjadi DROP COLUMN Pcs;');
 GO

@@ -60,6 +60,7 @@ async function getHeaders(
       h.IdPembeli,
       p.NamaPembeli,
       h.Remark,
+      h.InvoiceType,
       h.IsComplete,
       h.DateComplete,
       (SELECT COUNT(1) FROM dbo.BJJualItem_d d WITH (NOLOCK) WHERE d.NoBJJual = h.NoBJJual) AS TotalLines,
@@ -98,7 +99,7 @@ async function getHeaderDetail(noBJJual) {
     .request()
     .input("No", sql.VarChar(13), no).query(`
       SELECT h.NoBJJual, h.Tanggal, h.IdPembeli, p.NamaPembeli, h.Remark,
-             h.IsComplete, h.DateComplete
+             h.InvoiceType, h.IsComplete, h.DateComplete
       FROM dbo.BJJual_h h WITH (NOLOCK)
       LEFT JOIN dbo.MstPembeli p WITH (NOLOCK) ON h.IdPembeli = p.IdPembeli
       WHERE h.NoBJJual = @No
