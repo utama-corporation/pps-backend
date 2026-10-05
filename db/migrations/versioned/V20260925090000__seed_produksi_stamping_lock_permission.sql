@@ -12,7 +12,7 @@
 INSERT INTO dbo.MstPermissionList (NoPermission, Permission)
 SELECT v.NoPermission, v.Permission
 FROM (VALUES
-    ('produksi_stamping:lock', 'Kunci / Buka Kunci Produksi Stamping')
+    ('hotstamping:lock', 'Kunci / Buka Kunci Produksi Stamping')
 ) AS v(NoPermission, Permission)
 WHERE NOT EXISTS (
     SELECT 1 FROM dbo.MstPermissionList p WHERE p.NoPermission = v.NoPermission
