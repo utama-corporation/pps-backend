@@ -73,4 +73,13 @@ router.get(
   ctrl.generatePdf,
 );
 
+// GET /labels/washing/:nowashing/qc/pdf
+// Di-daftarkan setelah /pdf. Pola "/:nowashing" hanya cocok untuk satu
+// segmen, jadi tidak akan menabrak path tiga segmen di atas.
+router.get(
+  "/labels/washing/:nowashing/qc/pdf",
+  requirePermission("label_washing:read"),
+  ctrl.generateQcPdf,
+);
+
 module.exports = router;

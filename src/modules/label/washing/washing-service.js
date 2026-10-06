@@ -168,6 +168,66 @@ exports.getByNoWashing = async (NoWashing) => {
   };
 };
 
+// Data untuk PDF QC (GET /labels/washing/:nowashing/qc/pdf).
+//
+// Sengaja BACA DARI Washing_h langsung, bukan lewat getByNoWashing: fungsi itu
+// memfilter `Washing_d.DateUsage IS NULL`, jadi hanya label yang belum dipakai
+// saja. QC label yang sudah dipakai pun masih perlu bisa dicetak ulang di
+// lapangan.
+//
+// Rata Density/Moisture mengikuti broker: tiga titik ukur dirata-rata. Kolom
+// NULL dihitung sebagai 0 (ISNULL), sama seperti broker — supaya kalau hanya
+// satu sampling yang diisi, hasilnya tetap terbaca.
+exports.getQcPdfByNoWashing = async (NoWashing) => {
+  const pool = await poolPromise;
+  const result = await pool
+    .request()
+    .input("NoWashing", sql.VarChar(50), NoWashing).query(`
+      SELECT TOP 1
+        h.NoWashing,
+        h.DateCreate,
+        COALESCE(mw.Nama, '-') AS JenisPlastik,
+        CAST(
+          (
+            ISNULL(CAST(h.Density  AS decimal(18, 6)), 0) +
+            ISNULL(CAST(h.Density2 AS decimal(18, 6)), 0) +
+            ISNULL(CAST(h.Density3 AS decimal(18, 6)), 0)
+          ) / 3.0
+          AS decimal(10, 3)
+        ) AS AvgDensity,
+        CAST(
+          (
+            ISNULL(CAST(h.Moisture  AS decimal(18, 6)), 0) +
+            ISNULL(CAST(h.Moisture2 AS decimal(18, 6)), 0) +
+            ISNULL(CAST(h.Moisture3 AS decimal(18, 6)), 0)
+          ) / 3.0
+          AS decimal(10, 3)
+        ) AS AvgMoisture,
+        h.CreateBy,
+        h.HasBeenPrinted
+      FROM dbo.Washing_h h
+      LEFT JOIN dbo.MstWashing mw ON mw.IdWashing = h.IdJenisPlastik
+      WHERE h.NoWashing = @NoWashing
+    `);
+
+  const row = result.recordset?.[0] || null;
+  if (!row) {
+    const e = new Error(`NoWashing ${NoWashing} tidak ditemukan`);
+    e.statusCode = 404;
+    throw e;
+  }
+
+  return {
+    NoWashing: row.NoWashing,
+    DateCreate: row.DateCreate,
+    JenisPlastik: row.JenisPlastik,
+    AvgDensity: row.AvgDensity,
+    AvgMoisture: row.AvgMoisture,
+    CreateBy: row.CreateBy,
+    HasBeenPrinted: row.HasBeenPrinted,
+  };
+};
+
 // GET details by NoWashing
 exports.getWashingDetailByNoWashing = async (nowashing) => {
   const pool = await poolPromise;

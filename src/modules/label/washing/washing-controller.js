@@ -9,6 +9,9 @@ const { generateLabelPdf } = require("../../../core/utils/pdf/label-generator");
 const {
   buildWashingLabelHtml,
 } = require("../../../core/utils/pdf/templates/washing-label-pdf/washing-label-pdf");
+const {
+  buildWashingQcLabelHtml,
+} = require("../../../core/utils/pdf/templates/washing-qc-label-pdf/washing-qc-label-pdf");
 
 // GET all header washing
 exports.getAll = async (req, res) => {
@@ -295,6 +298,60 @@ exports.generatePdf = async (req, res) => {
     return res.end(pdfBuffer);
   } catch (err) {
     console.error("Washing PDF Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, message: err.message });
+  }
+};
+
+// GET /labels/washing/:nowashing/qc/pdf
+// Mirror broker (generateQcPdf): label QC berisi Density + Moisture rata.
+// Tidak memakai lock maupun increment HasBeenPrinted — yang diincrement tetap
+// hanya cetak LABEL (ctrl.incrementHasBeenPrinted).
+exports.generateQcPdf = async (req, res) => {
+  try {
+    const NoWashing = String(req.params.nowashing || "").trim();
+    if (!NoWashing) {
+      return res
+        .status(400)
+        .json({ success: false, message: "nowashing wajib diisi" });
+    }
+
+    const row = await labelWashingService.getQcPdfByNoWashing(NoWashing);
+
+    const formatDecimal = (value) =>
+      value == null || Number.isNaN(Number(value))
+        ? "-"
+        : Number(value).toFixed(3);
+
+    const data = {
+      noLabel: row.NoWashing,
+      jenisPlastik: row.JenisPlastik,
+      density: formatDecimal(row.AvgDensity),
+      moisture: formatDecimal(row.AvgMoisture),
+      tanggal: (() => {
+        const d = new Date(row.DateCreate);
+        const dd = String(d.getDate()).padStart(2, "0");
+        const mmm = d.toLocaleDateString("id-ID", { month: "short" });
+        const yy = String(d.getFullYear()).slice(-2);
+        return `${dd}-${mmm}-${yy}`;
+      })(),
+      createBy: row.CreateBy || "-",
+      watermarkText: row.HasBeenPrinted > 0 ? `COPY ${row.HasBeenPrinted}` : "",
+    };
+
+    const pdfBuffer = await generateLabelPdf(data, buildWashingQcLabelHtml, {
+      width: "80mm",
+    });
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="label-qc-${NoWashing}.pdf"`,
+      "Content-Length": pdfBuffer.length,
+    });
+
+    return res.end(pdfBuffer);
+  } catch (err) {
+    console.error("Washing QC PDF Error:", err);
     const status = err.statusCode || 500;
     return res.status(status).json({ success: false, message: err.message });
   }
