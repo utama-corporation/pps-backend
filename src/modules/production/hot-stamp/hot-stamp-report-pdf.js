@@ -49,11 +49,6 @@ function fmtInt(value) {
   return value.toLocaleString("en-US", { maximumFractionDigits: 0 });
 }
 
-function fmtPct(value, base) {
-  if (value == null || value === 0 || !base) return "";
-  return `${((value / base) * 100).toFixed(2)}%`;
-}
-
 function runningSum(values) {
   const nums = [];
   for (const v of values) {
@@ -97,11 +92,32 @@ function buildHotStampingMain(spRows, noProduksi) {
   }));
 }
 
+// FWIP utuh + FWIP partial dengan nama sama dijumlahkan; material terpisah.
+function mergeInputByJenis(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    const key = `${String(r.Group).toUpperCase() === "MTERIAL" ? "M" : "F"}|${r.Jenis}`;
+    const prev = map.get(key);
+    if (prev) {
+      prev.Total = (prev.Total || 0) + (r.Total || 0);
+      prev.Total2 = (prev.Total2 || 0) + (r.Total2 || 0);
+    } else {
+      map.set(key, {
+        Jenis: r.Jenis,
+        Total: r.Total || 0,
+        Total2: r.Total2 || 0,
+      });
+    }
+  }
+  return [...map.values()];
+}
+
 function buildHotStampingReportHtml({ main, by }) {
-  const inputRows = main.filter((r) => isTipe(r, "input"));
+  const inputRows = mergeInputByJenis(main.filter((r) => isTipe(r, "input")));
   const outputRows = main.filter((r) => isTipe(r, "output"));
 
-  const inputTotal = runningSum(inputRows.map((r) => r.Total));
+  const inputQtyTotal = runningSum(inputRows.map((r) => r.Total));
+  const inputBeratTotal = runningSum(inputRows.map((r) => r.Total2));
   const outputQtyTotal = runningSum(outputRows.map((r) => r.Total));
   const outputBeratTotal = runningSum(outputRows.map((r) => r.Total2));
 
@@ -118,8 +134,8 @@ function buildHotStampingReportHtml({ main, by }) {
     .map(
       (r) => `<tr>
         <td class="txt">${escapeHtml(r.Jenis)}</td>
-        <td class="num">${fmt2(r.Total)}</td>
-        <td class="num">${fmtPct(r.Total, inputTotal)}</td>
+        <td class="num">${fmtInt(r.Total)}</td>
+        <td class="num">${fmt2(r.Total2)}</td>
       </tr>`,
     )
     .join("");
@@ -145,12 +161,12 @@ function buildHotStampingReportHtml({ main, by }) {
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; color: #111827; }
-  .page { display: flex; flex-direction: column; min-height: 204.15mm; }
+  .page { display: flex; flex-direction: column; min-height: 194mm; }
   .title { text-align: center; font-size: 14pt; font-weight: 700; margin-bottom: 11px; letter-spacing: .2px; }
   .meta { display: grid; grid-template-columns: 103px max-content 1fr; gap: 1px 0; width: max-content; margin-bottom: 30px; font-size: 9pt; line-height: 1.21; }
   .meta .lbl { padding-left: 10px; }
   .meta .sep { padding-right: 5px; }
-  .box { border: 1.5px solid #111827; display: flex; flex-direction: column; flex: 0 0 auto; }
+  .box { border: 1.5px solid #111827; display: flex; flex-direction: column; margin-bottom: 20px; flex: 1 0 auto; }
   .box-cols { display: flex; flex: 1; }
   .col { display: flex; flex-direction: column; min-width: 0; }
   .col + .col { border-left: 1px solid #111827; }
@@ -158,35 +174,29 @@ function buildHotStampingReportHtml({ main, by }) {
   .col-2 { width: 48.4%; }
   .col-3 { width: 24.4%; }
   .col-head { text-align: center; font-weight: 700; font-size: 9.5pt; padding: 1px 4px; border-bottom: 1px solid #111827; background: #F3F4F6; }
+  /* Garis pemisah kolom = satu elemen .vl per garis, membentang dari header sampai
+     baris total, jadi tidak putus dan selalu lurus. Posisi (%) = lebar <col>. */
+  .col-inner { flex: 1; position: relative; display: flex; flex-direction: column; }
+  .col-inner .vl { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid #111827; pointer-events: none; }
+  .col-2 .col-inner .vl.sub { top: 22px; }
   .col-body { flex: 1; }
+  .col-foot { border-top: 1.5px solid #111827; }
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
   thead th { font-weight: 700; font-size: 8pt; padding: 4px 5px; border-bottom: 1px solid #111827; text-align: left; vertical-align: bottom; background: #FAFAFA; }
   thead th.num, thead th.center { text-align: center; }
-  .col-1 thead th, .col-3 thead th { height: 52px; padding: 17px 5px 4px; vertical-align: top; }
-  .col-2 thead tr:first-child th { height: 23px; padding: 2px 5px 4px; white-space: nowrap; vertical-align: top; }
-  .col-2 thead tr:last-child th { height: 31px; padding: 0 5px; line-height: 1.25; white-space: nowrap; vertical-align: top; }
-  .col-2 thead tr:last-child th:nth-child(2), .col-2 thead tr:last-child th:nth-child(3) { vertical-align: bottom; }
-  tbody td { padding: 0 5px; border-bottom: none; vertical-align: top; font-family: 'Times New Roman', Times, serif; font-size: 6.6pt; line-height: 1.52; }
-  .col-1 thead th:not(:last-child),
-  .col-3 thead th:not(:last-child),
-  .col-2 thead tr:first-child th:first-child,
-  .col-2 thead tr:last-child th:not(:last-child) { border-right: 1px solid #111827; }
-  .col-1 .col-body { background-image: linear-gradient(#111827,#111827), linear-gradient(#111827,#111827); background-size: 1px 100%, 1px 100%; background-position: 61.7% 0, 81.1% 0; background-repeat: no-repeat; }
-  .col-2 .col-body { background-image: linear-gradient(#111827,#111827), linear-gradient(#111827,#111827), linear-gradient(#111827,#111827); background-size: 1px 100%, 1px 100%, 1px 100%; background-position: 63.8% 0, 79.7% 0, 89.3% 0; background-repeat: no-repeat; }
-  .col-3 .col-body { background-image: linear-gradient(#111827,#111827), linear-gradient(#111827,#111827); background-size: 1px 100%, 1px 100%; background-position: 21.9% 0, 35.8% 0; background-repeat: no-repeat; }
+  .col-1 thead th, .col-3 thead th { height: 52px; padding: 17px 5px 4px; vertical-align: top; text-align: center; }
+  .col-3 thead th { padding-left: 2px; padding-right: 2px; }
+  .col-2 thead tr:first-child th { height: 22px; padding: 2px 5px 4px; white-space: nowrap; vertical-align: top; }
+  .col-2 thead tr:last-child th { height: 30px; padding: 0 5px; line-height: 1.25; white-space: nowrap; vertical-align: top; }
+  .col-2 thead tr:last-child th { vertical-align: bottom; }
+  .col-2 thead tr:first-child th:first-child { border-bottom: 1px solid #111827; }
+  tbody td { padding: 1px 5px; border-bottom: none; vertical-align: top; font-size: 7.7pt; line-height: 1.05; }
   td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   td.center { text-align: center; }
   td.txt { white-space: pre-line; word-break: break-word; }
-  .box-foot { display: flex; border-top: 1.5px solid #111827; margin-top: -3px; }
-  .foot { min-width: 0; }
-  .foot + .foot { border-left: 1px solid #111827; }
-  .foot-1 { width: 27.2%; }
-  .foot-2 { width: 48.4%; }
-  .foot-3 { width: 24.4%; }
-  .box-foot table td { padding: 0 5px; border-right: 1px solid #111827; font-weight: 700; border-bottom: none; font-family: 'Times New Roman', Times, serif; font-size: 7.7pt; }
-  .box-foot table td:last-child { border-right: none; }
-      .box-foot .val { text-align: right; font-variant-numeric: tabular-nums; }
-  .sign { display: flex; border: 1.5px solid #111827; margin-top: auto; width: 87.7%; }
+  .col-foot td { padding: 4px 5px; font-weight: 700; height: 22px; }
+  .col-foot .val { text-align: right; font-variant-numeric: tabular-nums; }
+  .sign { display: flex; border: 1.5px solid #111827; }
   .sign-tbl { flex: 1; min-width: 0; }
   .sign-tbl table { table-layout: fixed; }
   .sign-tbl th { font-size: 7pt; font-weight: 700; text-align: center; padding: 7px 6px 5px; border-bottom: 1px solid #111827; }
@@ -201,7 +211,14 @@ function buildHotStampingReportHtml({ main, by }) {
   .anggota tbody tr:nth-child(1) td { height: 26px; }
     .anggota tbody tr:nth-child(2) td { height: 36px; }
     .anggota tr:last-child td { border-bottom: none; padding: 5px 6px 7px; }
-  .printby { margin-top: 0; padding-top: 0; font-size: 7.5pt; color: #6B7280; }
+  .sign-tbl th:not(:last-child), .sign-role:not(:last-child) { border-right: 1px solid #111827; }
+  .sign-name { border-right: 1px solid #111827; }
+  .sign-tbl tr td:last-child { border-right: none; }
+  .anggota td:first-child { border-right: 1px solid #111827; }
+  .anggota tr:last-child td { border-bottom: none; }
+  .anggota table { flex: 1; height: 100%; }
+  .anggota td { height: 30px; vertical-align: middle; }
+  .printby { margin-top: 7px; font-size: 7.5pt; color: #6B7280; }
   tr { break-inside: avoid; }
 </style>
 </head>
@@ -220,66 +237,72 @@ function buildHotStampingReportHtml({ main, by }) {
     <div class="box-cols">
       <div class="col col-1">
         <div class="col-head">Pemakaian Bahan</div>
-        <div class="col-body">
-          <table>
-            <colgroup><col style="width:61.7%" /><col style="width:19.4%" /><col style="width:18.9%" /></colgroup>
-            <thead><tr><th>Nama Bahan</th><th class="center">Qty<br />()</th><th class="center">%</th></tr></thead>
-            <tbody>${inputBody}</tbody>
-          </table>
+        <div class="col-inner">
+          <i class="vl" style="left:61.7%"></i><i class="vl" style="left:81.1%"></i>
+          <div class="col-body">
+            <table>
+              <colgroup><col style="width:61.7%" /><col style="width:19.4%" /><col style="width:18.9%" /></colgroup>
+              <thead><tr><th>Nama Bahan</th><th class="center">Qty<br />(Pcs)</th><th class="center">Berat<br />(Kg)</th></tr></thead>
+              <tbody>${inputBody}</tbody>
+            </table>
+          </div>
+          <div class="col-foot">
+            <table>
+              <colgroup><col style="width:61.7%" /><col style="width:19.4%" /><col style="width:18.9%" /></colgroup>
+              <tr><td></td><td class="val">${fmtInt(inputQtyTotal)}</td><td class="val">${fmt2(inputBeratTotal)}</td></tr>
+            </table>
+          </div>
         </div>
       </div>
 
       <div class="col col-2">
         <div class="col-head">Hasil Hot Stamping</div>
-        <div class="col-body">
-          <table>
-            <colgroup><col style="width:63.8%" /><col style="width:15.9%" /><col style="width:9.6%" /><col style="width:10.7%" /></colgroup>
-            <thead>
-              <tr>
-                <th rowspan="2" class="center" style="vertical-align:middle; padding-bottom:10px">Nama Barang</th>
-                <th colspan="3" class="center">Bagus</th>
-              </tr>
-              <tr>
-                <th class="center">Jumlah<br />Label</th>
-                <th class="center">Qty</th>
-                <th class="center">Berat</th>
-              </tr>
-            </thead>
-            <tbody>${outputBody}</tbody>
-          </table>
+        <div class="col-inner">
+          <i class="vl" style="left:63.8%"></i><i class="vl sub" style="left:79.7%"></i><i class="vl sub" style="left:89.3%"></i>
+          <div class="col-body">
+            <table>
+              <colgroup><col style="width:63.8%" /><col style="width:15.9%" /><col style="width:9.6%" /><col style="width:10.7%" /></colgroup>
+              <thead>
+                <tr>
+                  <th rowspan="2" class="center" style="vertical-align:middle; padding-bottom:10px">Nama Barang</th>
+                  <th colspan="3" class="center">Bagus</th>
+                </tr>
+                <tr>
+                  <th class="center">Jumlah<br />Label</th>
+                  <th class="center">Qty<br />(Pcs)</th>
+                  <th class="center">Berat<br />(Kg)</th>
+                </tr>
+              </thead>
+              <tbody>${outputBody}</tbody>
+            </table>
+          </div>
+          <div class="col-foot">
+            <table>
+              <colgroup><col style="width:63.8%" /><col style="width:15.9%" /><col style="width:9.6%" /><col style="width:10.7%" /></colgroup>
+              <tr><td></td><td></td><td class="val">${fmtInt(outputQtyTotal)}</td><td class="val">${fmt2(outputBeratTotal)}</td></tr>
+            </table>
+          </div>
         </div>
       </div>
 
       <div class="col col-3">
         <div class="col-head">Downtime</div>
-        <div class="col-body">
-          <table>
-            <colgroup><col style="width:21.9%" /><col style="width:13.9%" /><col style="width:64.2%" /></colgroup>
-            <thead><tr><th class="center">Jam<br />Berhenti</th><th class="center">Durasi</th><th class="center">Keterangan</th></tr></thead>
-            <tbody></tbody>
-          </table>
+        <div class="col-inner">
+          <i class="vl" style="left:21.9%"></i><i class="vl" style="left:35.8%"></i>
+          <div class="col-body">
+            <table>
+              <colgroup><col style="width:21.9%" /><col style="width:13.9%" /><col style="width:64.2%" /></colgroup>
+              <thead><tr><th class="center">Jam<br />Berhenti</th><th class="center">Durasi</th><th class="center">Keterangan</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="col-foot">
+            <table>
+              <colgroup><col style="width:21.9%" /><col style="width:13.9%" /><col style="width:64.2%" /></colgroup>
+              <tr><td></td><td></td><td></td></tr>
+            </table>
+          </div>
         </div>
-      </div>
-    </div>
-
-    <div class="box-foot">
-      <div class="foot foot-1">
-        <table>
-          <colgroup><col style="width:61.7%" /><col style="width:19.4%" /><col style="width:18.9%" /></colgroup>
-          <tr><td></td><td class="val">${fmt2(inputTotal)}</td><td></td></tr>
-        </table>
-      </div>
-      <div class="foot foot-2">
-        <table>
-          <colgroup><col style="width:63.8%" /><col style="width:15.9%" /><col style="width:9.6%" /><col style="width:10.7%" /></colgroup>
-          <tr><td></td><td></td><td class="val">${fmtInt(outputQtyTotal)}</td><td class="val">${fmt2(outputBeratTotal)}</td></tr>
-        </table>
-      </div>
-      <div class="foot foot-3">
-        <table>
-          <colgroup><col style="width:21.9%" /><col style="width:13.9%" /><col style="width:64.2%" /></colgroup>
-          <tr><td></td><td></td><td></td></tr>
-        </table>
       </div>
     </div>
   </div>
@@ -343,7 +366,7 @@ async function renderHotStampingReportPdf({ main, by }) {
       format: "A4",
       landscape: true,
       printBackground: true,
-      margin: { top: "3mm", right: "3.9mm", bottom: "1.5mm", left: "2.1mm" },
+      margin: { top: "8mm", right: "8mm", bottom: "8mm", left: "8mm" },
     });
     return Buffer.from(pdf);
   } finally {

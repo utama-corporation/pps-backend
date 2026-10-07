@@ -237,11 +237,13 @@ function buildGilinganReportHtml({ main, downtime, by }) {
    .col-2 thead tr:last-child th { height: 31px; padding: 1px 5px 0; line-height: 1.25; white-space: nowrap; vertical-align: top; }
    .col-2 thead tr:last-child th:nth-child(2) { vertical-align: bottom; }
   tbody td { padding: 1px 5px; border-bottom: none; vertical-align: top; font-size: 7.7pt; line-height: 1.05; }
-  .col-1 thead th:not(:last-child), .col-1 tbody td:not(:last-child),
-  .col-3 thead th:not(:last-child), .col-3 tbody td:not(:last-child),
+  .col-1 thead th:not(:last-child),
+  .col-3 thead th:not(:last-child),
   .col-2 thead tr:first-child th:first-child,
-  .col-2 thead tr:last-child th:not(:last-child),
-  .col-2 tbody td:not(:last-child) { border-right: 1px solid #111827; }
+  .col-2 thead tr:last-child th:not(:last-child) { border-right: 1px solid #111827; }
+  .col-1 .col-body { background-image: linear-gradient(#111827,#111827); background-size: 1px 100%; background-position: 81% 0; background-repeat: no-repeat; }
+  .col-2 .col-body { background-image: linear-gradient(#111827,#111827), linear-gradient(#111827,#111827), linear-gradient(#111827,#111827); background-size: 1px 100%, 1px 100%, 1px 100%; background-position: 53.31% 0, 72.66% 0, 88.17% 0; background-repeat: no-repeat; }
+  .col-3 .col-body { background-image: linear-gradient(#111827,#111827), linear-gradient(#111827,#111827); background-size: 1px 100%, 1px 100%; background-position: 21.81% 0, 35.61% 0; background-repeat: no-repeat; }
   tbody tr:last-child td { border-bottom: none; }
   td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   td.center { text-align: center; }
@@ -253,7 +255,8 @@ function buildGilinganReportHtml({ main, downtime, by }) {
   .foot-1 { width: 29.6%; }
   .foot-2 { width: 43.2%; }
   .foot-3 { width: 27.2%; }
-  .box-foot table td { padding: 4px 5px; font-weight: 700; border-bottom: none; }
+  .box-foot table td { padding: 4px 5px; font-weight: 700; border-bottom: none; border-right: 1px solid #111827; }
+  .box-foot table td:last-child { border-right: none; }
   .box-foot .val { text-align: right; font-variant-numeric: tabular-nums; }
   .sign { display: flex; border: 1.5px solid #111827; margin-top: 23px; }
   .sign-tbl { flex: 1; min-width: 0; }
@@ -339,7 +342,7 @@ function buildGilinganReportHtml({ main, downtime, by }) {
       <div class="foot foot-2">
         <table>
           <colgroup><col style="width:53.31%" /><col style="width:19.35%" /><col style="width:15.51%" /><col style="width:11.83%" /></colgroup>
-          <tr><td></td><td></td><td class="val">${fmtKg(outputTotal)}</td><td></td></tr>
+          <tr><td colspan="2"></td><td class="val">${fmtKg(outputTotal)}</td><td></td></tr>
         </table>
       </div>
       <div class="foot foot-3">

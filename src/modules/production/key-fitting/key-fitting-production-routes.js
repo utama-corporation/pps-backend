@@ -87,4 +87,10 @@ router.delete(
   keyFittingController.deleteInputsAndPartials,
 );
 
+router.get(
+  "/key-fitting/:noProduksi/report/pdf",
+  verifyToken,
+  keyFittingController.exportReportPdf,
+);
+
 module.exports = router;

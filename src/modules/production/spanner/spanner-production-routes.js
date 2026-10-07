@@ -100,4 +100,10 @@ router.get(
   spannerController.getLabelByIdFurnitureWip,
 );
 
+router.get(
+  "/spanner/:noProduksi/report/pdf",
+  verifyToken,
+  spannerController.exportReportPdf,
+);
+
 module.exports = router;

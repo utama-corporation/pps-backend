@@ -1681,7 +1681,19 @@ async function getLabelByIdFurnitureWIP(idFurnitureWIP) {
   }));
 }
 
+async function runLaporanHasilProduksiHarianSpanner(noProduksi) {
+  const noProduksiStr = String(noProduksi || "").trim();
+  if (!noProduksiStr) throw badReq("NoProduksi wajib diisi");
+
+  const pool = await poolPromise;
+  const res = await new sql.Request(pool)
+    .input("NoProduksi", sql.VarChar(20), noProduksiStr)
+    .execute("SP_LapHasilProduksiHarianSpanner");
+  return res.recordset || [];
+}
+
 module.exports = {
+  runLaporanHasilProduksiHarianSpanner,
   getAllProduksi,
   getProductionByDate,
   createSpannerProduksi,

@@ -1705,7 +1705,19 @@ async function getLabelByIdBJ(idBJ) {
   }));
 }
 
+async function runLaporanHasilProduksiHarianPacking(noProduksi) {
+  const noProduksiStr = String(noProduksi || "").trim();
+  if (!noProduksiStr) throw badReq("NoProduksi wajib diisi");
+
+  const pool = await poolPromise;
+  const res = await new sql.Request(pool)
+    .input("NoProduksi", sql.VarChar(20), noProduksiStr)
+    .execute("SP_LapHasilProduksiHarianPacking");
+  return res.recordset || [];
+}
+
 module.exports = {
+  runLaporanHasilProduksiHarianPacking,
   getAllProduksi,
   getProduksiByDate,
   createPackingProduksi,

@@ -1628,7 +1628,19 @@ async function completeKeyFittingProduksi(noProduksi, ctx) {
   }
 }
 
+async function runLaporanHasilProduksiHarianPasangKunci(noProduksi) {
+  const noProduksiStr = String(noProduksi || "").trim();
+  if (!noProduksiStr) throw badReq("NoProduksi wajib diisi");
+
+  const pool = await poolPromise;
+  const res = await new sql.Request(pool)
+    .input("NoProduksi", sql.VarChar(20), noProduksiStr)
+    .execute("SP_LapHasilProduksiHarianPasangKunci");
+  return res.recordset || [];
+}
+
 module.exports = {
+  runLaporanHasilProduksiHarianPasangKunci,
   getAllProduksi,
   getProductionByDate,
   createKeyFittingProduksi,

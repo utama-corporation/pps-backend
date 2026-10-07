@@ -901,7 +901,49 @@ async function getLabelByIdBJ(req, res) {
   }
 }
 
+const {
+  buildPackingMain,
+  renderPackingReportPdf,
+} = require("./packing-report-pdf");
+
+async function exportReportPdf(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+  try {
+    const spRows =
+      await packingService.runLaporanHasilProduksiHarianPacking(noProduksi);
+    const main = buildPackingMain(spRows, noProduksi);
+    const pdf = await renderPackingReportPdf({
+      main,
+      by: req.username || "",
+    });
+    const safeName =
+      noProduksi.replace(/[^A-Za-z0-9_-]+/g, "-") || "laporan";
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="Laporan-Packing-${safeName}.pdf"`,
+    );
+    res.setHeader("Content-Length", pdf.length);
+    return res.end(pdf);
+  } catch (err) {
+    console.error("[packing.exportReportPdf]", err);
+    const status = err.statusCode || err.status || 500;
+    return res.status(status).json({
+      success: false,
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
+      error: { message: err.message },
+    });
+  }
+}
+
 module.exports = {
+  exportReportPdf,
   getAllProduksi,
   getProduksiByDate,
   createProduksi,
