@@ -103,4 +103,10 @@ router.get(
   hotStampingController.getLabelByIdFurnitureWip,
 );
 
+router.get(
+  "/hot-stamp/:noProduksi/report/pdf",
+  verifyToken,
+  hotStampingController.exportReportPdf,
+);
+
 module.exports = router;

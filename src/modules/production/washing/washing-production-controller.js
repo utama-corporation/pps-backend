@@ -1225,6 +1225,54 @@ async function deleteQc(req, res) {
   }
 }
 
+const {
+  buildWashingV22Main,
+  buildWashingV22Downtime,
+  renderWashingReportPdf,
+} = require("./washing-report-pdf");
+
+async function exportReportPdf(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+  try {
+    const spRows =
+      await washingProduksiService.runLaporanHasilProduksiHarianWashing(
+        noProduksi,
+      );
+    const downtimeRows =
+      await washingProduksiService.fetchWashingDowntimeRows(noProduksi);
+    const main = buildWashingV22Main(spRows, noProduksi);
+    const downtime = buildWashingV22Downtime(downtimeRows);
+    const pdf = await renderWashingReportPdf({
+      main,
+      downtime,
+      by: req.username || "",
+    });
+    const safeName =
+      noProduksi.replace(/[^A-Za-z0-9_-]+/g, "-") || "laporan";
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="Laporan-Washing-${safeName}.pdf"`,
+    );
+    res.setHeader("Content-Length", pdf.length);
+    return res.end(pdf);
+  } catch (err) {
+    console.error("[washing.exportReportPdf]", err);
+    const status = err.statusCode || err.status || 500;
+    return res.status(status).json({
+      success: false,
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
+      error: { message: err.message },
+    });
+  }
+}
+
 module.exports = {
   getProduksiByDate,
   getAllProduksi,
@@ -1248,4 +1296,5 @@ module.exports = {
   upsertInputsAndPartials,
   deleteInputsAndPartials,
   splitProduksiTime,
+  exportReportPdf,
 };

@@ -240,6 +240,9 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
     // Label utuh yang dipakai penuh TIDAK dapat baris partial — konsumsi penuh,
     // konvensi yang sama dipakai penjualan.
     const createdPartials = [];
+    // Label yang dicatat lewat tabel partial TIDAK ikut masuk ke
+    // BongkarSusunInputBarangJadi — satu label hanya ada di salah satu tabel.
+    const partialLabelCodes = new Set();
 
     for (const row of inputDataRes.recordset) {
       const availablePcs = Number(row.AvailablePcs || 0);
@@ -263,6 +266,7 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
             VALUES (@NoBongkarSusun, @NoBJPartial)
           `);
 
+        partialLabelCodes.add(row.NoBJ);
         createdPartials.push({
           labelCode: row.NoBJ,
           noBJPartial,
@@ -272,14 +276,22 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
       }
     }
 
-    await new sql.Request(tx)
-      .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
-      .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson).query(`
-        INSERT INTO dbo.BongkarSusunInputBarangjadi (NoBongkarSusun, NoBJ)
-        SELECT @NoBongkarSusun, j.code
-        FROM OPENJSON(@CodesJson)
-        WITH (code varchar(50) '$.code') AS j
-      `);
+    // Hanya label yang dipakai penuh (tanpa baris partial) yang masuk sini.
+    const fullInputCodes = inputs.filter((c) => !partialLabelCodes.has(c));
+    if (fullInputCodes.length > 0) {
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .input(
+          "CodesJson",
+          sql.NVarChar(sql.MAX),
+          JSON.stringify(fullInputCodes.map((c) => ({ code: c }))),
+        ).query(`
+          INSERT INTO dbo.BongkarSusunInputBarangjadi (NoBongkarSusun, NoBJ)
+          SELECT @NoBongkarSusun, j.code
+          FROM OPENJSON(@CodesJson)
+          WITH (code varchar(50) '$.code') AS j
+        `);
+    }
 
 // Label yang sisa pcs-nya habis terpakai (used == available) ditandai
     // terpakai. Label dengan sisa tersisa (override inputsPartial) TIDAK —

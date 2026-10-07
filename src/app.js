@@ -31,6 +31,7 @@ const mstMesinRoutes = require("./modules/master-mesin/master-mesin-routes");
 const mstBahanBakuRoutes = require("./modules/master/bahan-baku/master-bahan-baku-routes");
 const mstOperatorRoutes = require("./modules/master-operator/master-operator-routes");
 const mstCetakanRoutes = require("./modules/master-cetakan/master-cetakan-route");
+const mstFormulaRoutes = require("./modules/master-formula/master-formula-route");
 const mstWarnaRoutes = require("./modules/master-warna/master-warna-route");
 const mstWashingRoutes = require("./modules/master/washing/master-washing-route");
 const mstGilinganRoutes = require("./modules/master/gilingan/master-gilingan-route");
@@ -91,7 +92,9 @@ const masterJenisRoutes = require("./modules/master-jenis/master-jenis-routes");
 const masterKategoriRoutes = require("./modules/master-kategori/master-kategori-routes");
 const tradeInRoutes = require("./modules/trade-in/trade-in-routes");
 const laporanBrokerRoutes = require("./modules/laporan/broker/broker-route");
+const laporanRoutes = require("./modules/laporan/laporan-route");
 const masterPermissionGroupRoutes = require("./modules/master-permission-group/master-permission-group-routes");
+const mstUserRoutes = require("./modules/mst-user/mst-user-route");
 
 const app = express();
 
@@ -146,6 +149,7 @@ app.use("/api", mstBahanBakuRoutes);
 app.use("/api/mst-operator", mstOperatorRoutes);
 app.use("/api/production", checkOverlapRoutes);
 app.use("/api/mst-cetakan", mstCetakanRoutes);
+app.use("/api/mst-formula", mstFormulaRoutes);
 app.use("/api/mst-warna", mstWarnaRoutes);
 app.use("/api/mst-washing", mstWashingRoutes);
 app.use("/api/mst-gilingan", mstGilinganRoutes);
@@ -200,7 +204,9 @@ app.use("/api/audit", auditRoutes);
 app.use("/api/trade-in", tradeInRoutes);
 app.use("/api/retur-v3", returV3Routes);
 app.use("/api/laporan/broker", laporanBrokerRoutes);
+app.use("/api/laporan", laporanRoutes);
 app.use("/api/master-permission-group", masterPermissionGroupRoutes);
+app.use("/api/mst-user", mstUserRoutes);
 
 // ❌ Error handling
 app.use((err, req, res, next) => {

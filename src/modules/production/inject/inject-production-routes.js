@@ -194,6 +194,12 @@ router.get(
 );
 
 router.get(
+  "/inject/:noProduksi/report/pdf",
+  verifyToken,
+  injectProduksiController.exportReportPdf,
+);
+
+router.get(
   "/inject/validate-label/:labelCode",
   verifyToken,
   injectProduksiController.validateLabel,

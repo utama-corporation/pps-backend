@@ -1785,6 +1785,17 @@ async function getLabelByIdFurnitureWIP(idFurnitureWIP) {
   }));
 }
 
+async function runLaporanHasilProduksiHarianHotStamping(noProduksi) {
+  const noProduksiStr = String(noProduksi || "").trim();
+  if (!noProduksiStr) throw badReq("NoProduksi wajib diisi");
+
+  const pool = await poolPromise;
+  const res = await new sql.Request(pool)
+    .input("NoProduksi", sql.VarChar(20), noProduksiStr)
+    .execute("SP_LapHasilProduksiHarianHotStamping");
+  return res.recordset || [];
+}
+
 module.exports = {
   getProduksiByDate,
   getAllProduksi,
@@ -1802,4 +1813,5 @@ module.exports = {
   splitProduksiTime,
   getStok,
   getLabelByIdFurnitureWIP,
+  runLaporanHasilProduksiHarianHotStamping,
 };

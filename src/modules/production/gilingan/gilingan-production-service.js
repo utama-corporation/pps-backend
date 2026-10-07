@@ -2153,6 +2153,35 @@ async function splitProduksiTime(selector, payload, ctx) {
   }
 }
 
+async function runLaporanHasilProduksiHarianGilingan(noProduksi) {
+  const noProduksiStr = String(noProduksi || "").trim();
+  if (!noProduksiStr) throw badReq("NoProduksi wajib diisi");
+
+  const pool = await poolPromise;
+  const res = await new sql.Request(pool)
+    .input("NoProduksi", sql.VarChar(20), noProduksiStr)
+    .execute("SP_LapHasilProduksiHarianGilingan");
+  return res.recordset || [];
+}
+
+async function fetchGilinganDowntimeRows(noProduksi) {
+  const noProduksiStr = String(noProduksi || "").trim();
+  if (!noProduksiStr) throw badReq("NoProduksi wajib diisi");
+
+  const pool = await poolPromise;
+  const res = await new sql.Request(pool)
+    .input("NoProduksi", sql.VarChar(20), noProduksiStr)
+    .query(
+      `SELECT NoProduksi, NoUrut, TimeStart, TimeEnd, Remarks
+       FROM dbo.GilinganProduksi_dDowntime
+       WHERE NoProduksi = @NoProduksi
+         AND TimeStart IS NOT NULL
+         AND TimeEnd IS NOT NULL
+       ORDER BY NoUrut`,
+    );
+  return res.recordset || [];
+}
+
 module.exports = {
   getProduksiByDate,
   getAllProduksi,
@@ -2167,4 +2196,6 @@ module.exports = {
   upsertInputsAndPartials,
   deleteInputsAndPartials,
   splitProduksiTime,
+  runLaporanHasilProduksiHarianGilingan,
+  fetchGilinganDowntimeRows,
 };

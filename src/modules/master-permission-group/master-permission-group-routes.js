@@ -1,5 +1,7 @@
 const express = require("express");
 const verifyToken = require("../../core/middleware/verify-token");
+const attachPermissions = require("../../core/middleware/attach-permissions");
+const requirePermission = require("../../core/middleware/require-permission");
 const {
   getListHandler,
   getPermissionListHandler,
@@ -14,22 +16,27 @@ const {
 
 const router = express.Router();
 
+const readPerm = [verifyToken, attachPermissions, requirePermission("datamasterpermissiongroup:read")];
+const createPerm = [verifyToken, attachPermissions, requirePermission("datamasterpermissiongroup:create")];
+const updatePerm = [verifyToken, attachPermissions, requirePermission("datamasterpermissiongroup:update")];
+const deletePerm = [verifyToken, attachPermissions, requirePermission("datamasterpermissiongroup:delete")];
+
 // =========================
 // MASTER DATA (WAJIB sebelum :idUGroup)
 // =========================
-router.get("/permissions", verifyToken, getPermissionListHandler);
-router.post("/permissions", verifyToken, createPermissionHandler);
-router.put("/permissions/:noPermission", verifyToken, updatePermissionHandler);
-router.delete("/permissions/:noPermission", verifyToken, deletePermissionHandler);
+router.get("/permissions", ...readPerm, getPermissionListHandler);
+router.post("/permissions", ...createPerm, createPermissionHandler);
+router.put("/permissions/:noPermission", ...updatePerm, updatePermissionHandler);
+router.delete("/permissions/:noPermission", ...deletePerm, deletePermissionHandler);
 
 // =========================
 // CRUD
 // =========================
-router.get("/", verifyToken, getListHandler);
-router.get("/:idUGroup", verifyToken, getDetailHandler);
+router.get("/", ...readPerm, getListHandler);
+router.get("/:idUGroup", ...readPerm, getDetailHandler);
 
-router.post("/", verifyToken, saveNewHandler);
-router.put("/:idUGroup", verifyToken, saveUpdateHandler);
-router.delete("/:idUGroup", verifyToken, removeHandler);
+router.post("/", ...createPerm, saveNewHandler);
+router.put("/:idUGroup", ...updatePerm, saveUpdateHandler);
+router.delete("/:idUGroup", ...deletePerm, removeHandler);
 
 module.exports = router;

@@ -92,4 +92,10 @@ router.post(
   gilinganProduksiController.splitProduksiTime,
 );
 
+router.get(
+  "/gilingan/:noProduksi/report/pdf",
+  verifyToken,
+  gilinganProduksiController.exportReportPdf,
+);
+
 module.exports = router;

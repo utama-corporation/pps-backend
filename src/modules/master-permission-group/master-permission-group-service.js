@@ -30,6 +30,9 @@ function validateBody(body) {
   if (!uGroupName) {
     throw badReq("Nama Group harus diisi.");
   }
+  if (uGroupName.length > 25) {
+    throw badReq("Nama Group maksimal 25 karakter.");
+  }
   const permissions = normalizePermissions(body.permissions);
   return { uGroupName, permissions };
 }
@@ -106,7 +109,9 @@ function normalizePermissionBody(body) {
   const permission = String(body.permission || "").trim();
 
   if (!noPermission) throw badReq("NoPermission harus diisi.");
+  if (noPermission.length > 50) throw badReq("NoPermission maksimal 50 karakter.");
   if (!permission) throw badReq("Permission harus diisi.");
+  if (permission.length > 50) throw badReq("Permission maksimal 50 karakter.");
 
   return { noPermission, permission };
 }
@@ -352,7 +357,7 @@ async function remove(idUGroup) {
   const memberCheck = await pool.request()
     .input("IdUGroup", sql.Int, id)
     .query(`
-      SELECT TOP 1 DISTINCT IdUGroup
+      SELECT DISTINCT TOP 1 IdUGroup
         FROM dbo.MstUserGroupMember
        WHERE IdUGroup = @IdUGroup`);
   if (memberCheck.recordset.length) {

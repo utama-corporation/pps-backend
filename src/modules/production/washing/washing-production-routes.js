@@ -151,4 +151,12 @@ router.delete(
   washingProduksiController.deleteQc,
 );
 
+// Laporan PDF hasil produksi harian washing (SP_LapHasilProduksiHarianWashing
+// + render CrWashingProduksi.rpt via Crystal Reports runtime)
+router.get(
+  "/washing/:noProduksi/report/pdf",
+  verifyToken,
+  washingProduksiController.exportReportPdf,
+);
+
 module.exports = router;
