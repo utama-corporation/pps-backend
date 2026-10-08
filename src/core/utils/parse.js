@@ -87,6 +87,26 @@ const toBit = (v) => {
 };
 
 // ----------------------
+// Sisa akhir shift normalizer (bonggolan / reject)
+// Menerima objek tunggal (payload lama) ATAU array of { id, berat }.
+// Entri yang kosong total (id & berat null) dibuang.
+// ----------------------
+const toSisaOutputList = (value, idKey) => {
+  const source = Array.isArray(value)
+    ? value
+    : value && typeof value === "object"
+      ? [value]
+      : [];
+  return source
+    .filter((entry) => entry && typeof entry === "object")
+    .map((entry) => ({
+      [idKey]: toInt(entry[idKey]),
+      berat: toFloat(entry.berat),
+    }))
+    .filter((entry) => entry[idKey] !== null || entry.berat !== null);
+};
+
+// ----------------------
 // Jam INT helper ("HH:mm" / "HH:mm:ss" -> HH)
 // ----------------------
 const toJamInt = (v) => {
@@ -107,6 +127,7 @@ module.exports = {
   normalizeTime,
   toBit,
   toJamInt,
+  toSisaOutputList,
 
   // CREATE helpers
   toIntCreate,

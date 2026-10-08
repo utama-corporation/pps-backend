@@ -6,6 +6,8 @@ function detectCategory(labelCode) {
   const code = normalizeLabelCode(labelCode);
   if (code.startsWith("A.")) return "bahanBaku";
   if (code.startsWith("BA.")) return "barangJadi";
+  // BF. (reject) harus dicek SEBELUM B. supaya tidak tertelan prefix 2 huruf.
+  if (code.startsWith("BF.")) return "reject";
   if (code.startsWith("B.")) return "washing";
   if (code.startsWith("D.")) return "broker";
   if (code.startsWith("F.")) return "crusher";
@@ -26,6 +28,7 @@ const CREATE_METHOD_BY_CATEGORY = {
   barangJadi: "createBongkarSusunBarangJadi",
   bonggolan: "createBongkarSusunBonggolan",
   mixer: "createBongkarSusunMixer",
+  reject: "createBongkarSusunReject",
 };
 
 const LABEL_INFO_METHOD_BY_CATEGORY = {
@@ -38,6 +41,7 @@ const LABEL_INFO_METHOD_BY_CATEGORY = {
   barangJadi: "getLabelInfoBarangJadi",
   bonggolan: "getLabelInfoBonggolan",
   mixer: "getLabelInfoMixer",
+  reject: "getLabelInfoReject",
 };
 
 module.exports = {

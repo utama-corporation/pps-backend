@@ -15,6 +15,7 @@ const {
   toBitUndef,
   toStrUndef,
   toJamInt,
+  toSisaOutputList,
 } = require("../../../core/utils/parse");
 
 function normalizeInjectBatchPayload(source, { noProduksi } = {}) {
@@ -51,18 +52,13 @@ function normalizeInjectBatchPayload(source, { noProduksi } = {}) {
     }));
   }
 
-  if (payload.bonggolan && typeof payload.bonggolan === "object") {
-    payload.bonggolan = {
-      idBonggolan: toInt(payload.bonggolan.idBonggolan),
-      berat: toFloat(payload.bonggolan.berat),
-    };
+  // Sisa akhir shift boleh berisi satu jenis (payload lama) atau banyak jenis.
+  if (payload.bonggolan !== undefined && payload.bonggolan !== null) {
+    payload.bonggolan = toSisaOutputList(payload.bonggolan, "idBonggolan");
   }
 
-  if (payload.reject && typeof payload.reject === "object") {
-    payload.reject = {
-      idReject: toInt(payload.reject.idReject),
-      berat: toFloat(payload.reject.berat),
-    };
+  if (payload.reject !== undefined && payload.reject !== null) {
+    payload.reject = toSisaOutputList(payload.reject, "idReject");
   }
 
   return payload;
@@ -766,6 +762,27 @@ async function terminateInjectProduksi(req, res) {
         success: false,
         message: "hourEnd wajib (jam berhenti produksi)",
       });
+  }
+
+  // Terminasi hanya menerima "HH:mm" atau "HH:mm:ss" dengan jam valid
+  // (00-23 / 00-59 / 00-59). Tanpa cek ini, nilai seperti "9:5", "25:00", atau
+  // "11:60" lolos ke `CAST(@HourEnd AS time(7))` dan berakhir sebagai 500
+  // "Internal Server Error", bukan pesan yang bisa dibaca operator.
+  // Setara dengan normalizeBatchHourStart() yang dipakai submitInjectBatch.
+  const hourEndParts = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(hourEnd);
+  const hourEndH = hourEndParts ? Number(hourEndParts[1]) : -1;
+  const hourEndM = hourEndParts ? Number(hourEndParts[2]) : -1;
+  const hourEndS = hourEndParts ? Number(hourEndParts[3] || "0") : -1;
+  if (
+    !hourEndParts ||
+    hourEndH > 23 ||
+    hourEndM > 59 ||
+    hourEndS > 59
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: `Format hourEnd tidak valid: "${hourEnd}". Gunakan HH:mm atau HH:mm:ss (jam 00-23).`,
+    });
   }
 
   const batchSource =

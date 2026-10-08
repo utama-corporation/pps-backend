@@ -1,11 +1,44 @@
-const puppeteer = require('puppeteer');
+const fs = require("fs");
+const puppeteer = require("puppeteer");
 
 let browser = null;
 
+// Puppeteer butuh Chrome/Chromium. Di container Dockerfile sudah di-install
+// (`npx puppeteer browsers install chrome`), tapi kalau backend dijalankan
+// langsung di mesin dev (node server.js) cache-nya belum ada sehingga
+// launch() gagal dengan "Could not find Chrome". Fallback: pakai Chrome/
+// Edge yang sudah terpasang di sistem, atau path dari environment variable.
+const SYSTEM_BROWSER_CANDIDATES = [
+  process.env.PUPPETEER_EXECUTABLE_PATH,
+  process.env.CHROME_PATH,
+  // Windows
+  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+  "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  // Linux / Docker
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+].filter(Boolean);
+
+function resolveExecutablePath() {
+  try {
+    const bundled = puppeteer.executablePath();
+    if (bundled && fs.existsSync(bundled)) return bundled;
+  } catch (_) {
+    // abaikan, lanjut ke kandidat sistem
+  }
+  return SYSTEM_BROWSER_CANDIDATES.find((p) => fs.existsSync(p)) || null;
+}
+
 async function getBrowser() {
   if (!browser || !browser.isConnected()) {
+    const executablePath = resolveExecutablePath();
     browser = await puppeteer.launch({
       headless: 'new',
+      ...(executablePath ? { executablePath } : {}),
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
     });
   }

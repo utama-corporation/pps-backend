@@ -965,6 +965,7 @@ const MODULE_CONFIG = {
       "BongkarSusunOutputBroker",
       "BongkarSusunOutputMixer",
       "BongkarSusunOutputFurnitureWIP",
+      "BongkarSusunOutputReject",
     ],
 
     inputTables: [
@@ -977,6 +978,7 @@ const MODULE_CONFIG = {
       "BongkarSusunInputBonggolan",
       "BongkarSusunInputFurnitureWIP",
       "BongkarSusunInputBarangjadi",
+      "BongkarSusunInputReject",
     ],
 
     scalarFields: ["Tanggal", "Note"],

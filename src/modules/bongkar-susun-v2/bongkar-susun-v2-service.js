@@ -1,6 +1,6 @@
 ﻿// modules/bongkar-susun-v2/bongkar-susun-v2-service.js
 const { sql, poolPromise } = require("../../core/config/db");
-const { conflict } = require("../../core/utils/http-error");
+const { badReq, conflict } = require("../../core/utils/http-error");
 const { formatYMD } = require("../../core/shared/tutup-transaksi-guard");
 const { buildBongkarSusunReportHtml } = require("./reports/bongkar-susun-report-pdf");
 
@@ -18,6 +18,7 @@ const getLabelInfoFurnitureWipHandler = require("./handlers/get-label-info-furni
 const getLabelInfoBonggolanHandler = require("./handlers/get-label-info-bonggolan.handler");
 const getLabelInfoBarangJadiHandler = require("./handlers/get-label-info-barang-jadi.handler");
 const getLabelInfoMixerHandler = require("./handlers/get-label-info-mixer.handler");
+const getLabelInfoRejectHandler = require("./handlers/get-label-info-reject.handler");
 
 // GET label info dispatcher
 exports.getLabelInfo = async (labelCode) => {
@@ -49,6 +50,7 @@ exports.getLabelInfo = async (labelCode) => {
       getLabelInfoBarangJadiHandler.getLabelInfoBarangJadi,
     getLabelInfoBonggolan: getLabelInfoBonggolanHandler.getLabelInfoBonggolan,
     getLabelInfoMixer: getLabelInfoMixerHandler.getLabelInfoMixer,
+    getLabelInfoReject: getLabelInfoRejectHandler.getLabelInfoReject,
   };
 
   const fn = handlers[method];
@@ -334,6 +336,32 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
             FROM dbo.BongkarSusunOutputBonggolan obg
             WHERE obg.NoBongkarSusun = h.NoBongkarSusun
           )
+
+          UNION ALL
+
+          SELECT
+            'reject' AS category,
+            (
+              SELECT COUNT(DISTINCT ir.NoReject)
+              FROM dbo.BongkarSusunInputReject ir
+              WHERE ir.NoBongkarSusun = h.NoBongkarSusun
+            ) AS inputLabelCount,
+            (
+              SELECT COUNT(DISTINCT orj.NoReject)
+              FROM dbo.BongkarSusunOutputReject orj
+              WHERE orj.NoBongkarSusun = h.NoBongkarSusun
+            ) AS outputLabelCount,
+            10 AS priority
+          WHERE EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunInputReject ir
+            WHERE ir.NoBongkarSusun = h.NoBongkarSusun
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunOutputReject orj
+            WHERE orj.NoBongkarSusun = h.NoBongkarSusun
+          )
         ) x
         ORDER BY x.priority
       ) cat
@@ -348,7 +376,8 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
             (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputMixer      WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputMixer        WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
             (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputFurnitureWIP WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputFurnitureWIP WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
             (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputBarangJadi WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputBarangjadi  WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
-            (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputBonggolan  WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputBonggolan   WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END)
+            (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputBonggolan  WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputBonggolan   WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
+            (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputReject     WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputReject     WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END)
           ) > 1 THEN CAST(0 AS bit)
           WHEN cat.category = 'bahanBaku' THEN
             CASE
@@ -768,6 +797,70 @@ bibj.NoBongkarSusun,
                   WHERE obg.NoBongkarSusun = h.NoBongkarSusun
                 ), 0)
               ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
+          WHEN cat.category = 'reject' THEN
+            CASE
+              WHEN EXISTS (
+                SELECT r.IdReject FROM dbo.BongkarSusunInputReject ir
+                INNER JOIN dbo.RejectV2 r ON r.NoReject = ir.NoReject
+                WHERE ir.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT r.IdReject FROM dbo.BongkarSusunOutputReject orj
+                INNER JOIN dbo.RejectV2 r ON r.NoReject = orj.NoReject
+                WHERE orj.NoBongkarSusun = h.NoBongkarSusun
+              ) OR EXISTS (
+                SELECT r.IdReject FROM dbo.BongkarSusunOutputReject orj
+                INNER JOIN dbo.RejectV2 r ON r.NoReject = orj.NoReject
+                WHERE orj.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT r.IdReject FROM dbo.BongkarSusunInputReject ir
+                INNER JOIN dbo.RejectV2 r ON r.NoReject = ir.NoReject
+                WHERE ir.NoBongkarSusun = h.NoBongkarSusun
+              ) THEN CAST(0 AS bit)
+              -- Input parsial (label dipakai sebagian) berat terpakainya
+              -- diambil dari RejectV2Partial milik transaksi ini lewat
+              -- dbo.BongkarSusunInputRejectPartial. Fallback "sisa berat"
+              -- hanya untuk baris input TANPA baris link, yaitu label utuh
+              -- yang sekali pakai penuh.
+              WHEN ABS(
+                ISNULL((
+                  SELECT SUM(
+                    COALESCE(
+                      bsip.UsedPartialBerat,
+                      CASE
+                        WHEN ISNULL(r.Berat, 0) - ISNULL(rp.TotalPartialBerat, 0) < 0
+                          THEN 0
+                        ELSE ISNULL(r.Berat, 0) - ISNULL(rp.TotalPartialBerat, 0)
+                      END
+                    )
+                  )
+                  FROM dbo.BongkarSusunInputReject ir
+                  INNER JOIN dbo.RejectV2 r ON r.NoReject = ir.NoReject
+                  LEFT JOIN (
+                    SELECT NoReject, SUM(ISNULL(Berat, 0)) AS TotalPartialBerat
+                    FROM dbo.RejectV2Partial
+                    GROUP BY NoReject
+                  ) rp ON rp.NoReject = r.NoReject
+                  LEFT JOIN (
+                    SELECT
+                      bip.NoBongkarSusun,
+                      rpp.NoReject,
+                      SUM(ISNULL(rpp.Berat, 0)) AS UsedPartialBerat
+                    FROM dbo.BongkarSusunInputRejectPartial bip
+                    INNER JOIN dbo.RejectV2Partial rpp
+                      ON rpp.NoRejectPartial = bip.NoRejectPartial
+                    GROUP BY bip.NoBongkarSusun, rpp.NoReject
+                  ) bsip
+                    ON bsip.NoBongkarSusun = ir.NoBongkarSusun
+                   AND bsip.NoReject = ir.NoReject
+                  WHERE ir.NoBongkarSusun = h.NoBongkarSusun
+                ), 0) -
+                ISNULL((
+                  SELECT SUM(ISNULL(r.Berat, 0))
+                  FROM dbo.BongkarSusunOutputReject orj
+                  INNER JOIN dbo.RejectV2 r ON r.NoReject = orj.NoReject
+                  WHERE orj.NoBongkarSusun = h.NoBongkarSusun
+                ), 0)
+              ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
           ELSE CAST(0 AS bit)
         END AS balance
       ) bal
@@ -1026,6 +1119,63 @@ exports.getDetail = async (noBongkarSusun) => {
       WHERE ig.NoBongkarSusun = @NoBongkarSusun
     `);
 
+  // inputs â€” reject
+  // Berat yang ditampilkan = berat yang benar-benar terpakai siklus ini.
+  // Kalau baris input punya baris di BongkarSusunInputRejectPartial, beratnya
+  // = SUM(RejectV2Partial.Berat) milik baris itu (label dipakai sebagian).
+  // Tanpa baris link (label utuh sekali pakai penuh) = sisa berat label.
+  const inputsRejectRes = await pool
+    .request()
+    .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
+      SELECT
+        ir.NoReject           AS labelCode,
+        'reject'              AS category,
+        r.IdReject            AS idJenis,
+        mr.NamaReject         AS namaJenis,
+        r.DateCreate,
+        -- Berat asli label sebelum dipecah, supaya client bisa menampilkan
+        -- "20,29 / 27,29 kg" (dipakai / total) seperti barangJadi menampilkan
+        -- "9 / 15 pcs".
+        ISNULL(r.Berat, 0) AS totalBeratLabel,
+        CASE
+          WHEN bsrp.UsedPartialBerat IS NOT NULL THEN bsrp.UsedPartialBerat
+          WHEN ISNULL(r.Berat, 0) - ISNULL(rp.TotalPartialBerat, 0) < 0
+            THEN 0
+          ELSE ISNULL(r.Berat, 0) - ISNULL(rp.TotalPartialBerat, 0)
+        END AS totalBerat,
+        ISNULL(rp.TotalPartialBerat, 0) AS totalPartialBerat,
+        -- Tanda input ini hasil konsumsi label yang SUDAH pernah dipecah
+        -- atau yang hanya dipakai sebagian. Baris link di
+        -- BongkarSusunInputRejectPartial dibuat create handler hanya untuk
+        -- kasus itu; label utuh yang sekali pakai penuh tidak punya baris
+        -- link (pola yang sama dengan barangJadi / furnitureWip / mixer).
+        CAST(CASE WHEN bsrp.NoRejectPartial IS NOT NULL THEN 1 ELSE 0 END AS bit) AS isPartial,
+        bsrp.NoRejectPartial AS noPartial,
+        ISNULL(CAST(r.HasBeenPrinted AS int), 0) AS hasBeenPrinted
+      FROM dbo.BongkarSusunInputReject ir
+      INNER JOIN dbo.RejectV2 r ON r.NoReject = ir.NoReject
+      LEFT JOIN dbo.MstReject mr ON mr.IdReject = r.IdReject
+      LEFT JOIN (
+        SELECT NoReject, SUM(ISNULL(Berat, 0)) AS TotalPartialBerat
+        FROM dbo.RejectV2Partial
+        GROUP BY NoReject
+      ) rp ON rp.NoReject = r.NoReject
+      LEFT JOIN (
+        SELECT
+          bip.NoBongkarSusun,
+          rpp.NoReject,
+          MIN(rpp.NoRejectPartial)      AS NoRejectPartial,
+          SUM(ISNULL(rpp.Berat, 0))     AS UsedPartialBerat
+        FROM dbo.BongkarSusunInputRejectPartial bip
+        INNER JOIN dbo.RejectV2Partial rpp
+          ON rpp.NoRejectPartial = bip.NoRejectPartial
+        GROUP BY bip.NoBongkarSusun, rpp.NoReject
+      ) bsrp
+        ON bsrp.NoBongkarSusun = ir.NoBongkarSusun
+       AND bsrp.NoReject = ir.NoReject
+      WHERE ir.NoBongkarSusun = @NoBongkarSusun
+    `);
+
   // inputs â€” furnitureWip
   const inputsFurnitureWipRes = await pool
     .request()
@@ -1249,6 +1399,23 @@ bibj.NoBongkarSusun,
       WHERE og.NoBongkarSusun = @NoBongkarSusun
     `);
 
+  // outputs â€” reject
+  const outputsRejectRes = await pool
+    .request()
+    .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
+      SELECT
+        orj.NoReject          AS labelCode,
+        'reject'             AS category,
+        r.IdReject           AS idJenis,
+        mr.NamaReject        AS namaJenis,
+        ISNULL(r.Berat, 0) AS totalBerat,
+        ISNULL(CAST(r.HasBeenPrinted AS int), 0) AS printCount
+      FROM dbo.BongkarSusunOutputReject orj
+      INNER JOIN dbo.RejectV2 r ON r.NoReject = orj.NoReject
+      LEFT JOIN dbo.MstReject mr ON mr.IdReject = r.IdReject
+      WHERE orj.NoBongkarSusun = @NoBongkarSusun
+    `);
+
   // outputs â€” furnitureWip
   const outputsFurnitureWipRes = await pool
     .request()
@@ -1448,6 +1615,7 @@ bibj.NoBongkarSusun,
       ...inputsGilinganRes.recordset,
       ...inputsFurnitureWipRes.recordset,
       ...inputsBarangJadiRes.recordset,
+      ...inputsRejectRes.recordset,
     ],
     outputs: [
       ...outputsBahanBakuRes,
@@ -1459,6 +1627,7 @@ bibj.NoBongkarSusun,
       ...outputsGilinganRes.recordset,
       ...outputsFurnitureWipRes.recordset,
       ...outputsBarangJadiRes.recordset,
+      ...outputsRejectRes.recordset,
     ],
   };
 };
@@ -1473,6 +1642,7 @@ const createFurnitureWipHandler = require("./handlers/create-furniture-wip.handl
 const createBarangJadiHandler = require("./handlers/create-barang-jadi.handler");
 const createBonggolanHandler = require("./handlers/create-bonggolan.handler");
 const createMixerHandler = require("./handlers/create-mixer.handler");
+const createRejectHandler = require("./handlers/create-reject.handler");
 exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
   const { actorId, requestId } = ctx;
   const pool = await poolPromise;
@@ -1682,6 +1852,147 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
         .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
         .query(
           `DELETE FROM dbo.BongkarSusunInputBonggolan WHERE NoBongkarSusun = @NoBongkarSusun`,
+        );
+    }
+
+    // Handle output & input reject
+    // Urutan: partial link -> RejectV2Partial -> output -> input. Tabel link
+    // dihapus lebih dulu supaya aman kalau nanti ada FK ke RejectV2Partial.
+    const linkRejectPartialRes = await new sql.Request(tx)
+      .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+      .query(
+        `SELECT NoRejectPartial FROM dbo.BongkarSusunInputRejectPartial WHERE NoBongkarSusun = @NoBongkarSusun`,
+      );
+
+    const rejectPartialCodes = linkRejectPartialRes.recordset.map(
+      (r) => r.NoRejectPartial,
+    );
+    let rejectInputCodes = [];
+
+    if (rejectPartialCodes.length > 0) {
+      const partialJson = JSON.stringify(
+        rejectPartialCodes.map((c) => ({ code: c })),
+      );
+
+      // Label induk baris partial ini — dipakai untuk reset IsPartial.
+      const partialParentsRes = await new sql.Request(tx)
+        .input("CodesJson", sql.NVarChar(sql.MAX), partialJson).query(`
+            SELECT DISTINCT rpp.NoReject
+            FROM dbo.RejectV2Partial rpp
+            WHERE rpp.NoRejectPartial IN (
+              SELECT j.code FROM OPENJSON(@CodesJson)
+              WITH (code varchar(50) '$.code') AS j
+            )
+          `);
+      rejectInputCodes = partialParentsRes.recordset.map((r) => r.NoReject);
+
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .query(
+          `DELETE FROM dbo.BongkarSusunInputRejectPartial WHERE NoBongkarSusun = @NoBongkarSusun`,
+        );
+
+      await new sql.Request(tx).input("CodesJson", sql.NVarChar(sql.MAX), partialJson).query(`
+          DELETE FROM dbo.RejectV2Partial
+          WHERE NoRejectPartial IN (
+            SELECT j.code FROM OPENJSON(@CodesJson)
+            WITH (code varchar(50) '$.code') AS j
+          )
+        `);
+
+      // Partial dari modul lain (broker/crusher/gilingan produksi) tetap utuh,
+      // jadi IsPartial hanya mati kalau tidak ada partial yang tersisa.
+      if (rejectInputCodes.length > 0) {
+        const parentJson = JSON.stringify(
+          rejectInputCodes.map((c) => ({ code: c })),
+        );
+        await new sql.Request(tx).input("CodesJson", sql.NVarChar(sql.MAX), parentJson).query(`
+            UPDATE r
+            SET r.IsPartial = CAST(CASE WHEN EXISTS (
+                  SELECT 1 FROM dbo.RejectV2Partial rpp
+                  WHERE rpp.NoReject = r.NoReject
+                ) THEN 1 ELSE 0 END AS bit)
+            FROM dbo.RejectV2 r
+            WHERE r.NoReject IN (
+              SELECT j.code FROM OPENJSON(@CodesJson)
+              WITH (code varchar(50) '$.code') AS j
+            )
+          `);
+      }
+    }
+
+    const outputsRejectRes = await new sql.Request(tx)
+      .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+      .query(
+        `SELECT NoReject FROM dbo.BongkarSusunOutputReject WHERE NoBongkarSusun = @NoBongkarSusun`,
+      );
+
+    if (outputsRejectRes.recordset.length > 0) {
+      const outputRejectCodes = outputsRejectRes.recordset.map(
+        (r) => r.NoReject,
+      );
+      const outRejectJson = JSON.stringify(
+        outputRejectCodes.map((c) => ({ code: c })),
+      );
+
+      const usedReject = await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        outRejectJson,
+      ).query(`
+          SELECT TOP 1 NoReject FROM dbo.RejectV2
+          WHERE NoReject IN (
+            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
+          )
+          AND DateUsage IS NOT NULL
+        `);
+      if (usedReject.recordset.length > 0)
+        throw conflict(
+          "Tidak bisa hapus: label output reject sudah digunakan di proses lain",
+        );
+
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .query(
+          `DELETE FROM dbo.BongkarSusunOutputReject WHERE NoBongkarSusun = @NoBongkarSusun`,
+        );
+
+      await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        outRejectJson,
+      ).query(`
+          DELETE FROM dbo.RejectV2
+          WHERE NoReject IN (
+            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
+          )
+        `);
+    }
+
+    const inputsRejectRes = await new sql.Request(tx)
+      .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+      .query(
+        `SELECT NoReject FROM dbo.BongkarSusunInputReject WHERE NoBongkarSusun = @NoBongkarSusun`,
+      );
+
+    if (inputsRejectRes.recordset.length > 0) {
+      const inRejectJson = JSON.stringify(
+        inputsRejectRes.recordset.map((r) => ({ code: r.NoReject })),
+      );
+      await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        inRejectJson,
+      ).query(`
+          UPDATE dbo.RejectV2 SET DateUsage = NULL
+          WHERE NoReject IN (
+            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
+          )
+        `);
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .query(
+          `DELETE FROM dbo.BongkarSusunInputReject WHERE NoBongkarSusun = @NoBongkarSusun`,
         );
     }
 
@@ -2593,6 +2904,66 @@ function getReportQuery() {
 
 
     /* =========================
+       REJECT
+    ========================= */
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'INPUT',
+        'REJECT',
+        ISNULL(B.IdReject, 0),
+        C.NamaReject AS Nama,
+        CONCAT('RJ|', A.NoReject),
+        NULL,
+        COALESCE(
+            -- Berat terpakai siklus ini = RejectV2Partial milik transaksi ini
+            -- (label dipakai sebagian); tanpa baris link = sisa berat label.
+            (
+                SELECT SUM(ISNULL(rpp.Berat, 0))
+                FROM dbo.BongkarSusunInputRejectPartial bip
+                INNER JOIN dbo.RejectV2Partial rpp
+                    ON rpp.NoRejectPartial = bip.NoRejectPartial
+                WHERE bip.NoBongkarSusun = A.NoBongkarSusun
+                  AND rpp.NoReject = A.NoReject
+            ),
+            CASE
+                WHEN ISNULL(B.Berat, 0) - ISNULL(D.TotalPartialBerat, 0) < 0
+                    THEN 0
+                ELSE ISNULL(B.Berat, 0) - ISNULL(D.TotalPartialBerat, 0)
+            END
+        )
+    FROM BongkarSusunInputReject A
+    LEFT JOIN RejectV2 B
+        ON B.NoReject = A.NoReject
+    LEFT JOIN MstReject C
+        ON C.IdReject = B.IdReject
+    LEFT JOIN (
+        SELECT NoReject, SUM(ISNULL(Berat, 0)) AS TotalPartialBerat
+        FROM RejectV2Partial
+        GROUP BY NoReject
+    ) D
+        ON D.NoReject = B.NoReject
+
+    UNION ALL
+
+    SELECT
+        A.NoBongkarSusun,
+        'OUTPUT',
+        'REJECT',
+        ISNULL(B.IdReject, 0),
+        C.NamaReject AS Nama,
+        CONCAT('RJ|', A.NoReject),
+        NULL,
+        ISNULL(B.Berat, 0)
+    FROM BongkarSusunOutputReject A
+    LEFT JOIN RejectV2 B
+        ON B.NoReject = A.NoReject
+    LEFT JOIN MstReject C
+        ON C.IdReject = B.IdReject
+
+
+    /* =========================
        FURNITURE WIP
     ========================= */
     UNION ALL
@@ -2836,3 +3207,4 @@ exports.createBongkarSusunBarangJadi =
 exports.createBongkarSusunBonggolan =
   createBonggolanHandler.createBongkarSusunBonggolan;
 exports.createBongkarSusunMixer = createMixerHandler.createBongkarSusunMixer;
+exports.createBongkarSusunReject = createRejectHandler.createBongkarSusunReject;

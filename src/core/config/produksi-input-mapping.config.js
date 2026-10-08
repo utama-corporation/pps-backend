@@ -104,6 +104,7 @@ const PARTIAL_CONFIGS = {
       brokerProduksi: "BrokerProduksiInputRejectPartial",
       crusherProduksi: "CrusherProduksiInputRejectPartial",
       gilinganProduksi: "GilinganProduksiInputRejectV2Partial",
+      bongkarSusun: "BongkarSusunInputRejectPartial",
     },
   },
 
@@ -423,6 +424,12 @@ const INPUT_CONFIGS = {
       sourceTable: "BarangJadi",
       keys: ["NoBJ"],
       mappingTable: "BongkarSusunInputBarangJadi",
+      dateUsageColumn: "DateUsage",
+    },
+    reject: {
+      sourceTable: "RejectV2",
+      keys: ["NoReject"],
+      mappingTable: "BongkarSusunInputReject",
       dateUsageColumn: "DateUsage",
     },
   },

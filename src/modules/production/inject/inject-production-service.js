@@ -29,11 +29,91 @@ const {
 const {
   getReferencedTables,
 } = require("../../../core/config/produksi-input-mapping.config");
+const { toSisaOutputList } = require("../../../core/utils/parse");
+
+// Maksimal jenis bonggolan / reject yang boleh dikirim dalam satu batch.
+const MAX_SISA_JENIS_PER_KATEGORI = 5;
 
 // MstShiftHourSet.IdBagian di-hardcode = 4 (bagian Inject) — samakan dengan
 // master-shift-service.js agar split-time tidak salah ambil set jam shift
 // milik bagian lain.
 const ID_BAGIAN_INJECT = 4;
+
+/**
+ * Ambil batas jam shift dari master `MstShiftHourSet` untuk (tanggal, shift).
+ *
+ * Dipakai bersama oleh create produksi dan split-time supaya keduanya memakai
+ * satu acuan yang sama. Tanpa ini, hourStart/hourEnd saat create bisa menyimpang
+ * dari master shift, sedangkan split-time memvalidasinya terhadap master —
+ * hasilnya produksi yang lahir dengan jam tidak valid dan tidak bisa di-split.
+ *
+ * Mengembalikan `{ hourStart, hourEnd, shiftStartSec, shiftEndSec }` dalam
+ * detik sejak tengah malam, atau null bila master tidak punya baris.
+ */
+async function getMasterShiftWindow(runner, tanggal, noShift) {
+  const res = await new sql.Request(runner)
+    .input("Tanggal", sql.Date, tanggal)
+    .input("NoShift", sql.Int, noShift)
+    .input("IdBagian", sql.Int, ID_BAGIAN_INJECT)
+    .query(`
+      ;WITH LatestShiftSet AS (
+        SELECT TOP 1
+          h.IdShiftHourSet,
+          h.ValidFrmDate
+        FROM dbo.MstShiftHourSet h WITH (NOLOCK)
+        WHERE h.IdBagian = @IdBagian
+          AND CONVERT(date, h.ValidFrmDate) <= @Tanggal
+        ORDER BY CONVERT(date, h.ValidFrmDate) DESC, h.IdShiftHourSet DESC
+      )
+      SELECT TOP 1
+        ls.IdShiftHourSet,
+        ls.ValidFrmDate,
+        d.NoShift,
+        CONVERT(varchar(8), d.HourStart, 108) AS HourStart,
+        CONVERT(varchar(8), d.HourEnd, 108) AS HourEnd
+      FROM LatestShiftSet ls
+      INNER JOIN dbo.MstShiftHourSet_d d WITH (NOLOCK)
+        ON d.IdShiftHourSet = ls.IdShiftHourSet
+      WHERE d.NoShift = @NoShift;
+    `);
+
+  const ref = res.recordset?.[0];
+  if (!ref) return null;
+
+  const hourStart = String(ref.HourStart || "").trim();
+  const hourEnd = String(ref.HourEnd || "").trim();
+  const shiftStartSec = timeToSecondsLoose(hourStart);
+  const shiftEndSec = timeToSecondsLoose(hourEnd);
+  if (shiftStartSec == null || shiftEndSec == null) {
+    return { invalid: true, hourStart, hourEnd };
+  }
+  return { hourStart, hourEnd, shiftStartSec, shiftEndSec };
+}
+
+/**
+ * Ubah "HH:mm" / "HH:mm:ss" menjadi detik sejak tengah malam.
+ * Mengembalikan null bila format tidak dikenali atau di luar rentang.
+ */
+function timeToSecondsLoose(value) {
+  const m = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(String(value || "").trim());
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  const ss = Number(m[3] || "0");
+  if (hh > 23 || mm > 59 || ss > 59) return null;
+  return hh * 3600 + mm * 60 + ss;
+}
+
+/**
+ * Geser nilai detik ke dalam representasi window shift. Untuk shift yang
+ * melewati tengah malam (mis. 23:00-07:00), nilai sebelum jam mulai digeser
+ * +86400 supaya berada di paruh kedua shift, bukan terbalik.
+ */
+function normalizeIntoShiftWindowLoose(sec, shiftStartSec, shiftEndSec) {
+  const isOvernight = shiftStartSec > shiftEndSec;
+  if (!isOvernight) return sec;
+  return sec < shiftStartSec ? sec + 86400 : sec;
+}
 
 function pad2(value) {
   return String(value).padStart(2, "0");
@@ -814,13 +894,17 @@ async function getPackingListByNoProduksi(noProduksi) {
 
 function normalizeBatchHourStart(value) {
   const raw = String(value || "").trim();
-  const match = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(raw);
+  // Satu digit untuk jam diterima lalu dinormalkan ke dua digit — jam bucket
+  // bisa tak bulat (mis. bucket mulai 09:05) dan beberapa pemanggil mengirim
+  // "9:05". Persis HH:mm:ss akan menolak itu dengan pesan yang membingungkan.
+  const match = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(raw);
   if (!match) return null;
   const hour = Number(match[1]);
   const minute = Number(match[2]);
   const second = Number(match[3] || "0");
   if (hour > 23 || minute > 59 || second > 59) return null;
-  return `${match[1]}:${match[2]}:${String(second).padStart(2, "0")}`;
+  const p2 = (n) => String(n).padStart(2, "0");
+  return `${p2(hour)}:${p2(minute)}:${p2(second)}`;
 }
 
 function formatHourStartForResponse(value) {
@@ -2280,7 +2364,17 @@ async function upsertPendingPcsPerLabelDeficit(
     `);
 }
 
-async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
+/**
+ * Submit satu batch produksi.
+ *
+ * `tx` opsional: kalau diberikan, seluruh operasi memakai transaksi yang sudah
+ * ada dan TIDAK commit di sini — pemanggil yang bertanggung jawab commit. Ini
+ * dipakai `splitProduksiTime` supaya pembuatan batch ikut dalam transaksi yang
+ * sama dengan pemecahan produksi; kalau tidak, split sudah ter-commit lebih
+ * dulu dan kegagalan batch menyisakan produksi yang sudah terpisah tanpa data
+ * batch-nya.
+ */
+async function submitInjectBatch(payload, ctx, { forceClose = false, tx: existingTx = null } = {}) {
   const noProduksi = String(payload?.noProduksi || "").trim();
   if (!noProduksi) throw badReq("noProduksi wajib");
 
@@ -2366,31 +2460,42 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
     throw badReq("items tidak boleh memiliki idJenis yang duplikat");
   }
 
-  const bonggolan = isDowntime ? null : (payload?.bonggolan ?? null);
-  const reject = isDowntime ? null : (payload?.reject ?? null);
-  const isLastBatch = Boolean(bonggolan || reject || forceClose);
+  // Sisa akhir shift: satu jenis (payload lama) atau banyak jenis per kategori.
+  // split-time meneruskan body.batch apa adanya, jadi normalisasi diulang di sini.
+  const bonggolanList = isDowntime
+    ? []
+    : toSisaOutputList(payload?.bonggolan, "idBonggolan");
+  const rejectList = isDowntime
+    ? []
+    : toSisaOutputList(payload?.reject, "idReject");
+  const isLastBatch =
+    bonggolanList.length > 0 || rejectList.length > 0 || forceClose;
 
-  if (bonggolan) {
-    const idBonggolan = Number(bonggolan.idBonggolan);
-    const berat = Number(bonggolan.berat);
-    if (!Number.isInteger(idBonggolan) || idBonggolan <= 0) {
-      throw badReq("bonggolan.idBonggolan harus integer positif");
+  const validateSisaList = (entries, { label, idKey }) => {
+    if (entries.length > MAX_SISA_JENIS_PER_KATEGORI) {
+      throw badReq(
+        `maksimal ${MAX_SISA_JENIS_PER_KATEGORI} jenis ${label} per batch`,
+      );
     }
-    if (!Number.isFinite(berat) || berat <= 0) {
-      throw badReq("bonggolan.berat harus angka > 0");
-    }
-  }
+    const seen = new Set();
+    entries.forEach((entry, index) => {
+      const id = Number(entry[idKey]);
+      if (!Number.isInteger(id) || id <= 0) {
+        throw badReq(`${label}[${index}].${idKey} harus integer positif`);
+      }
+      const berat = Number(entry.berat);
+      if (!Number.isFinite(berat) || berat <= 0) {
+        throw badReq(`${label}[${index}].berat harus angka > 0`);
+      }
+      if (seen.has(id)) {
+        throw badReq(`${label} tidak boleh memiliki ${idKey} duplikat: ${id}`);
+      }
+      seen.add(id);
+    });
+  };
 
-  if (reject) {
-    const idReject = Number(reject.idReject);
-    const berat = Number(reject.berat);
-    if (!Number.isInteger(idReject) || idReject <= 0) {
-      throw badReq("reject.idReject harus integer positif");
-    }
-    if (!Number.isFinite(berat) || berat <= 0) {
-      throw badReq("reject.berat harus angka > 0");
-    }
-  }
+  validateSisaList(bonggolanList, { label: "bonggolan", idKey: "idBonggolan" });
+  validateSisaList(rejectList, { label: "reject", idKey: "idReject" });
 
   const actorId = Number(ctx?.actorId);
   if (!Number.isInteger(actorId) || actorId <= 0) {
@@ -2399,9 +2504,19 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
   const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
   const requestId = String(ctx?.requestId || "").trim();
 
-  const pool = await poolPromise;
-  const tx = new sql.Transaction(pool);
-  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+  // Pakai transaksi milik pemanggil kalau ada; kalau tidak, buat sendiri.
+  // `ownsTx` menentukan siapa yang boleh commit — saat memakai transaksi
+  // eksternal, commit tetap di tangan pemanggil.
+  const ownsTx = !existingTx;
+  let tx = existingTx;
+  if (ownsTx) {
+    const pool = await poolPromise;
+    tx = new sql.Transaction(pool);
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+  }
+  const commitTx = async () => {
+    if (ownsTx) await tx.commit();
+  };
 
   try {
     await applyAuditContext(new sql.Request(tx), {
@@ -2480,35 +2595,43 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
       });
     }
 
-    if (bonggolan) {
-      const bonggolanRes = await new sql.Request(tx).input(
-        "IdBonggolan",
-        sql.Int,
-        Number(bonggolan.idBonggolan),
-      ).query(`
-          SELECT TOP 1 IdBonggolan
+    if (bonggolanList.length > 0) {
+      const bonggolanIds = bonggolanList.map((e) => Number(e.idBonggolan));
+      const bonggolanReq = new sql.Request(tx);
+      bonggolanIds.forEach((id, i) =>
+        bonggolanReq.input(`IdBonggolan${i}`, sql.Int, id),
+      );
+      const bonggolanRes = await bonggolanReq.query(`
+          SELECT IdBonggolan
           FROM dbo.MstBonggolan WITH (NOLOCK)
-          WHERE IdBonggolan = @IdBonggolan
+          WHERE IdBonggolan IN (${bonggolanIds.map((_, i) => `@IdBonggolan${i}`).join(", ")});
         `);
-      if (!bonggolanRes.recordset?.length) {
+      const foundBonggolan = new Set(
+        (bonggolanRes.recordset || []).map((r) => Number(r.IdBonggolan)),
+      );
+      const missingBonggolan = bonggolanIds.find((id) => !foundBonggolan.has(id));
+      if (missingBonggolan !== undefined) {
         throw badReq(
-          `bonggolan.idBonggolan tidak ditemukan: ${bonggolan.idBonggolan}`,
+          `bonggolan.idBonggolan tidak ditemukan: ${missingBonggolan}`,
         );
       }
     }
 
-    if (reject) {
-      const rejectRes = await new sql.Request(tx).input(
-        "IdReject",
-        sql.Int,
-        Number(reject.idReject),
-      ).query(`
-          SELECT TOP 1 IdReject
+    if (rejectList.length > 0) {
+      const rejectIds = rejectList.map((e) => Number(e.idReject));
+      const rejectReq = new sql.Request(tx);
+      rejectIds.forEach((id, i) => rejectReq.input(`IdReject${i}`, sql.Int, id));
+      const rejectRes = await rejectReq.query(`
+          SELECT IdReject
           FROM dbo.MstReject WITH (NOLOCK)
-          WHERE IdReject = @IdReject
+          WHERE IdReject IN (${rejectIds.map((_, i) => `@IdReject${i}`).join(", ")});
         `);
-      if (!rejectRes.recordset?.length) {
-        throw badReq(`reject.idReject tidak ditemukan: ${reject.idReject}`);
+      const foundReject = new Set(
+        (rejectRes.recordset || []).map((r) => Number(r.IdReject)),
+      );
+      const missingReject = rejectIds.find((id) => !foundReject.has(id));
+      if (missingReject !== undefined) {
+        throw badReq(`reject.idReject tidak ditemukan: ${missingReject}`);
       }
     }
 
@@ -2583,7 +2706,7 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
     const idBatch = batchRow.Id;
 
     if (isDowntime) {
-      await tx.commit();
+      await commitTx();
       return {
         batch: {
           id: batchRow.Id ?? null,
@@ -2596,6 +2719,8 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
         barangJadi: [],
         bonggolan: null,
         reject: null,
+        bonggolanList: [],
+        rejectList: [],
       };
     }
 
@@ -2796,25 +2921,30 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
       await requestCompleteOnTx(tx, noProduksi, actorId);
     }
 
-    const createdBonggolan = bonggolan
-      ? await createInjectBonggolanLabel(tx, {
+    const createdBonggolanList = [];
+    for (const entry of bonggolanList) {
+      createdBonggolanList.push(
+        await createInjectBonggolanLabel(tx, {
           noProduksi,
-          idBonggolan: Number(bonggolan.idBonggolan),
-          berat: Number(bonggolan.berat),
+          idBonggolan: Number(entry.idBonggolan),
+          berat: Number(entry.berat),
           dateCreate: docDateOnly,
           nowDateTime,
           createBy: actorUsername,
           blok: lokasi?.Blok ?? null,
           idLokasi: lokasi?.IdLokasi ?? null,
           idWarehouse: null,
-        })
-      : null;
+        }),
+      );
+    }
 
-    const createdReject = reject
-      ? await createInjectRejectLabel(tx, {
+    const createdRejectList = [];
+    for (const entry of rejectList) {
+      createdRejectList.push(
+        await createInjectRejectLabel(tx, {
           noProduksi,
-          idReject: Number(reject.idReject),
-          berat: Number(reject.berat),
+          idReject: Number(entry.idReject),
+          berat: Number(entry.berat),
           hourStart,
           dateCreate: docDateOnly,
           nowDateTime,
@@ -2822,10 +2952,11 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
           blok: lokasi?.Blok ?? null,
           idLokasi: lokasi?.IdLokasi ?? null,
           idWarehouse: null,
-        })
-      : null;
+        }),
+      );
+    }
 
-    await tx.commit();
+    await commitTx();
 
     return {
       batch: {
@@ -2837,13 +2968,20 @@ async function submitInjectBatch(payload, ctx, { forceClose = false } = {}) {
       outputCategory: header.OutputCategory ?? null,
       furnitureWIP,
       barangJadi,
-      bonggolan: createdBonggolan,
-      reject: createdReject,
+      // Key skalar dipertahankan untuk klien lama (elemen pertama).
+      bonggolan: createdBonggolanList[0] ?? null,
+      reject: createdRejectList[0] ?? null,
+      bonggolanList: createdBonggolanList,
+      rejectList: createdRejectList,
     };
   } catch (error) {
-    try {
-      await tx.rollback();
-    } catch (_) {}
+    // Kalau transaksi milik pemanggil, jangan rollback di sini — pemanggil
+    // yang memutuskan batas transaksinya.
+    if (ownsTx) {
+      try {
+        await tx.rollback();
+      } catch (_) {}
+    }
     throw error;
   }
 }
@@ -3379,6 +3517,51 @@ async function createInjectProduksi(payload, ctx) {
       action: "create InjectProduksi",
       useLock: true,
     });
+
+    // ===============================
+    // Validasi hourStart / hourEnd terhadap master shift
+    // ===============================
+    // Tanpa validasi ini hourStart/hourEnd bisa menyimpang dari master shift,
+    // lalu produksi yang lahir seperti itu akan ditolak saat operator mencoba
+    // ganti/terminate karena split-time memvalidasi terhadap master.
+    // Master shift yang tidak ditemukan TIDAK di-error-kan di sini — ada
+    // konfigurasi yang belum punya MstShiftHourSet untuk inject, dan
+    //(create) tidak boleh terhambat oleh itu.
+    const createShift = await getMasterShiftWindow(
+      tx,
+      effectiveDate,
+      Number(body.shift),
+    );
+    if (createShift?.invalid) {
+      throw conflict(
+        "Master shift memiliki HourStart/HourEnd tidak valid.",
+      );
+    }
+    if (createShift) {
+      const reqStartSec = timeToSecondsLoose(body.hourStart);
+      const reqEndSec = timeToSecondsLoose(body.hourEnd);
+      if (reqStartSec == null || reqEndSec == null) {
+        throw badReq("Format hourStart/hourEnd harus HH:mm atau HH:mm:ss");
+      }
+      const startInWindow = normalizeIntoShiftWindowLoose(
+        reqStartSec,
+        createShift.shiftStartSec,
+        createShift.shiftEndSec,
+      );
+      const endInWindow = normalizeIntoShiftWindowLoose(
+        reqEndSec,
+        createShift.shiftStartSec,
+        createShift.shiftEndSec,
+      );
+      // Shift normal: end boleh <= start? Tidak — jam harus lebih besar.
+      // Shift overnight: start 23:00 end 07:00 => end (25200) dinormalkan ke
+      // 90000, jadi selalu lebih besar dari start (82800).
+      if (endInWindow <= startInWindow) {
+        throw badReq(
+          `hourEnd harus lebih besar dari hourStart pada shift ${body.shift} (${createShift.hourStart}-${createShift.hourEnd}).`,
+        );
+      }
+    }
 
     // ===============================
     // InputMode: dihitung sistem (bukan input client), agar tidak bisa
@@ -5538,51 +5721,25 @@ async function splitProduksiTime(selector, payload, ctx) {
       );
     }
 
-    const shiftRefRes = await new sql.Request(tx)
-      .input("Tanggal", sql.Date, tanggal)
-      .input("NoShift", sql.Int, srcShift)
-      .input("IdBagian", sql.Int, ID_BAGIAN_INJECT).query(`
-        ;WITH LatestShiftSet AS (
-          SELECT TOP 1
-            h.IdShiftHourSet,
-            h.ValidFrmDate
-          FROM dbo.MstShiftHourSet h WITH (NOLOCK)
-          WHERE h.IdBagian = @IdBagian
-            AND CONVERT(date, h.ValidFrmDate) <= @Tanggal
-          ORDER BY CONVERT(date, h.ValidFrmDate) DESC, h.IdShiftHourSet DESC
-        )
-        SELECT TOP 1
-          ls.IdShiftHourSet,
-          ls.ValidFrmDate,
-          d.NoShift,
-          CONVERT(varchar(8), d.HourStart, 108) AS HourStart,
-          CONVERT(varchar(8), d.HourEnd, 108) AS HourEnd
-        FROM LatestShiftSet ls
-        INNER JOIN dbo.MstShiftHourSet_d d WITH (NOLOCK)
-          ON d.IdShiftHourSet = ls.IdShiftHourSet
-        WHERE d.NoShift = @NoShift;
-      `);
-
-    const shiftRef = shiftRefRes.recordset?.[0];
-    if (!shiftRef) {
+    const shiftWindow = await getMasterShiftWindow(tx, tanggal, srcShift);
+    if (!shiftWindow) {
       throw notFound(
         `Master shift tidak ditemukan untuk tanggal ${tanggal} dan shift ${srcShift}.`,
       );
     }
-
-    const shiftStartSec = toSeconds(shiftRef.HourStart);
-    const hourEnd = String(shiftRef.HourEnd || "").trim();
-    const shiftEndSec = toSeconds(hourEnd);
-    if (shiftStartSec == null || shiftEndSec == null) {
+    if (shiftWindow.invalid) {
       throw conflict("Master shift memiliki HourStart/HourEnd tidak valid.");
     }
 
-    const reqStartInWindow = normalizeIntoShiftWindow(
+    const { hourStart: shiftHourStart, hourEnd, shiftStartSec, shiftEndSec } =
+      shiftWindow;
+
+    const reqStartInWindow = normalizeIntoShiftWindowLoose(
       reqStartSec,
       shiftStartSec,
       shiftEndSec,
     );
-    const reqEndInWindow = normalizeIntoShiftWindow(
+    const reqEndInWindow = normalizeIntoShiftWindowLoose(
       shiftEndSec,
       shiftStartSec,
       shiftEndSec,
@@ -5597,7 +5754,7 @@ async function splitProduksiTime(selector, payload, ctx) {
       reqEndInWindow > shiftEndBound
     ) {
       throw badReq(
-        `Range jam harus berada dalam batas shift ${srcShift} (${shiftRef.HourStart}-${shiftRef.HourEnd}) untuk tanggal ${tanggal}.`,
+        `Range jam harus berada dalam batas shift ${srcShift} (${shiftHourStart}-${hourEnd}) untuk tanggal ${tanggal}.`,
       );
     }
     if (reqEndInWindow <= reqStartInWindow) {
@@ -5727,8 +5884,8 @@ async function splitProduksiTime(selector, payload, ctx) {
         IdFurnitureMaterial int,
         HourMeter decimal(18,2),
         BeratProdukHasilTimbang decimal(18,2),
-        HourStart time(7),
-        HourEnd time(7),
+        HourStart varchar(8),
+        HourEnd varchar(8),
         IdRegu int,
         InputMode varchar(20),
         CreatedAt datetime
@@ -5747,7 +5904,9 @@ async function splitProduksiTime(selector, payload, ctx) {
         INSERTED.ApproveBy, INSERTED.JmlhAnggota, INSERTED.Hadir, INSERTED.IdCetakan,
         INSERTED.IdWarna, INSERTED.EnableOffset, INSERTED.OffsetCurrent, INSERTED.OffsetNext,
         INSERTED.IdFurnitureMaterial, INSERTED.HourMeter, INSERTED.BeratProdukHasilTimbang,
-        INSERTED.HourStart, INSERTED.HourEnd, INSERTED.IdRegu, INSERTED.InputMode,
+        CONVERT(varchar(8), INSERTED.HourStart, 108) AS HourStart,
+        CONVERT(varchar(8), INSERTED.HourEnd, 108) AS HourEnd,
+        INSERTED.IdRegu, INSERTED.InputMode,
         INSERTED.CreatedAt
       INTO @out
       SELECT
@@ -5827,8 +5986,11 @@ async function splitProduksiTime(selector, payload, ctx) {
       .filter((n) => Number.isFinite(n))
       .map((n) => Math.trunc(n));
 
-    await tx.commit();
-
+    // Batch source ikut transaksi yang sama — SEBELUM commit. Dulu dipanggil
+    // setelah `tx.commit()`, sehingga kalau batch gagal (mis. idJenis kosong
+    // pada batch terakhir) produksi sudah terlanjur terpecah: HourEnd source
+    // ter-update, IsComplete=1, dan baris InjectProduksi_h baru sudah ada —
+    // tapi data batch-nya hilang karena rollback transaksi kedua.
     let sourceBatchResult = null;
     if (batchPayload) {
       sourceBatchResult = await submitInjectBatch(
@@ -5838,9 +6000,11 @@ async function splitProduksiTime(selector, payload, ctx) {
           hourStart: batchPayload.hourStart ?? hourStart,
         },
         ctx,
-        { forceClose: true },
+        { forceClose: true, tx },
       );
     }
+
+    await tx.commit();
 
     return {
       idMesin,

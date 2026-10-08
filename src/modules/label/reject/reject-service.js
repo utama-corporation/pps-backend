@@ -73,32 +73,35 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
         WHEN MAX(hsr.NoProduksi) IS NOT NULL THEN 'HOT_STAMPING'
         WHEN MAX(spr.NoProduksi) IS NOT NULL THEN 'SPANNER'
         WHEN MAX(bjr.NoBJSortir) IS NOT NULL THEN 'BJ_SORTIR'
+        WHEN MAX(bsr.NoBongkarSusun) IS NOT NULL THEN 'BONGKAR_SUSUN'
         ELSE NULL
       END AS OutputType,
 
       ------------------------------------------------------------------
-      -- KODE SUMBER: NoProduksi / NoBJSortir (untuk BJ_SORTIR)
+      -- KODE SUMBER: NoProduksi / NoBJSortir / NoBongkarSusun
       ------------------------------------------------------------------
       MAX(
         COALESCE(
           injr.NoProduksi,
           hsr.NoProduksi,
           spr.NoProduksi,
-          bjr.NoBJSortir
+          bjr.NoBJSortir,
+          bsr.NoBongkarSusun
         )
       ) AS OutputCode,
 
       ------------------------------------------------------------------
-      -- NAMA MESIN / 'BJ Sortir'
+      -- NAMA MESIN / 'BJ Sortir' / nomor bongkar susun
       ------------------------------------------------------------------
       MAX(
         COALESCE(
           mInject.NamaMesin,
           mHot.NamaMesin,
           mSpan.NamaMesin,
-          CASE 
+          CASE
             WHEN bjr.NoBJSortir IS NOT NULL THEN 'Sortir Reject'
-          END
+          END,
+          bsr.NoBongkarSusun
         )
       ) AS OutputNamaMesin
 
@@ -155,6 +158,12 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
     LEFT JOIN [dbo].[BJSortirRejectOutputLabelReject] bjr
       ON bjr.NoReject = r.NoReject
 
+    ------------------------------------------------------------------
+    -- MAPPING: BONGKAR SUSUN (bukan dari mesin)
+    ------------------------------------------------------------------
+    LEFT JOIN [dbo].[BongkarSusunOutputReject] bsr
+      ON bsr.NoReject = r.NoReject
+
     WHERE 1 = 1
       ${dateUsageFilter}
       ${
@@ -170,6 +179,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
                OR ISNULL(hsr.NoProduksi,'')    LIKE @search
                OR ISNULL(spr.NoProduksi,'')    LIKE @search
                OR ISNULL(bjr.NoBJSortir,'')    LIKE @search
+               OR ISNULL(bsr.NoBongkarSusun,'') LIKE @search
 
                -- cari berdasarkan nama mesin
                OR ISNULL(mInject.NamaMesin,'') LIKE @search
@@ -227,6 +237,9 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
     LEFT JOIN [dbo].[BJSortirRejectOutputLabelReject] bjr
       ON bjr.NoReject = r.NoReject
 
+    LEFT JOIN [dbo].[BongkarSusunOutputReject] bsr
+      ON bsr.NoReject = r.NoReject
+
     WHERE 1 = 1
       ${dateUsageFilter}
       ${
@@ -240,6 +253,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
                OR ISNULL(hsr.NoProduksi,'')    LIKE @search
                OR ISNULL(spr.NoProduksi,'')    LIKE @search
                OR ISNULL(bjr.NoBJSortir,'')    LIKE @search
+               OR ISNULL(bsr.NoBongkarSusun,'') LIKE @search
                OR ISNULL(mInject.NamaMesin,'') LIKE @search
                OR ISNULL(mHot.NamaMesin,'')    LIKE @search
                OR ISNULL(mSpan.NamaMesin,'')   LIKE @search
@@ -285,8 +299,13 @@ function resolveOutputByPrefix(outputCode) {
   } else if (outputCode.startsWith("J.")) {
     outputType = "BJ_SORTIR";
     mappingTable = "BJSortirRejectOutputLabelReject";
+  } else if (outputCode.startsWith("BG.")) {
+    outputType = "BONGKAR_SUSUN";
+    mappingTable = "BongkarSusunOutputReject";
   } else {
-    throw badReq("outputCode prefix tidak dikenali (S., BH., BI., BJ., J.)");
+    throw badReq(
+      "outputCode prefix tidak dikenali (S., BH., BI., BJ., J., BG.)",
+    );
   }
 
   return { outputType, mappingTable };
@@ -428,6 +447,11 @@ async function insertSingleReject({
   } else if (mappingTable === "BJSortirRejectOutputLabelReject") {
     await rqMap.query(`
       INSERT INTO dbo.BJSortirRejectOutputLabelReject (NoBJSortir, NoReject)
+      VALUES (@OutputCode, @NoReject);
+    `);
+  } else if (mappingTable === "BongkarSusunOutputReject") {
+    await rqMap.query(`
+      INSERT INTO dbo.BongkarSusunOutputReject (NoBongkarSusun, NoReject)
       VALUES (@OutputCode, @NoReject);
     `);
   }
@@ -1263,6 +1287,12 @@ exports.getByNoReject = async (NoReject) => {
           SELECT bjr.NoBJSortir, NULL, 4
           FROM dbo.BJSortirRejectOutputLabelReject bjr
           WHERE bjr.NoReject = r.NoReject
+
+          UNION ALL
+
+          SELECT bsr.NoBongkarSusun, NULL, 5
+          FROM dbo.BongkarSusunOutputReject bsr
+          WHERE bsr.NoReject = r.NoReject
         ) src
         WHERE src.OutputNamaMesin IS NOT NULL AND src.OutputNamaMesin <> ''
         ORDER BY src.Priority

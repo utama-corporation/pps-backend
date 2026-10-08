@@ -8,7 +8,12 @@ const {
 } = require("../../core/utils/http-context");
 
 // Kategori yang mendukung input partial (override jumlah terpakai per label)
-const PARTIAL_CATEGORIES = new Set(["barangJadi", "furnitureWip", "mixer"]);
+const PARTIAL_CATEGORIES = new Set([
+  "barangJadi",
+  "furnitureWip",
+  "mixer",
+  "reject",
+]);
 
 function makeCtx(req) {
   return {
@@ -117,7 +122,7 @@ async function create(req, res) {
     return res.status(400).json({
       success: false,
       message:
-        "Input partial hanya didukung untuk kategori barangJadi, furnitureWip, dan mixer",
+        "Input partial hanya didukung untuk kategori barangJadi, furnitureWip, mixer, dan reject",
     });
   }
 

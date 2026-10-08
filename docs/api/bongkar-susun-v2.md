@@ -23,6 +23,7 @@ Dokumentasi ringkas untuk endpoint `bongkar-susun-v2`.
 | `BB.`  | `furnitureWip` |
 | `BA.`  | `barangJadi`   |
 | `M.`   | `bonggolan`    |
+| `BF.`  | `reject`       |
 
 ## POST ` /api/bongkar-susun-v2`
 
@@ -36,9 +37,9 @@ Format umum:
 }
 ```
 
-Kategori **barangJadi, furnitureWip, dan mixer** mendukung field opsional
-`inputsPartial` untuk memilih **sebagian** qty dari sisa label (pcs untuk
-barangJadi/furnitureWip, kg untuk mixer):
+Kategori **barangJadi, furnitureWip, mixer, dan reject** mendukung field
+opsional `inputsPartial` untuk memilih **sebagian** qty dari sisa label (pcs
+untuk barangJadi/furnitureWip, kg untuk mixer dan reject):
 
 ```json
 {
@@ -71,7 +72,38 @@ tetap memakai seluruh sisa seperti biasa.
 | `outputs[].saks`         | array                | Daftar sak output                                     |
 | `outputs[].saks[].noSak` | number               | Nomor sak                                             |
 | `outputs[].saks[].berat` | number               | Berat per sak                                         |
-| Balance                  | berat                | Berdasarkan total berat                               |
+| Balance             | berat              | Berdasarkan total berat       |
+
+### 10) Reject (`BF.`)
+
+Label reject disimpan di `dbo.RejectV2` dan tidak ber-sak: satu output = satu
+nomor `BF.` dengan satu berat. `idJenis` pada output adalah `RejectV2.IdReject`
+(nama jenis dari `MstReject.NamaReject`).
+
+| Field               | Format                  | Keterangan                          |
+| ------------------- | ----------------------- | ----------------------------------- |
+| `inputs`            | `["BF.0000001234"]`     | Label reject                         |
+| `outputs[].idJenis` | number                  | `MstReject.IdReject`                 |
+| `outputs[].berat`   | number                  | Berat output                         |
+| `inputsPartial`     | `[{ labelCode, qty }]`  | Opsional, qty = kg yang dipakai       |
+| Balance             | berat                   | Berdasarkan berat terpakai per jenis |
+
+Partial reject pada bongkar susun:
+
+- Label yang **sudah pernah di-partial** (punya baris di
+  `dbo.RejectV2Partial`, mis. dipakai sebagian di produksi broker/gilingan)
+  tetap boleh dipakai. Berat yang boleh dipakai = sisa berat label
+  (`Berat - SUM(RejectV2Partial.Berat)`).
+- Kalau operator memakai **sebagian** sisa berat lewat `inputsPartial`,
+  backend membuat baris baru di `dbo.RejectV2Partial` (prefix `BK.`) berisi
+  berat yang dipakai dan menautkannya lewat
+  `dbo.BongkarSusunInputRejectPartial`. Sisa berat label tetap hidup untuk
+  diproses berikutnya.
+- Label dianggap habis (di-`DateUsage`) hanya kalau sisa beratnya sudah `<= 0`
+  setelah semua partial terhitung, termasuk partial milik transaksi ini.
+- `DELETE` transaksi mengembalikan `DateUsage` input ke `NULL`, menghapus
+  `RejectV2Partial` milik transaksi ini saja (partial modul lain tetap utuh),
+  lalu menghitung ulang `RejectV2.IsPartial`.
 
 Contoh:
 
@@ -472,6 +504,33 @@ Jika semua sak pada pallet tersebut sudah memiliki `DateUsage`, label dianggap s
   "totalBerat": 999
 }
 ```
+
+### Reject
+
+```json
+{
+  "labelCode": "BF.0000001234",
+  "category": "reject",
+  "dateCreate": "2026-10-08",
+  "idJenis": 3,
+  "namaJenis": "REJECT PARTAI",
+  "idWarehouse": 1,
+  "totalBerat": 50,
+  "totalPartialBerat": 12.5,
+  "beratSisa": 37.5,
+  "berat": 37.5,
+  "isPartial": true,
+  "jam": "08:00",
+  "hasBeenPrinted": 0,
+  "createBy": "operator",
+  "blok": "BSS",
+  "idLokasi": 1
+}
+```
+
+`totalBerat` = berat bruto label, `totalPartialBerat` = berat yang sudah
+tercatat sebagai partial, `beratSisa`/`berat` = sisa berat yang boleh dipakai
+sebagai input (0 / label habis → HTTP 409).
 
 ## GET List ` /api/bongkar-susun-v2`
 
