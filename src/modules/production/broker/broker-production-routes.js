@@ -174,4 +174,11 @@ router.delete(
   brokerProduksiController.deleteQc,
 );
 
+// Laporan PDF hasil produksi broker (Crystal Reports)
+router.get(
+  "/broker/:noProduksi/report/pdf",
+  verifyToken,
+  brokerProduksiController.exportReportPdf,
+);
+
 module.exports = router;

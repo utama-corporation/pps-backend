@@ -20,6 +20,19 @@ const getLabelInfoBarangJadiHandler = require("./handlers/get-label-info-barang-
 const getLabelInfoMixerHandler = require("./handlers/get-label-info-mixer.handler");
 const getLabelInfoRejectHandler = require("./handlers/get-label-info-reject.handler");
 
+// Daftar label input barangJadi per transaksi. Label dipakai penuh ada di
+// BongkarSusunInputBarangJadi; label dipakai partial HANYA ada di
+// BongkarSusunInputBarangJadiPartial (kode partial -> NoBJ lewat
+// BarangJadiPartial). Query yang butuh "semua label input" memakai gabungan ini.
+const BS_INPUT_BARANG_JADI_LABELS_SQL = `(
+  SELECT i.NoBongkarSusun, i.NoBJ
+  FROM dbo.BongkarSusunInputBarangJadi i
+  UNION
+  SELECT l.NoBongkarSusun, p.NoBJ
+  FROM dbo.BongkarSusunInputBarangJadiPartial l
+  INNER JOIN dbo.BarangJadiPartial p ON p.NoBJPartial = l.NoBJPartial
+)`;
+
 // GET label info dispatcher
 exports.getLabelInfo = async (labelCode) => {
   const code = String(labelCode || "").trim();
@@ -291,7 +304,7 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
             'barangJadi' AS category,
             (
               SELECT COUNT(DISTINCT ibj.NoBJ)
-              FROM dbo.BongkarSusunInputBarangJadi ibj
+              FROM ${BS_INPUT_BARANG_JADI_LABELS_SQL} ibj
               WHERE ibj.NoBongkarSusun = h.NoBongkarSusun
             ) AS inputLabelCount,
             (
@@ -302,7 +315,7 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
             8 AS priority
           WHERE EXISTS (
             SELECT 1
-            FROM dbo.BongkarSusunInputBarangJadi ibj
+            FROM ${BS_INPUT_BARANG_JADI_LABELS_SQL} ibj
             WHERE ibj.NoBongkarSusun = h.NoBongkarSusun
           )
           OR EXISTS (
@@ -375,7 +388,7 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
             (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputGilingan   WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputGilingan     WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
             (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputMixer      WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputMixer        WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
             (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputFurnitureWIP WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputFurnitureWIP WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
-            (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputBarangJadi WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputBarangjadi  WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
+(CASE WHEN EXISTS(SELECT 1 FROM ${BS_INPUT_BARANG_JADI_LABELS_SQL} ibjx WHERE ibjx.NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputBarangjadi  WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
             (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputBonggolan  WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputBonggolan   WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
             (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputReject     WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputReject     WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END)
           ) > 1 THEN CAST(0 AS bit)
@@ -701,7 +714,7 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
           WHEN cat.category = 'barangJadi' THEN
             CASE
               WHEN EXISTS (
-                SELECT b.IdBJ FROM dbo.BongkarSusunInputBarangJadi ibj
+                SELECT b.IdBJ FROM ${BS_INPUT_BARANG_JADI_LABELS_SQL} ibj
                 INNER JOIN dbo.BarangJadi b ON b.NoBJ = ibj.NoBJ
                 WHERE ibj.NoBongkarSusun = h.NoBongkarSusun
                 EXCEPT
@@ -713,7 +726,7 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
                 INNER JOIN dbo.BarangJadi b ON b.NoBJ = obj.NoBJ
                 WHERE obj.NoBongkarSusun = h.NoBongkarSusun
                 EXCEPT
-                SELECT b.IdBJ FROM dbo.BongkarSusunInputBarangJadi ibj
+                SELECT b.IdBJ FROM ${BS_INPUT_BARANG_JADI_LABELS_SQL} ibj
                 INNER JOIN dbo.BarangJadi b ON b.NoBJ = ibj.NoBJ
                 WHERE ibj.NoBongkarSusun = h.NoBongkarSusun
               ) THEN CAST(0 AS bit)
@@ -736,7 +749,7 @@ WHEN ABS(
                       END
                     )
                   )
-                  FROM dbo.BongkarSusunInputBarangjadi ibj
+                  FROM ${BS_INPUT_BARANG_JADI_LABELS_SQL} ibj
                   INNER JOIN dbo.Barangjadi b ON b.NoBJ = ibj.NoBJ
                   LEFT JOIN (
                     SELECT NoBJ, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
@@ -1258,7 +1271,7 @@ exports.getDetail = async (noBongkarSusun) => {
         bsbp.NoBJPartial      AS noPartial,
         -- Pcs asli label, supaya client bisa menampilkan "9 / 15 pcs".
         ISNULL(b.Pcs, 0)      AS totalPcs
-      FROM dbo.BongkarSusunInputBarangJadi ibj
+      FROM ${BS_INPUT_BARANG_JADI_LABELS_SQL} ibj
       INNER JOIN dbo.BarangJadi b ON b.NoBJ = ibj.NoBJ
       INNER JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = b.IdBJ
       LEFT JOIN (
@@ -2335,7 +2348,7 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
     const inputsBarangJadiRes = await new sql.Request(tx)
       .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
       .query(
-        `SELECT NoBJ FROM dbo.BongkarSusunInputBarangJadi WHERE NoBongkarSusun = @NoBongkarSusun`,
+        `SELECT NoBJ FROM ${BS_INPUT_BARANG_JADI_LABELS_SQL} x WHERE x.NoBongkarSusun = @NoBongkarSusun`,
       );
 
     if (inputsBarangJadiRes.recordset.length > 0) {

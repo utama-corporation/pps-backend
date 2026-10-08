@@ -3536,6 +3536,35 @@ async function deleteBrokerQc(id) {
   return { id: idNum, deleted: true };
 }
 
+async function runLaporanHasilProduksiHarianBroker(noProduksi) {
+  const noProduksiStr = String(noProduksi || "").trim();
+  if (!noProduksiStr) throw badReq("NoProduksi wajib diisi");
+
+  const pool = await poolPromise;
+  const res = await new sql.Request(pool)
+    .input("NoProduksi", sql.VarChar(20), noProduksiStr)
+    .execute("SP_LapHasilProduksiHarianBroker");
+  return res.recordset || [];
+}
+
+async function fetchBrokerDowntimeRows(noProduksi) {
+  const noProduksiStr = String(noProduksi || "").trim();
+  if (!noProduksiStr) throw badReq("NoProduksi wajib diisi");
+
+  const pool = await poolPromise;
+  const res = await new sql.Request(pool)
+    .input("NoProduksi", sql.VarChar(20), noProduksiStr)
+    .query(
+      `SELECT NoProduksi, NoUrut, TimeStart, TimeEnd, Remarks
+       FROM dbo.BrokerProduksi_dDowntime
+       WHERE NoProduksi = @NoProduksi
+         AND TimeStart IS NOT NULL
+         AND TimeEnd IS NOT NULL
+       ORDER BY NoUrut`,
+    );
+  return res.recordset || [];
+}
+
 module.exports = {
   getAllProduksi,
   getProduksiByDate,
@@ -3562,4 +3591,6 @@ module.exports = {
   moveOutputs,
   moveOutputsBonggolan,
   splitProduksiTime,
+  runLaporanHasilProduksiHarianBroker,
+  fetchBrokerDowntimeRows,
 };

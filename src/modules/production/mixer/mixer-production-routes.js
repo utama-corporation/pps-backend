@@ -94,4 +94,10 @@ router.post(
   mixerProduksiController.splitProduksiTime,
 );
 
+router.get(
+  "/mixer/:noProduksi/report/pdf",
+  verifyToken,
+  mixerProduksiController.exportReportPdf,
+);
+
 module.exports = router;

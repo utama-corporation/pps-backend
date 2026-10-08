@@ -2661,6 +2661,33 @@ async function deleteWashingQc(id) {
   return { id: idNum, deleted: true };
 }
 
+async function runLaporanHasilProduksiHarianWashing(noProduksi) {
+  const noProduksiStr = String(noProduksi || "").trim();
+  if (!noProduksiStr) throw badReq("NoProduksi wajib diisi");
+
+  const pool = await poolPromise;
+  const res = await new sql.Request(pool)
+    .input("NoProduksi", sql.VarChar(20), noProduksiStr)
+    .execute("SP_LapHasilProduksiHarianWashing");
+  return res.recordset || [];
+}
+
+async function fetchWashingDowntimeRows(noProduksi) {
+  const noProduksiStr = String(noProduksi || "").trim();
+  if (!noProduksiStr) throw badReq("NoProduksi wajib diisi");
+
+  const pool = await poolPromise;
+  const res = await new sql.Request(pool)
+    .input("NoProduksi", sql.VarChar(20), noProduksiStr)
+    .query(
+      `SELECT NoProduksi, NoUrut, TimeStart, TimeEnd, Remarks
+       FROM dbo.WashingProduksi_dDownTime
+       WHERE NoProduksi = @NoProduksi
+       ORDER BY NoUrut`,
+    );
+  return res.recordset || [];
+}
+
 module.exports = {
   getProduksiByDate,
   getAllProduksi,
@@ -2684,4 +2711,6 @@ module.exports = {
   upsertInputsAndPartials,
   deleteInputsAndPartials,
   splitProduksiTime,
+  runLaporanHasilProduksiHarianWashing,
+  fetchWashingDowntimeRows,
 }; // ⬅️ pastikan ini ada

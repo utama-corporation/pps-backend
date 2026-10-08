@@ -92,4 +92,10 @@ router.get(
   packingController.getLabelByIdBJ,
 );
 
+router.get(
+  "/packing/:noProduksi/report/pdf",
+  verifyToken,
+  packingController.exportReportPdf,
+);
+
 module.exports = router;

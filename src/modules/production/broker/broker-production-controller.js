@@ -1349,6 +1349,54 @@ async function deleteQc(req, res) {
   }
 }
 
+const {
+  buildBrokerMain,
+  buildBrokerDowntime,
+  renderBrokerReportPdf,
+} = require("./broker-report-pdf");
+
+async function exportReportPdf(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+  try {
+    const spRows =
+      await brokerProduksiService.runLaporanHasilProduksiHarianBroker(
+        noProduksi,
+      );
+    const downtimeRows =
+      await brokerProduksiService.fetchBrokerDowntimeRows(noProduksi);
+    const main = buildBrokerMain(spRows, noProduksi);
+    const downtime = buildBrokerDowntime(downtimeRows);
+    const pdf = await renderBrokerReportPdf({
+      main,
+      downtime,
+      by: req.username || "",
+    });
+    const safeName =
+      noProduksi.replace(/[^A-Za-z0-9_-]+/g, "-") || "laporan";
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="Laporan-Broker-${safeName}.pdf"`,
+    );
+    res.setHeader("Content-Length", pdf.length);
+    return res.end(pdf);
+  } catch (err) {
+    console.error("[broker.exportReportPdf]", err);
+    const status = err.statusCode || err.status || 500;
+    return res.status(status).json({
+      success: false,
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
+      error: { message: err.message },
+    });
+  }
+}
+
 module.exports = {
   getProduksiByDate,
   getInputsByNoProduksi,
@@ -1375,4 +1423,5 @@ module.exports = {
   moveOutputs,
   moveOutputsBonggolan,
   splitProduksiTime,
+  exportReportPdf,
 };

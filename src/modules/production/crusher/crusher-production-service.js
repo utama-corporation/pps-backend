@@ -1942,6 +1942,35 @@ async function splitProduksiTime(selector, payload, ctx) {
   }
 }
 
+async function runLaporanHasilProduksiHarianCrusher(noProduksi) {
+  const noProduksiStr = String(noProduksi || "").trim();
+  if (!noProduksiStr) throw badReq("NoProduksi wajib diisi");
+
+  const pool = await poolPromise;
+  const res = await new sql.Request(pool)
+    .input("NoProduksi", sql.VarChar(20), noProduksiStr)
+    .execute("SP_LapHasilProduksiHarianCrusher");
+  return res.recordset || [];
+}
+
+async function fetchCrusherDowntimeRows(noProduksi) {
+  const noProduksiStr = String(noProduksi || "").trim();
+  if (!noProduksiStr) throw badReq("NoProduksi wajib diisi");
+
+  const pool = await poolPromise;
+  const res = await new sql.Request(pool)
+    .input("NoProduksi", sql.VarChar(20), noProduksiStr)
+    .query(
+      `SELECT NoProduksi = NoCrusherProduksi, NoUrut, TimeStart, TimeEnd, Remarks
+       FROM dbo.CrusherProduksi_dDownTime
+       WHERE NoCrusherProduksi = @NoProduksi
+         AND TimeStart IS NOT NULL
+         AND TimeEnd IS NOT NULL
+       ORDER BY NoUrut`,
+    );
+  return res.recordset || [];
+}
+
 module.exports = {
   getAllProduksi,
   getProduksiByDate,
@@ -1958,4 +1987,6 @@ module.exports = {
   upsertInputsAndPartials,
   deleteInputsAndPartials,
   splitProduksiTime,
+  runLaporanHasilProduksiHarianCrusher,
+  fetchCrusherDowntimeRows,
 };

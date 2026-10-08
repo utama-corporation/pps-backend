@@ -85,4 +85,10 @@ router.delete(
   ctrl.deleteInputsAndPartials,
 ); // ⬅️ NEW
 
+router.get(
+  "/crusher/:noCrusherProduksi/report/pdf",
+  verifyToken,
+  ctrl.exportReportPdf,
+);
+
 module.exports = router;
