@@ -10,15 +10,14 @@ router.get("/label/:labelCode", verifyToken, ctrl.getLabelInfo);
 // List semua transaksi bongkar susun v2
 router.get("/", verifyToken, ctrl.getAll);
 
-// Detail satu transaksi
-router.get("/:noBongkarSusun", verifyToken, ctrl.getDetail);
-
-
 router.get("/laporan/html", ctrl.getLaporanHtml);
 router.get("/laporan/pdf", ctrl.getLaporanPdf);
 
 // Untuk ambil JSON dari aplikasi, tetap pakai token
 router.get("/laporan", verifyToken, ctrl.getLaporan);
+
+// Detail satu transaksi
+router.get("/:noBongkarSusun", verifyToken, ctrl.getDetail);
 
 // Buat transaksi bongkar susun baru
 router.post("/", verifyToken, ctrl.create);

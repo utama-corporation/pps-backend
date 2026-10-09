@@ -412,12 +412,14 @@ const MODULE_CONFIG = {
       "PasangKunciOutputRejectV2",
       "SpannerOutputRejectV2",
       "BJSortirRejectOutputLabelReject",
+      "BongkarSusunOutputReject",
     ],
     inputTables: [
       "BrokerProduksiInputReject",
       "BrokerProduksiInputRejectPartial",
       "GilinganProduksiInputRejectV2",
       "GilinganProduksiInputRejectV2Partial",
+      "BongkarSusunInputReject",
     ],
     outputDisplayConfig: {
       InjectProduksiOutputRejectV2: {
@@ -439,6 +441,10 @@ const MODULE_CONFIG = {
       BJSortirRejectOutputLabelReject: {
         displayField: "NoBJSortir",
         label: "Sortir Reject",
+      },
+      BongkarSusunOutputReject: {
+        displayField: "NoBongkarSusun",
+        label: "Bongkar Susun",
       },
     },
     headerParseFields: [
@@ -891,6 +897,7 @@ const MODULE_CONFIG = {
     inputTables: [
       "BJSortirRejectInputLabelBarangJadi",
       "BJSortirRejectInputLabelFurnitureWIP",
+      "BJSortirRejectInputLabelBahanPendukung",
     ],
     scalarFields: ["TglBJSortir"],
     headerParseFields: [

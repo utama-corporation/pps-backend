@@ -11,6 +11,9 @@ const {
   getLabelInfoFurnitureWip,
 } = require("./handlers/get-label-info-furniture-wip.handler");
 const {
+  getLabelInfoBahanPendukung,
+} = require("./handlers/get-label-info-bahan-pendukung.handler");
+const {
   createSortirRejectBarangJadi,
 } = require("./handlers/create-barang-jadi.handler");
 const {
@@ -33,6 +36,9 @@ exports.getLabelInfo = async (labelCode) => {
   }
   if (category === "furnitureWip") {
     return getLabelInfoFurnitureWip(code);
+  }
+  if (category === "bahanPendukung") {
+    return getLabelInfoBahanPendukung(code);
   }
 
   throw badReq(`Kategori ${category} belum didukung`);
@@ -60,10 +66,17 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
           WHERE bjv2.NoBJSortir = h.NoBJSortir
         )
         OR (
-          EXISTS (
-            SELECT 1
-            FROM dbo.BJSortirRejectInputLabelFurnitureWIP fwv2
-            WHERE fwv2.NoBJSortir = h.NoBJSortir
+          (
+            EXISTS (
+              SELECT 1
+              FROM dbo.BJSortirRejectInputLabelFurnitureWIP fwv2
+              WHERE fwv2.NoBJSortir = h.NoBJSortir
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM dbo.BJSortirRejectInputLabelBahanPendukung bpv2
+              WHERE bpv2.NoBJSortir = h.NoBJSortir
+            )
           )
           AND NOT EXISTS (
             SELECT 1
@@ -97,6 +110,7 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
         h.IdUsername,
         u.Username,
         CASE
+          WHEN ISNULL(bp.inputLabelCount, 0) > 0 THEN 'bahanPendukung'
           WHEN ISNULL(ro.outputLabelCount, 0) > 0
            AND ISNULL(o.outputLabelCount, 0) > 0 THEN 'barangJadiReject'
           WHEN ISNULL(ro.outputLabelCount, 0) > 0 THEN 'reject'
@@ -104,7 +118,10 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
           ELSE 'furnitureWip'
         END AS category,
         CASE
-          WHEN ISNULL(o.outputLabelCount, 0) > 0 THEN ISNULL(i.inputLabelCount, 0)
+          WHEN ISNULL(bp.inputLabelCount, 0) > 0
+            THEN ISNULL(bp.inputLabelCount, 0)
+          WHEN ISNULL(o.outputLabelCount, 0) > 0
+            THEN ISNULL(i.inputLabelCount, 0)
           ELSE ISNULL(fwi.inputLabelCount, 0)
         END AS inputLabelCount,
         ISNULL(o.outputLabelCount, 0) + ISNULL(ro.outputLabelCount, 0)
@@ -169,6 +186,14 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
           ON fw.NoFurnitureWIP = ifw.NoFurnitureWIP
         WHERE ifw.NoBJSortir = h.NoBJSortir
       ) fwi
+      OUTER APPLY (
+        SELECT
+          COUNT(DISTINCT ibp.NoBahanPendukung) AS inputLabelCount
+        FROM dbo.BJSortirRejectInputLabelBahanPendukung ibp
+        INNER JOIN dbo.BahanPendukung bp2
+          ON bp2.NoBahanPendukung = ibp.NoBahanPendukung
+        WHERE ibp.NoBJSortir = h.NoBJSortir
+      ) bp
       ${whereClause}
       ORDER BY h.TglBJSortir DESC, h.NoBJSortir DESC
       OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
@@ -211,10 +236,17 @@ exports.getDetail = async (noBJSortir) => {
             WHERE bjv2.NoBJSortir = h.NoBJSortir
           )
           OR (
-            EXISTS (
-              SELECT 1
-              FROM dbo.BJSortirRejectInputLabelFurnitureWIP fwv2
-              WHERE fwv2.NoBJSortir = h.NoBJSortir
+            (
+              EXISTS (
+                SELECT 1
+                FROM dbo.BJSortirRejectInputLabelFurnitureWIP fwv2
+                WHERE fwv2.NoBJSortir = h.NoBJSortir
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM dbo.BJSortirRejectInputLabelBahanPendukung bpv2
+                WHERE bpv2.NoBJSortir = h.NoBJSortir
+              )
             )
             AND NOT EXISTS (
               SELECT 1
@@ -284,8 +316,8 @@ exports.getDetail = async (noBJSortir) => {
       ORDER BY map.NoBJ ASC
     `);
 
-  const hasRejectOutput = rejectOutputsRes.recordset.length > 0;
-  const hasBarangJadiOutput = outputsRes.recordset.length > 0;
+    const hasRejectOutput = rejectOutputsRes.recordset.length > 0;
+    const hasBarangJadiOutput = outputsRes.recordset.length > 0;
 
   if (hasRejectOutput) {
     const inputsBarangJadiRes = await pool
@@ -328,9 +360,30 @@ exports.getDetail = async (noBJSortir) => {
         ORDER BY map.NoFurnitureWIP ASC
       `);
 
+    const inputsBahanPendukungRes = await pool
+      .request()
+      .input("NoBJSortir", sql.VarChar(50), no).query(`
+        SELECT
+          'bahanPendukung' AS category,
+          map.NoBahanPendukung,
+          bp.CreatedAt AS DateCreate,
+          bp.IdCabinetMaterial AS idJenis,
+          cm.Nama AS namaJenis,
+          ISNULL(bp.Qty, 0) AS pcs,
+          ISNULL(CAST(bp.HasBeenPrinted AS int), 0) AS hasBeenPrinted
+        FROM dbo.BJSortirRejectInputLabelBahanPendukung map
+        INNER JOIN dbo.BahanPendukung bp
+          ON bp.NoBahanPendukung = map.NoBahanPendukung
+        LEFT JOIN dbo.MstCabinetMaterial cm
+          ON cm.IdCabinetMaterial = bp.IdCabinetMaterial
+        WHERE map.NoBJSortir = @NoBJSortir
+        ORDER BY map.NoBahanPendukung ASC
+      `);
+
     const inputs = [
       ...(inputsBarangJadiRes.recordset || []),
       ...(inputsFurnitureWipRes.recordset || []),
+      ...(inputsBahanPendukungRes.recordset || []),
     ];
     const totalPcsInput = inputs.reduce(
       (sum, row) => sum + Number(row.pcs || 0),
@@ -344,7 +397,11 @@ exports.getDetail = async (noBJSortir) => {
     return {
       ...header,
       TglBJSortir: formatYMD(header.TglBJSortir),
-      category: hasBarangJadiOutput ? "barangJadiReject" : "reject",
+      category: hasBarangJadiOutput
+        ? "barangJadiReject"
+        : inputsBahanPendukungRes.recordset.length > 0
+          ? "bahanPendukung"
+          : "reject",
       balance: hasBarangJadiOutput
         ? Math.abs(totalPcsInput - totalPcsOutput) < 0.001
         : null,
@@ -392,9 +449,37 @@ exports.getDetail = async (noBJSortir) => {
         ORDER BY map.NoFurnitureWIP ASC
       `);
 
+  let inputRows = inputsRes.recordset || [];
+  let inputCategory = isBarangJadi ? "barangJadi" : "furnitureWip";
+
+  if (inputRows.length === 0) {
+    const inputsBpRes = await pool
+      .request()
+      .input("NoBJSortir", sql.VarChar(50), no).query(`
+        SELECT
+          map.NoBahanPendukung,
+          bp.CreatedAt AS DateCreate,
+          bp.IdCabinetMaterial AS idJenis,
+          cm.Nama AS namaJenis,
+          ISNULL(bp.Qty, 0) AS pcs,
+          ISNULL(CAST(bp.HasBeenPrinted AS int), 0) AS hasBeenPrinted
+        FROM dbo.BJSortirRejectInputLabelBahanPendukung map
+        INNER JOIN dbo.BahanPendukung bp
+          ON bp.NoBahanPendukung = map.NoBahanPendukung
+        LEFT JOIN dbo.MstCabinetMaterial cm
+          ON cm.IdCabinetMaterial = bp.IdCabinetMaterial
+        WHERE map.NoBJSortir = @NoBJSortir
+        ORDER BY map.NoBahanPendukung ASC
+      `);
+    if (inputsBpRes.recordset.length > 0) {
+      inputRows = inputsBpRes.recordset;
+      inputCategory = "bahanPendukung";
+    }
+  }
+
   const outputRows = isBarangJadi ? outputsRes.recordset || [] : [];
 
-  const totalPcsInput = inputsRes.recordset.reduce(
+  const totalPcsInput = inputRows.reduce(
     (sum, row) => sum + Number(row.pcs || 0),
     0,
   );
@@ -406,9 +491,12 @@ exports.getDetail = async (noBJSortir) => {
   return {
     ...header,
     TglBJSortir: formatYMD(header.TglBJSortir),
-    category: isBarangJadi ? "barangJadi" : "furnitureWip",
-    balance: !isBarangJadi || Math.abs(totalPcsInput - totalPcsOutput) < 0.001,
-    inputs: inputsRes.recordset || [],
+    category: inputCategory,
+    balance:
+      inputCategory === "bahanPendukung"
+        ? null
+        : !isBarangJadi || Math.abs(totalPcsInput - totalPcsOutput) < 0.001,
+    inputs: inputRows,
     outputs: outputRows,
   };
 };
@@ -431,6 +519,11 @@ exports.create = async (payload, ctx) => {
       return createSortirRejectReject(null, payload, ctx);
     }
     if (hasPcs) {
+      if (category === "bahanPendukung") {
+        throw badReq(
+          "outputs reject (berat) wajib diisi untuk input bahanPendukung",
+        );
+      }
       return createSortirRejectBarangJadi(payload, ctx);
     }
 
@@ -442,6 +535,9 @@ exports.create = async (payload, ctx) => {
   }
   if (category === "barangJadi") {
     throw badReq("outputs wajib diisi untuk input barangJadi");
+  }
+  if (category === "bahanPendukung") {
+    throw badReq("outputs reject (berat) wajib diisi untuk input bahanPendukung");
   }
 
   throw badReq(`Label ${firstInput} tidak dikenali kategorinya`);
@@ -533,6 +629,28 @@ exports.updateSortirReject = async (noBJSortir, payload, ctx) => {
             UPDATE dbo.FurnitureWIP
             SET DateUsage = @NewDate
             WHERE NoFurnitureWIP IN (
+              SELECT j.code FROM OPENJSON(@CodesJson)
+              WITH (code varchar(50) '$.code') AS j
+            )
+          `);
+      }
+
+      const inputsBPRes = await new sql.Request(tx)
+        .input("NoBJSortir", sql.VarChar(50), no)
+        .query(
+          `SELECT NoBahanPendukung FROM dbo.BJSortirRejectInputLabelBahanPendukung WHERE NoBJSortir=@NoBJSortir`,
+        );
+
+      if (inputsBPRes.recordset.length > 0) {
+        const codesJson = JSON.stringify(
+          inputsBPRes.recordset.map((r) => ({ code: r.NoBahanPendukung })),
+        );
+        await new sql.Request(tx)
+          .input("CodesJson", sql.NVarChar(sql.MAX), codesJson)
+          .input("NewDate", sql.DateTime, newDate).query(`
+            UPDATE dbo.BahanPendukung
+            SET DateUsage = @NewDate
+            WHERE NoBahanPendukung IN (
               SELECT j.code FROM OPENJSON(@CodesJson)
               WITH (code varchar(50) '$.code') AS j
             )
@@ -803,11 +921,46 @@ exports.deleteSortirReject = async (noBJSortir, ctx) => {
         );
     }
 
+    const inputsBahanPendukungRes = await new sql.Request(tx)
+      .input("NoBJSortir", sql.VarChar(50), no)
+      .query(
+        `SELECT NoBahanPendukung FROM dbo.BJSortirRejectInputLabelBahanPendukung WHERE NoBJSortir=@NoBJSortir`,
+      );
+
+    if (inputsBahanPendukungRes.recordset.length > 0) {
+      const inputJson = JSON.stringify(
+        inputsBahanPendukungRes.recordset.map((r) => ({
+          code: r.NoBahanPendukung,
+        })),
+      );
+
+      await new sql.Request(tx)
+        .input(
+          "CodesJson",
+          sql.NVarChar(sql.MAX),
+          inputJson,
+        ).query(`
+          UPDATE dbo.BahanPendukung
+          SET DateUsage = NULL
+          WHERE NoBahanPendukung IN (
+            SELECT j.code FROM OPENJSON(@CodesJson)
+            WITH (code varchar(50) '$.code') AS j
+          )
+        `);
+
+      await new sql.Request(tx)
+        .input("NoBJSortir", sql.VarChar(50), no)
+        .query(
+          `DELETE FROM dbo.BJSortirRejectInputLabelBahanPendukung WHERE NoBJSortir=@NoBJSortir`,
+        );
+    }
+
     if (
       rejectOutputRes.recordset.length === 0 &&
       outputsRes.recordset.length === 0 &&
       inputsBarangJadiRes.recordset.length === 0 &&
-      inputsFurnitureWipRes.recordset.length === 0
+      inputsFurnitureWipRes.recordset.length === 0 &&
+      inputsBahanPendukungRes.recordset.length === 0
     ) {
       const e = new Error(`NoBJSortir ${no} bukan transaksi sortir reject v2`);
       e.statusCode = 404;

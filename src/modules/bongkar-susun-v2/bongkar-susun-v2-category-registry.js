@@ -15,6 +15,7 @@ function detectCategory(labelCode) {
   if (code.startsWith("BB.")) return "furnitureWip";
   if (code.startsWith("M.")) return "bonggolan";
   if (code.startsWith("H.")) return "mixer";
+  if (code.startsWith("BF.")) return "reject";
   return null;
 }
 

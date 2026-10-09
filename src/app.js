@@ -30,6 +30,7 @@ const crusherTypeRoutes = require("./modules/master-crusher/master-crusher-route
 const mstMesinRoutes = require("./modules/master-mesin/master-mesin-routes");
 const mstBahanBakuRoutes = require("./modules/master/bahan-baku/master-bahan-baku-routes");
 const mstOperatorRoutes = require("./modules/master-operator/master-operator-routes");
+const masterBlokLokasiRoutes = require("./modules/master-blok-lokasi/master-blok-lokasi-routes");
 const mstCetakanRoutes = require("./modules/master-cetakan/master-cetakan-route");
 const mstFormulaRoutes = require("./modules/master-formula/master-formula-route");
 const mstWarnaRoutes = require("./modules/master-warna/master-warna-route");
@@ -147,6 +148,7 @@ app.use("/api/crusher-type", crusherTypeRoutes);
 app.use("/api/mst-mesin", mstMesinRoutes);
 app.use("/api", mstBahanBakuRoutes);
 app.use("/api/mst-operator", mstOperatorRoutes);
+app.use("/api/mst-blok-lokasi", masterBlokLokasiRoutes);
 app.use("/api/production", checkOverlapRoutes);
 app.use("/api/mst-cetakan", mstCetakanRoutes);
 app.use("/api/mst-formula", mstFormulaRoutes);

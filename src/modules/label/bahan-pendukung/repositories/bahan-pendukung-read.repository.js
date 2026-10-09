@@ -125,6 +125,7 @@ exports.getByNoBahanPendukung = async (noBahanPendukung) => {
         b.IdCabinetMaterial, cm.Nama AS NamaCabinetMaterial,
         b.Qty, b.QtyAwal, b.Keterangan,
         b.IsPartial,
+        b.DateUsage,
         ISNULL(CAST(b.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
         b.CreateBy,
         b.CreatedAt,
