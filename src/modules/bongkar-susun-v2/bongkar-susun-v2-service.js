@@ -1204,59 +1204,6 @@ bibj.NoBongkarSusun,
       WHERE ibj.NoBongkarSusun = @NoBongkarSusun
     `);
 
-  // inputs — reject
-  const inputsRejectRes = await pool
-    .request()
-    .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
-      SELECT
-        ir.NoReject          AS labelCode,
-        'reject'             AS category,
-        r.IdReject           AS idJenis,
-        mr.NamaReject        AS namaJenis,
-        CASE
-          WHEN EXISTS (
-            SELECT 1
-            FROM dbo.BongkarSusunInputRejectPartial bip
-            INNER JOIN dbo.RejectV2Partial x
-              ON x.NoRejectPartial = bip.NoRejectPartial
-            WHERE bip.NoBongkarSusun = ir.NoBongkarSusun
-              AND x.NoReject = ir.NoReject
-          ) THEN (
-            SELECT SUM(ISNULL(x2.Berat, 0))
-            FROM dbo.BongkarSusunInputRejectPartial bip2
-            INNER JOIN dbo.RejectV2Partial x2
-              ON x2.NoRejectPartial = bip2.NoRejectPartial
-            WHERE bip2.NoBongkarSusun = ir.NoBongkarSusun
-              AND x2.NoReject = ir.NoReject
-          )
-          WHEN ISNULL(r.IsPartial, 0) = 1 THEN
-            CASE
-              WHEN ISNULL(r.Berat, 0) - ISNULL(rp.TotalPartial, 0) < 0
-                THEN 0
-              ELSE ISNULL(r.Berat, 0) - ISNULL(rp.TotalPartial, 0)
-            END
-          ELSE ISNULL(r.Berat, 0)
-        END AS totalBerat,
-        CAST(CASE WHEN EXISTS (
-          SELECT 1
-          FROM dbo.BongkarSusunInputRejectPartial bip
-          INNER JOIN dbo.RejectV2Partial x
-            ON x.NoRejectPartial = bip.NoRejectPartial
-          WHERE bip.NoBongkarSusun = ir.NoBongkarSusun
-            AND x.NoReject = ir.NoReject
-        ) THEN 1 ELSE 0 END AS bit) AS isPartial,
-        ISNULL(r.Berat, 0) AS labelBerat
-      FROM dbo.BongkarSusunInputReject ir
-      INNER JOIN dbo.RejectV2 r ON r.NoReject = ir.NoReject
-      LEFT JOIN (
-        SELECT NoReject, SUM(ISNULL(Berat, 0)) AS TotalPartial
-        FROM dbo.RejectV2Partial
-        GROUP BY NoReject
-      ) rp ON rp.NoReject = r.NoReject
-      LEFT JOIN dbo.MstReject mr ON mr.IdReject = r.IdReject
-      WHERE ir.NoBongkarSusun = @NoBongkarSusun
-    `);
-
   const outputsWashingDetailRes = await pool
     .request()
     .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
@@ -1423,23 +1370,6 @@ bibj.NoBongkarSusun,
       INNER JOIN dbo.BarangJadi b ON b.NoBJ = obj.NoBJ
       INNER JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = b.IdBJ
       WHERE obj.NoBongkarSusun = @NoBongkarSusun
-    `);
-
-  // outputs — reject
-  const outputsRejectRes = await pool
-    .request()
-    .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
-      SELECT
-        obr.NoReject         AS labelCode,
-        'reject'             AS category,
-        r.IdReject           AS idJenis,
-        mr.NamaReject        AS namaJenis,
-        ISNULL(r.Berat, 0)   AS totalBerat,
-        ISNULL(CAST(r.HasBeenPrinted AS int), 0) AS printCount
-      FROM dbo.BongkarSusunOutputReject obr
-      INNER JOIN dbo.RejectV2 r ON r.NoReject = obr.NoReject
-      LEFT JOIN dbo.MstReject mr ON mr.IdReject = r.IdReject
-      WHERE obr.NoBongkarSusun = @NoBongkarSusun
     `);
 
   const outputsBrokerDetailRes = await pool
