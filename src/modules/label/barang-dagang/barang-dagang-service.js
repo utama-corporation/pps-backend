@@ -77,30 +77,12 @@ exports.updateBarangDagang = async (noBarangDagang, payload) => {
       throw err;
     }
 
-    // Konsumsi parsial produksi memotong Qty (stok live) tanpa mengisi
-    // DateUsage, jadi Qty < QtyAwal menandai label yang sudah terpakai
-    // sebagian. QtyAwal-nya tidak boleh disentuh lagi — kalau tidak, nilai
-    // yang dikoreksi bukan lagi data pembelian aslinya.
-    if (Number(current.Qty) !== Number(current.QtyAwal ?? current.Qty)) {
-      const err = conflict(
-        "Cannot update: Barang Dagang sudah dipakai sebagian (Qty < QtyAwal).",
-      );
-      err.code = "BD_ALREADY_PARTIAL";
-      throw err;
-    }
-
     const merged = {
       IdSupplier: hasOwn(header, "IdSupplier") ? header.IdSupplier : current.IdSupplier,
       IdBarangDagang: hasOwn(header, "IdBarangDagang")
         ? header.IdBarangDagang
         : current.IdBarangDagang,
-      // QtyAwal = kolom yang berasal dari pembelian. Qty ikut ditulis (lihat
-      // updateBarangDagangHeader) dan nilainya mengikuti QtyAwal karena guard
-      // di atas menjamin keduanya masih sama.
-      QtyAwal: hasOwn(header, "QtyAwal")
-        ? header.QtyAwal
-        : current.QtyAwal ?? current.Qty,
-      Qty: hasOwn(header, "QtyAwal") ? header.QtyAwal : current.Qty,
+      Qty: hasOwn(header, "Qty") ? header.Qty : current.Qty,
       Keterangan: hasOwn(header, "Keterangan") ? header.Keterangan : current.Keterangan,
       IsPartial: hasOwn(header, "IsPartial") ? header.IsPartial : current.IsPartial,
       Blok: hasOwn(header, "Blok") ? header.Blok : current.Blok,
@@ -109,7 +91,7 @@ exports.updateBarangDagang = async (noBarangDagang, payload) => {
 
     if (!merged.IdBarangDagang) throw badReq("IdBarangDagang cannot be empty");
     if (!merged.IdSupplier) throw badReq("IdSupplier cannot be empty");
-    if (!(Number(merged.QtyAwal) > 0)) throw badReq("QtyAwal harus lebih besar dari 0");
+    if (!(Number(merged.Qty) > 0)) throw badReq("Qty harus lebih besar dari 0");
 
     await writeRepo.updateBarangDagangHeader(tx, noBarangDagang, merged);
 
@@ -168,17 +150,6 @@ exports.deleteBarangDagang = async (noBarangDagang, payload) => {
     if (head.DateUsage) {
       const err = conflict("Cannot delete: Barang Dagang already used (DateUsage IS NOT NULL).");
       err.code = "BD_ALREADY_USED";
-      throw err;
-    }
-
-    // Konsumsi parsial produksi memotong Qty tanpa mengisi DateUsage, jadi
-    // label yang sudah separuh habis masih lolos cek DateUsage. Hapus baris
-    // seperti ini akan menghilangkan sisa stok yang masih tercatat di produksi.
-    if (Number(head.Qty) !== Number(head.QtyAwal ?? head.Qty)) {
-      const err = conflict(
-        "Cannot delete: Barang Dagang sudah dipakai sebagian (Qty < QtyAwal).",
-      );
-      err.code = "BD_ALREADY_PARTIAL";
       throw err;
     }
 
