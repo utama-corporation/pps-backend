@@ -551,6 +551,11 @@ function getLabelColumn(prefix) {
       return "NoBJ";
     case "BF":
       return "NoReject";
+    // Barang Dagang & Bahan Pendukung: header-only satu baris = satu label.
+    case "BD":
+      return "NoBarangDagang";
+    case "BP":
+      return "NoBahanPendukung";
     default:
       return "NoLabel";
   }
@@ -677,6 +682,27 @@ function getAvailabilityCheckSQL(prefix, tableName) {
         FROM dbo.RejectV2 r
         WHERE r.NoReject = @LabelCode
       `;
+    // BarangDagang & BahanPendukung tidak punya kolom IdWarehouse (keduanya
+    // tidak melacak gudang), jadi IdWarehouse di-cast NULL. Nilai sebenarnya
+    // tetap dibaca dari MstBlok di updateLabelLocation().
+    case "BD": // BarangDagang (header)
+      return `
+        SELECT TOP 1
+          b.Blok, b.IdLokasi, CAST(NULL AS int) AS IdWarehouse,
+          CASE WHEN b.DateUsage IS NULL
+               THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Available
+        FROM dbo.BarangDagang b
+        WHERE b.NoBarangDagang = @LabelCode
+      `;
+    case "BP": // BahanPendukung (header)
+      return `
+        SELECT TOP 1
+          b.Blok, b.IdLokasi, CAST(NULL AS int) AS IdWarehouse,
+          CASE WHEN b.DateUsage IS NULL AND ISNULL(b.Qty, 0) > 0
+               THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Available
+        FROM dbo.BahanPendukung b
+        WHERE b.NoBahanPendukung = @LabelCode
+      `;
     default:
       // fallback generic (anggap header-only punya kolom DateUsage & labelCol)
       const labelCol = getLabelColumn(prefix) || "NoLabel";
@@ -739,6 +765,10 @@ function resolveLabelTable(prefix) {
       return "dbo.BarangJadi";
     case "BF":
       return "dbo.RejectV2";
+    case "BD":
+      return "dbo.BarangDagang";
+    case "BP":
+      return "dbo.BahanPendukung";
     default:
       return null;
   }
