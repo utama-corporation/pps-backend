@@ -186,6 +186,11 @@ async function getLabelAggregatesByLokasi(blok) {
           SELECT IdLokasi FROM dbo.BarangJadi WHERE Blok = @blok AND DateUsage IS NULL
           UNION ALL
           SELECT IdLokasi FROM dbo.RejectV2 WHERE Blok = @blok AND DateUsage IS NULL
+          UNION ALL
+          -- BarangDagang & BahanPendukung: header-only, 1 baris = 1 label.
+          SELECT IdLokasi FROM dbo.BarangDagang WHERE Blok = @blok AND DateUsage IS NULL
+          UNION ALL
+          SELECT IdLokasi FROM dbo.BahanPendukung WHERE Blok = @blok AND DateUsage IS NULL
         ) AS AllLabels
         GROUP BY IdLokasi;
       `),
@@ -259,6 +264,23 @@ async function getLabelAggregatesByLokasi(blok) {
 
           UNION ALL
           SELECT IdLokasi, NULL AS Qty, Berat FROM dbo.RejectV2 WHERE DateUsage IS NULL AND Blok = @blok
+
+          UNION ALL
+
+          -- BarangDagang & BahanPendukung header-only: Qty = PCS, keduanya
+          -- tidak punya kolom Berat (Berat BP dihapus di
+          -- V20260821180000). Keduanya satu baris = satu label.
+          SELECT IdLokasi, SUM(ISNULL(Qty, 0)) AS Qty, NULL AS Berat
+          FROM dbo.BarangDagang
+          WHERE DateUsage IS NULL AND Blok = @blok
+          GROUP BY IdLokasi
+
+          UNION ALL
+
+          SELECT IdLokasi, SUM(ISNULL(Qty, 0)) AS Qty, NULL AS Berat
+          FROM dbo.BahanPendukung
+          WHERE DateUsage IS NULL AND Blok = @blok
+          GROUP BY IdLokasi
         ) AS Agg
         GROUP BY IdLokasi;
       `),
