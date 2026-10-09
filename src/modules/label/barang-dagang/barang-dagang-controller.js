@@ -123,7 +123,7 @@ exports.generatePdf = async (req, res) => {
       noLabel: row.NoBarangDagang,
       namaProduk: row.NamaBarangDagang,
       kode: row.NoBarangDagang,
-      qty: row.QtyAwal ?? row.Qty,
+      qty: row.Qty,
       tanggal: kodeLabel,
       batchCode: kodeLabel,
       createdAt: row.CreatedAt,
