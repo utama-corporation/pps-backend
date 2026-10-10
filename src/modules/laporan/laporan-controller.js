@@ -175,6 +175,34 @@ async function rekapHarian(req, res) {
   }
 }
 
+async function stokBarangDagang(req, res) {
+  try {
+    const data = await service.stokBarangDagang(req.query);
+    return sendData(res, data, 'Laporan Stok Barang Dagang berhasil diambil');
+  } catch (error) {
+    return fail(res, error, 'stok barang dagang');
+  }
+}
+
+async function stokBarangDagangPdf(req, res) {
+  try {
+    const { tglAkhir, warehouse } = req.query;
+    const buffer = await service.getStokBarangDagangPdf({
+      tglAkhir,
+      warehouse,
+      username: req.username,
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="Laporan-Stok-Barang-Dagang-${tglAkhir}.pdf"`,
+    );
+    return res.send(Buffer.from(buffer));
+  } catch (error) {
+    return fail(res, error, 'stok barang dagang pdf');
+  }
+}
+
 module.exports = {
   getWarehouseOptions,
   stokBahanBaku,
@@ -193,4 +221,6 @@ module.exports = {
   hasilProduksi,
   produktivitas,
   rekapHarian,
+  stokBarangDagang,
+  stokBarangDagangPdf,
 };

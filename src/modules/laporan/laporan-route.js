@@ -2,7 +2,13 @@ const express = require('express');
 const router = express.Router();
 
 const verifyToken = require('../../core/middleware/verify-token');
+const attachPermissions = require('../../core/middleware/attach-permissions');
+const requirePermission = require('../../core/middleware/require-permission');
 const ctrl = require('./laporan-controller');
+
+// Semua endpoint laporan butuh laporan:read (route individual tetap memakai
+// verifyToken; dipanggil dua kali itu aman/no-op).
+router.use(verifyToken, attachPermissions, requirePermission('laporan:read'));
 
 router.get('/warehouse-options', verifyToken, ctrl.getWarehouseOptions);
 router.get('/bahan-baku/stok', verifyToken, ctrl.stokBahanBaku);
@@ -21,5 +27,8 @@ router.get('/semua-label', verifyToken, ctrl.semuaLabel);
 router.get('/dashboard-produktifitas', verifyToken, ctrl.dashboardProduktifitas);
 router.get('/hasil-produksi', verifyToken, ctrl.hasilProduksi);
 router.get('/produktivitas/:jenis', verifyToken, ctrl.produktivitas);
+// Laporan Stok Barang Dagang (SP_LapStokBarangDagang)
+router.get('/barang-dagang/stok', verifyToken, ctrl.stokBarangDagang);
+router.get('/barang-dagang/stok/pdf', verifyToken, ctrl.stokBarangDagangPdf);
 
 module.exports = router;
