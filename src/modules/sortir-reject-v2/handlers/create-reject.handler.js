@@ -14,6 +14,7 @@ function detectInputCategory(code) {
   const label = String(code || "").trim();
   if (label.startsWith("BA.")) return "barangJadi";
   if (label.startsWith("BB.")) return "furnitureWip";
+  if (label.startsWith("BP.")) return "bahanPendukung";
   return null;
 }
 
@@ -103,7 +104,25 @@ exports.createSortirRejectReject = async (noBJSortir, payload, ctx) => {
               )
               AND b.DateUsage IS NULL
             `)
-          : await new sql.Request(tx).input(
+          : firstCategory === "bahanPendukung"
+            ? await new sql.Request(tx).input(
+                "CodesJson",
+                sql.NVarChar(sql.MAX),
+                inputCodesJson,
+              ).query(`
+              SELECT
+                bp.NoBahanPendukung,
+                bp.Blok,
+                bp.IdLokasi,
+                bp.IsPartial
+              FROM dbo.BahanPendukung bp WITH (UPDLOCK, HOLDLOCK)
+              WHERE bp.NoBahanPendukung IN (
+                SELECT j.code FROM OPENJSON(@CodesJson)
+                WITH (code varchar(50) '$.code') AS j
+              )
+              AND bp.DateUsage IS NULL
+            `)
+            : await new sql.Request(tx).input(
               "CodesJson",
               sql.NVarChar(sql.MAX),
               inputCodesJson,
@@ -190,6 +209,60 @@ exports.createSortirRejectReject = async (noBJSortir, payload, ctx) => {
             )
             AND DateUsage IS NULL
           `);
+      } else if (firstCategory === "bahanPendukung") {
+        await new sql.Request(tx)
+          .input("NoBJSortir", sql.VarChar(50), noSortir)
+          .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson).query(`
+            INSERT INTO dbo.BJSortirRejectInputLabelBahanPendukung (
+              NoBJSortir, NoBahanPendukung
+            )
+            SELECT @NoBJSortir, j.code
+            FROM OPENJSON(@CodesJson)
+            WITH (code varchar(50) '$.code') AS j
+          `);
+
+        // Catat qty keluar per label ke dbo.BahanPendukungKonsumsi_d DULU,
+        // sebelum Qty di-nolkan di bawah, supaya QtyKonsumsi berisi jumlah
+        // yang benar. NoProduksi diisi NoBJSortir supaya log ini bisa dipakai
+        // untuk audit "berapa bahan pendukung yang keluar lewat sortir reject"
+        // dan jadi sumber pengembalian Qty saat transaksi dihapus. Konsumsi di
+        // sortir reject selalu penuh (tidak ada parsial).
+        await new sql.Request(tx)
+          .input("NoBJSortir", sql.VarChar(50), noSortir)
+          .input("CreateBy", sql.VarChar(100), actorUsername)
+          .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson).query(`
+            INSERT INTO dbo.BahanPendukungKonsumsi_d (
+              NoProduksi, NoBahanPendukung, QtyKonsumsi, CreateBy, DateTimeCreate
+            )
+            SELECT @NoBJSortir, b.NoBahanPendukung, ISNULL(b.Qty, 0),
+                   @CreateBy, SYSDATETIME()
+            FROM dbo.BahanPendukung b
+            WHERE b.NoBahanPendukung IN (
+              SELECT j.code FROM OPENJSON(@CodesJson)
+              WITH (code varchar(50) '$.code') AS j
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM dbo.BahanPendukungKonsumsi_d k
+              WHERE k.NoProduksi = @NoBJSortir
+                AND k.NoBahanPendukung = b.NoBahanPendukung
+            )
+          `);
+
+        // Kosongkan stok label dan tandai terpakai. Pola ini sama dengan
+        // mark-usage konsumsi penuh di produksi-upsert-sql.generator.js:
+        // Qty = 0 + DateUsage. Membuang Qty membuat Qty < QtyAwal, yang dipakai
+        // label reception untuk menandai label sudah terpakai sebagian.
+        await new sql.Request(tx)
+          .input("Tanggal", sql.Date, nowDate)
+          .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson).query(`
+            UPDATE dbo.BahanPendukung
+            SET Qty = 0, DateUsage = @Tanggal
+            WHERE NoBahanPendukung IN (
+              SELECT j.code FROM OPENJSON(@CodesJson)
+              WITH (code varchar(50) '$.code') AS j
+            )
+            AND DateUsage IS NULL
+          `);
       } else {
         await new sql.Request(tx)
           .input("NoBJSortir", sql.VarChar(50), noSortir)
@@ -248,6 +321,14 @@ exports.createSortirRejectReject = async (noBJSortir, payload, ctx) => {
             FROM dbo.BJSortirRejectInputLabelFurnitureWIP map
             INNER JOIN dbo.FurnitureWIP fw
               ON fw.NoFurnitureWIP = map.NoFurnitureWIP
+            WHERE map.NoBJSortir = @NoBJSortir
+
+            UNION ALL
+
+            SELECT bp.Blok, bp.IdLokasi, 3 AS priority
+            FROM dbo.BJSortirRejectInputLabelBahanPendukung map
+            INNER JOIN dbo.BahanPendukung bp
+              ON bp.NoBahanPendukung = map.NoBahanPendukung
             WHERE map.NoBJSortir = @NoBJSortir
           ) src
           ORDER BY src.priority

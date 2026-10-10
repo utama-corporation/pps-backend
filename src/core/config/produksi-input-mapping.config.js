@@ -369,6 +369,12 @@ const INPUT_CONFIGS = {
       mappingTable: "BJSortirRejectInputLabelBarangJadi",
       dateUsageColumn: "DateUsage",
     },
+    bahanPendukung: {
+      sourceTable: "BahanPendukung",
+      keys: ["NoBahanPendukung"],
+      mappingTable: "BJSortirRejectInputLabelBahanPendukung",
+      dateUsageColumn: "DateUsage",
+    },
   },
 
   bongkarSusun: {

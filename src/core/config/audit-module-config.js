@@ -891,6 +891,7 @@ const MODULE_CONFIG = {
     inputTables: [
       "BJSortirRejectInputLabelBarangJadi",
       "BJSortirRejectInputLabelFurnitureWIP",
+      "BJSortirRejectInputLabelBahanPendukung",
     ],
     scalarFields: ["TglBJSortir"],
     headerParseFields: [
