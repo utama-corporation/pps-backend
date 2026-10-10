@@ -1,4 +1,5 @@
 const sql = require('mssql');
+const puppeteer = require('puppeteer');
 const { poolPromise } = require('../../core/config/db');
 const { badReq, notFound } = require('../../core/utils/http-error');
 
@@ -551,6 +552,204 @@ async function rekapHarian({ jenis, tglAkhir }) {
   return rekapProduksi(key, { tglAkhir });
 }
 
+// ---------------------------------------------------------------------------
+// Laporan Stok Barang Dagang — SP_LapStokBarangDagang(@TglAkhir, @Warehouse)
+// ---------------------------------------------------------------------------
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function formatDateId(value) {
+  if (!value) return '-';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '-';
+  return d.toLocaleDateString('id-ID', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function formatNumber(value, digits = 0) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '0';
+  return n.toLocaleString('id-ID', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+async function stokBarangDagang({ tglAkhir, warehouse }) {
+  const tanggal = parseDate(tglAkhir, 'Tanggal akhir');
+  const wh = String(warehouse ?? 'ALL').trim() || 'ALL';
+  return runSp('dbo.SP_LapStokBarangDagang', [
+    { name: 'TglAkhir', type: sql.Date, value: tanggal },
+    { name: 'Warehouse', type: sql.VarChar(100), value: wh },
+  ]);
+}
+
+function buildStokBarangDagangHtml({ tglAkhir, warehouse, rows }) {
+  const totalQty = rows.reduce((s, r) => s + Number(r.Qty || 0), 0);
+
+  const bodyRows = rows
+    .map(
+      (r) => `
+        <tr>
+          <td class="center">${escapeHtml(formatDateId(r.DateCreate))}</td>
+          <td>${escapeHtml(r.NoBarangDagang ?? '-')}</td>
+          <td>${escapeHtml(r.NamaBarangDagang ?? '-')}</td>
+          <td>${escapeHtml(r.NamaWarehouse ?? '-')}</td>
+          <td>${escapeHtml(r.Blok ?? '-')}</td>
+          <td>${escapeHtml(r.IdLokasi ?? '-')}</td>
+          <td class="right">${formatNumber(r.Qty)}</td>
+        </tr>`,
+    )
+    .join('');
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 9px; color: #1e293b; }
+  .report-header {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-bottom: 2px solid #1e40af; padding-bottom: 8px; margin-bottom: 12px;
+  }
+  .report-title { font-size: 16px; font-weight: 700; color: #1e40af; }
+  .report-subtitle { font-size: 10px; color: #64748b; margin-top: 2px; }
+  .report-meta { text-align: right; font-size: 9px; color: #475569; }
+  table.data { width: 100%; border-collapse: collapse; }
+  table.data th {
+    background: #1e40af; color: #fff; font-size: 8px; text-transform: uppercase;
+    letter-spacing: 0.3px; padding: 5px 6px; border: 1px solid #1e3a8a;
+  }
+  table.data td { padding: 4px 6px; border: 1px solid #e2e8f0; }
+  table.data tr:nth-child(even) td { background: #f8fafc; }
+  .center { text-align: center; }
+  .right { text-align: right; }
+  .summary-strip { display: flex; gap: 10px; margin-bottom: 10px; }
+  .summary-card { flex: 1; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px 10px; }
+  .summary-label { font-size: 8px; color: #64748b; text-transform: uppercase; }
+  .summary-value { font-size: 14px; font-weight: 700; color: #1e40af; }
+  tfoot td {
+    background: #eef2ff !important; font-weight: 700; border-top: 2px solid #1e40af;
+  }
+</style>
+</head>
+<body>
+  <div class="report-header">
+    <div>
+      <div class="report-title">Laporan Stok Barang Dagang</div>
+      <div class="report-subtitle">
+        Posisi stok per tanggal: ${escapeHtml(formatDateId(tglAkhir))} &middot;
+        Warehouse: ${escapeHtml(warehouse)}
+      </div>
+    </div>
+    <div class="report-meta">Dicetak: ${escapeHtml(new Date().toLocaleString('id-ID'))}</div>
+  </div>
+
+  <div class="summary-strip">
+    <div class="summary-card">
+      <div class="summary-label">Total Baris</div>
+      <div class="summary-value">${rows.length}</div>
+    </div>
+    <div class="summary-card">
+      <div class="summary-label">Total Qty</div>
+      <div class="summary-value">${formatNumber(totalQty)}</div>
+    </div>
+  </div>
+
+  <table class="data">
+    <thead>
+      <tr>
+        <th class="center">Tanggal</th>
+        <th>No. Barang Dagang</th>
+        <th>Nama Barang Dagang</th>
+        <th>Warehouse</th>
+        <th>Blok</th>
+        <th>Lokasi</th>
+        <th class="right">Qty</th>
+      </tr>
+    </thead>
+    <tbody>${
+      bodyRows ||
+      '<tr><td colspan="7" class="center">Tidak ada data.</td></tr>'
+    }</tbody>
+    <tfoot>
+      <tr>
+        <td colspan="6" class="center">TOTAL</td>
+        <td class="right">${formatNumber(totalQty)}</td>
+      </tr>
+    </tfoot>
+  </table>
+</body>
+</html>`;
+}
+
+let pdfBrowserPromise;
+
+async function getPdfBrowser() {
+  if (!pdfBrowserPromise) {
+    pdfBrowserPromise = puppeteer.launch({
+      headless: 'shell',
+      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    });
+  }
+  return pdfBrowserPromise;
+}
+
+async function getStokBarangDagangPdf({ tglAkhir, warehouse, username }) {
+  const tanggal = parseDate(tglAkhir, 'Tanggal akhir');
+  const wh = String(warehouse ?? 'ALL').trim() || 'ALL';
+  const who = String(username ?? '-').trim() || '-';
+  const printedAt = new Date().toLocaleString('id-ID', {
+    weekday: 'long',
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  const data = await stokBarangDagang({ tglAkhir: tanggal, warehouse: wh });
+  const html = buildStokBarangDagangHtml({ tglAkhir: tanggal, warehouse: wh, rows: data.rows });
+
+  const browser = await getPdfBrowser();
+  const page = await browser.newPage();
+  await page.setViewport({ width: 794, height: 1123 });
+
+  try {
+    await page.goto('about:blank', { waitUntil: 'domcontentloaded' });
+    await page.evaluate((h) => {
+      document.open();
+      document.write(h);
+      document.close();
+    }, html);
+
+    return await page.pdf({
+      format: 'A4',
+      landscape: false,
+      printBackground: true,
+      displayHeaderFooter: true,
+      headerTemplate: '<span></span>',
+      footerTemplate: `
+        <div style="width:100%; font-size:8px; color:#94a3b8; font-family:'Segoe UI',Arial,sans-serif; display:flex; justify-content:space-between; padding:08mm;">
+          <span>Print by ${escapeHtml(who)} on ${escapeHtml(printedAt)}</span>
+          <span>Halaman <span class="pageNumber"></span> dari <span class="totalPages"></span></span>
+        </div>`,
+      margin: { top: '8mm', right: '8mm', bottom: '14mm', left: '8mm' },
+    });
+  } finally {
+    await page.close();
+  }
+}
+
 module.exports = {
   getWarehouseOptions,
   stokBahanBaku,
@@ -569,4 +768,6 @@ module.exports = {
   hasilProduksi,
   produktivitas,
   rekapHarian,
+  stokBarangDagang,
+  getStokBarangDagangPdf,
 };

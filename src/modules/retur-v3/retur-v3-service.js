@@ -739,18 +739,9 @@ exports.deleteItem = async (noRetur, idItem, ctx) => {
 // POST /:noRetur/export-gsu. Idempotent-guard: jika NoRetur sudah pernah
 // diekspor (Remarks = NoRetur di AR_SalesReturnTransit), proses ditolak.
 // ---------------------------------------------------------------------------
-const GSU_TRANSIT_DB = "AS_GSU_TEST5.dbo";
+const GSU_TRANSIT_DB = "AS_GSU.dbo";
 
-async function exportToGsuInTx(tx, noRetur, actorUsername, remarks = []) {
-  const remarksByItem = new Map();
-  if (Array.isArray(remarks)) {
-    for (const r of remarks) {
-      if (r && Number(r.idItem) > 0) {
-        remarksByItem.set(Number(r.idItem), String(r.remark || "").trim());
-      }
-    }
-  }
-
+async function exportToGsuInTx(tx, noRetur, actorUsername) {
   // 0) Duplikat check — sudah pernah diekspor ke AS_GSU?
   const dup = await new sql.Request(tx)
     .input("No", sql.VarChar(50), noRetur).query(`
@@ -769,21 +760,17 @@ async function exportToGsuInTx(tx, noRetur, actorUsername, remarks = []) {
         A.NoRetur,
         A.Tanggal,
         F.CustomerID,
-        F.CustomerName,
-        COALESCE(BJ.IdBJ, D.IdCabinetWIP) AS MstItemId,
         B.IdItem,
         B.Pcs,
-        G.ItemID,
-        ${GSU_TRANSIT_DB}.UDF_Common_GetSmallestUOMLevel(
-          G.UOMID1, G.UOMID2, G.UOMID3, G.UOMID4
-        ) AS UOMLevel
+        B.KategoriInput,
+        G.ItemID
       FROM dbo.BJReturV3_h A
-      LEFT JOIN dbo.BJReturV3Item_d B ON B.NoRetur = A.NoRetur
+      INNER JOIN dbo.BJReturV3Item_d B ON B.NoRetur = A.NoRetur
       LEFT JOIN dbo.MstBarangJadi BJ ON BJ.IdBJ = B.IdJenis AND B.KodeKategori = 'barangjadi'
       LEFT JOIN dbo.MstCabinetWIP D ON D.IdCabinetWIP = B.IdJenis AND B.KodeKategori = 'furniturewip'
       LEFT JOIN dbo.MstPembeli E ON E.IdPembeli = A.IdPembeli
       LEFT JOIN ${GSU_TRANSIT_DB}.AR_Customers F ON F.CustomerCode = E.CustomerCode
-      LEFT JOIN ${GSU_TRANSIT_DB}.IC_Items G ON G.ItemCode = COALESCE(BJ.ItemCode, D.ItemCode)
+      INNER JOIN ${GSU_TRANSIT_DB}.IC_Items G ON G.ItemCode = COALESCE(BJ.ItemCode, D.ItemCode)
       WHERE A.NoRetur = @No
     `);
   const rows = dataRes.recordset || [];
@@ -792,13 +779,17 @@ async function exportToGsuInTx(tx, noRetur, actorUsername, remarks = []) {
   }
 
   const customerId = rows[0].CustomerID;
+  if (customerId === null || customerId === undefined) {
+    throw badReq(`Pembeli retur ${noRetur} tidak ditemukan di AR_Customers AS_GSU.`);
+  }
   const tanggal = rows[0].Tanggal;
 
   // 2) Nomor urut TransitCounter per bulan (reset dari 1 tiap bulan)
   //    Prefix TransitNumber = SRT/MM/YY/ -> MAX per bulan retur tsb.
-  const dt = new Date(tanggal);
-  const mm = String(dt.getMonth() + 1).padStart(2, "0");
-  const yy = String(dt.getFullYear()).slice(-2);
+  const isoDate =
+    tanggal instanceof Date ? tanggal.toISOString().slice(0, 10) : String(tanggal).slice(0, 10);
+  const mm = isoDate.slice(5, 7);
+  const yy = isoDate.slice(2, 4);
   const prefix = `SRT/${mm}/${yy}/`;
 
   const seq = await new sql.Request(tx)
@@ -838,12 +829,12 @@ async function exportToGsuInTx(tx, noRetur, actorUsername, remarks = []) {
 
   // 5) Insert detail (TransitID = header; TransitDetailID identity auto)
   for (const row of rows) {
-    const remark = remarksByItem.get(Number(row.IdItem)) ?? "";
+    const remark = String(row.KategoriInput || "");
     await new sql.Request(tx)
       .input("TransitID", sql.Int, transitId)
       .input("ItemID", sql.Int, Number(row.ItemID))
       .input("Quantity", sql.Int, Number(row.Pcs))
-      .input("UOMLevel", sql.Int, Number(row.UOMLevel))
+      .input("UOMLevel", sql.Int, 1)
       .input("Remark", sql.NVarChar(500), remark).query(`
         INSERT INTO ${GSU_TRANSIT_DB}.AR_SalesReturnTransitDetails (
           TransitID, SourceInvoiceID, SourceInvoiceDetailID,
@@ -877,7 +868,7 @@ exports.exportToGsu = async (noRetur, body = {}, ctx) => {
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-    const result = await exportToGsuInTx(tx, no, actorUsername, body.remarks);
+    const result = await exportToGsuInTx(tx, no, actorUsername);
     await tx.commit();
     return { noRetur: no, ...result };
   } catch (e) {
@@ -941,7 +932,7 @@ exports.decide = async (noRetur, decision, body = {}, ctx) => {
 
     // Otomatis ekspor ke AS_GSU saat keputusan disimpan.
     // Jika retur ini sudah pernah diekspor, akan conflict (rollback).
-    const exportResult = await exportToGsuInTx(tx, no, actorUsername, body.remarks);
+    const exportResult = await exportToGsuInTx(tx, no, actorUsername);
 
     await tx.commit();
     return {
