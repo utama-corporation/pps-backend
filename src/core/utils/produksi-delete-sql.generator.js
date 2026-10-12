@@ -82,14 +82,17 @@ function _generateSingleInputDeleteSection(type, config, produksiConfig) {
     .map((k) => `${toCamelField(k)} ${sqlTypeForKey(k)} '${jsonPath(k)}'`)
     .join(", ");
 
+  // Nama kolom di tabel mapping (default sama dengan kolom sumber)
+  const mapCol = (k) => config.mappingKeyColumns?.[k] || k;
+
   // JOIN conditions untuk mapping table
   const joinConditions = keys
-    .map((k) => `map.${k} = j.${toCamelField(k)}`)
+    .map((k) => `map.${mapCol(k)} = j.${toCamelField(k)}`)
     .join(" AND ");
 
   // JOIN conditions untuk source table DateUsage reset
   const sourceJoinConditions = keys
-    .map((k) => `d.${k} = map.${k}`)
+    .map((k) => `d.${k} = map.${mapCol(k)}`)
     .join(" AND ");
 
   const dateUsageColumn = config.dateUsageColumn || "DateUsage";

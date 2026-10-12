@@ -291,6 +291,15 @@ const INPUT_CONFIGS = {
       mappingTable: "MixerProduksiInputMixer",
       dateUsageColumn: "DateUsage",
     },
+    crusher: {
+      sourceTable: "Crusher",
+      keys: ["NoCrusher"],
+      mappingTable: "MixerProduksiInputCrusher",
+      // Kolom di tabel mapping ini bernama "NoCruher" (typo di skema DB),
+      // beda dari kolom sumber "NoCrusher".
+      mappingKeyColumns: { NoCrusher: "NoCruher" },
+      dateUsageColumn: "DateUsage",
+    },
   },
 
   injectProduksi: {

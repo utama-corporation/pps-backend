@@ -688,6 +688,7 @@ async function deleteMixerProduksi(noProduksi, ctx) {
       DECLARE @BBKeys TABLE (NoBahanBaku varchar(50), NoPallet varchar(50), NoSak int);
       DECLARE @GilinganKeys TABLE (NoGilingan varchar(50));
       DECLARE @MixerKeys TABLE (NoMixer varchar(50), NoSak int);
+      DECLARE @CrusherKeys TABLE (NoCrusher varchar(50));
 
       DECLARE @outHeader TABLE (
         NoProduksi   varchar(50),
@@ -741,6 +742,12 @@ async function deleteMixerProduksi(noProduksi, ctx) {
       INSERT INTO @MixerKeys (NoMixer, NoSak)
       SELECT DISTINCT NoMixer, NoSak
       FROM dbo.MixerProduksiInputMixer
+      WHERE NoProduksi = @NoProduksi;
+
+      -- NOTE: kolom di tabel mapping crusher bernama NoCruher (tanpa "s")
+      INSERT INTO @CrusherKeys (NoCrusher)
+      SELECT DISTINCT NoCruher
+      FROM dbo.MixerProduksiInputCrusher
       WHERE NoProduksi = @NoProduksi;
 
       ---------------------------------------------------------
@@ -835,6 +842,7 @@ async function deleteMixerProduksi(noProduksi, ctx) {
       DELETE FROM dbo.MixerProduksiInputBB WHERE NoProduksi = @NoProduksi;
       DELETE FROM dbo.MixerProduksiInputGilingan WHERE NoProduksi = @NoProduksi;
       DELETE FROM dbo.MixerProduksiInputMixer WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.MixerProduksiInputCrusher WHERE NoProduksi = @NoProduksi;
 
       ---------------------------------------------------------
       -- RESET DATEUSAGE TERBATAS KEY TERDAMPAK
@@ -890,6 +898,12 @@ async function deleteMixerProduksi(noProduksi, ctx) {
       FROM dbo.Mixer_d md
       JOIN @MixerKeys k
         ON k.NoMixer = md.NoMixer AND k.NoSak = md.NoSak;
+
+      UPDATE c
+      SET c.DateUsage = NULL
+      FROM dbo.Crusher c
+      JOIN @CrusherKeys k
+        ON k.NoCrusher = c.NoCrusher;
 
       ---------------------------------------------------------
       -- DELETE HEADER + RETURN ROW YANG TERHAPUS
@@ -1153,6 +1167,25 @@ async function fetchInputs(noProduksi) {
       ON mm.IdMixer = mh.IdMixer
     WHERE im.NoProduksi=@no
 
+    UNION ALL
+
+    -- CRUSHER (FULL ONLY) — kolom mapping: NoCruher
+    SELECT
+      'crusher' AS Src,
+      ic.NoProduksi,
+      ic.NoCruher AS Ref1,
+      CAST(NULL AS varchar(50)) AS Ref2,
+      CAST(NULL AS varchar(50)) AS Ref3,
+      c.Berat AS Berat,
+      CAST(NULL AS decimal(18,3)) AS BeratAct,
+      CAST(NULL AS bit) AS IsPartial,
+      c.IdCrusher    AS IdJenis,
+      mc.NamaCrusher AS NamaJenis
+    FROM dbo.MixerProduksiInputCrusher ic WITH (NOLOCK)
+    LEFT JOIN dbo.Crusher c     WITH (NOLOCK) ON c.NoCrusher = ic.NoCruher
+    LEFT JOIN dbo.MstCrusher mc WITH (NOLOCK) ON mc.IdCrusher = c.IdCrusher
+    WHERE ic.NoProduksi=@no
+
     ORDER BY Ref1 DESC, Ref2 ASC;
 
 
@@ -1242,7 +1275,8 @@ async function fetchInputs(noProduksi) {
     bb: [],
     gilingan: [],
     mixer: [],
-    summary: { broker: 0, bb: 0, gilingan: 0, mixer: 0 },
+    crusher: [],
+    summary: { broker: 0, bb: 0, gilingan: 0, mixer: 0, crusher: 0 },
   };
 
   // MAIN rows
@@ -1272,6 +1306,9 @@ async function fetchInputs(noProduksi) {
         break;
       case "mixer":
         out.mixer.push({ noMixer: r.Ref1, noSak: r.Ref2, ...base });
+        break;
+      case "crusher":
+        out.crusher.push({ noCrusher: r.Ref1, ...base });
         break;
     }
   }

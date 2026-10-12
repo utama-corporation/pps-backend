@@ -108,6 +108,15 @@ async function getPotonganRule(runner, idSupplier) {
   };
 }
 
+// Jenis dengan MstBahanBaku.IsDisableMinMax = 1 — aturan potongan supplier
+// dilewati untuk jenis ini (Berat tersimpan = BeratAct).
+async function getDisableMinMaxIdSet(runner) {
+  const result = await new sql.Request(runner).query(
+    `SELECT IdBB FROM dbo.MstBahanBaku WHERE ISNULL(IsDisableMinMax, 0) = 1`,
+  );
+  return new Set(result.recordset.map((r) => r.IdBB));
+}
+
 // Server tidak mengundi angka acak; klien mengundi dari rentang yang
 // disediakan getPotonganRule, server hanya memastikan hasilnya masuk rentang.
 function assertBeratSesuaiPotongan(sak, rule, palletIndex, sakIndex) {
@@ -351,10 +360,12 @@ async function addPalletsPenerimaanBahanBaku(noPenerimaan, payload, ctx) {
     const prefix = await resolveKategoriPrefix(tx, v.kodeKategori);
 
     if (v.pallets.some((p) => p.saks.some((s) => s.BeratAct != null))) {
+      const disableIds = await getDisableMinMaxIdSet(tx);
       const rule = await getPotonganRule(tx, v.idSupplier);
-      v.pallets.forEach((p, pi) =>
-        p.saks.forEach((s, si) => assertBeratSesuaiPotongan(s, rule, pi, si)),
-      );
+      v.pallets.forEach((p, pi) => {
+        if (disableIds.has(p.idJenisPlastik)) return;
+        p.saks.forEach((s, si) => assertBeratSesuaiPotongan(s, rule, pi, si));
+      });
     }
 
     const noBahanBaku = await generateUniqueCode(tx, {
@@ -867,7 +878,11 @@ async function getPotongan(idSupplier) {
   const id = Number(idSupplier);
   if (!Number.isInteger(id) || id <= 0) throw badReq("idSupplier wajib diisi");
   const pool = await poolPromise;
-  return getPotonganRule(pool, id);
+  const [rule, disableIds] = await Promise.all([
+    getPotonganRule(pool, id),
+    getDisableMinMaxIdSet(pool),
+  ]);
+  return { ...rule, disableMinMaxIds: [...disableIds] };
 }
 
 // ==========================================
@@ -905,7 +920,7 @@ async function loadPalletContext(tx, noPenerimaan, noBahanBaku, noPallet, action
     .input("NoBahanBaku", sql.VarChar(50), String(noBahanBaku))
     .input("NoPallet", sql.Int, palletNo)
     .query(`
-      SELECT p.IdLokasi, bb.IdSupplier
+      SELECT p.IdLokasi, p.IdJenisPlastik, bb.IdSupplier
       FROM dbo.BahanBakuPallet_h p WITH (UPDLOCK, HOLDLOCK)
       INNER JOIN dbo.BahanBaku_h bb ON bb.NoBahanBaku = p.NoBahanBaku
       WHERE p.NoBahanBaku = @NoBahanBaku AND p.NoPallet = @NoPallet
@@ -920,7 +935,12 @@ async function loadPalletContext(tx, noPenerimaan, noBahanBaku, noPallet, action
   if (!pallet) {
     throw notFound(`Pallet ${noPallet} pada ${noBahanBaku} tidak ditemukan di penerimaan ini`);
   }
-  return { palletNo, idLokasi: pallet.IdLokasi, idSupplier: pallet.IdSupplier };
+  return {
+    palletNo,
+    idLokasi: pallet.IdLokasi,
+    idSupplier: pallet.IdSupplier,
+    idJenisPlastik: pallet.IdJenisPlastik,
+  };
 }
 
 async function runEditTx(ctx, fn) {
@@ -1025,8 +1045,11 @@ async function addSaksPenerimaan(noPenerimaan, noBahanBaku, noPallet, payload, c
       throw badReq("beratAct wajib diisi untuk setiap sak");
     }
 
-    const rule = await getPotonganRule(tx, c.idSupplier);
-    saks.forEach((s, i) => assertBeratSesuaiPotongan(s, rule, 0, i));
+    const disableIds = await getDisableMinMaxIdSet(tx);
+    if (!disableIds.has(c.idJenisPlastik)) {
+      const rule = await getPotonganRule(tx, c.idSupplier);
+      saks.forEach((s, i) => assertBeratSesuaiPotongan(s, rule, 0, i));
+    }
 
     const saksJson = JSON.stringify(saks);
     const nowDate = new Date();

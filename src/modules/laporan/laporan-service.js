@@ -770,4 +770,6 @@ module.exports = {
   rekapHarian,
   stokBarangDagang,
   getStokBarangDagangPdf,
+  getPdfBrowser,
+  escapeHtml,
 };

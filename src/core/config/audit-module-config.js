@@ -100,6 +100,7 @@ const MODULE_CONFIG = {
     inputTables: [
       "BrokerProduksiInputCrusher",
       "GilinganProduksiInputCrusher",
+      "MixerProduksiInputCrusher",
       "BongkarSusunInputCrusher",
     ],
     outputDisplayConfig: {
@@ -655,6 +656,7 @@ const MODULE_CONFIG = {
       "MixerProduksiInputGilinganPartial",
       "MixerProduksiInputMixer",
       "MixerProduksiInputMixerPartial",
+      "MixerProduksiInputCrusher",
     ],
     scalarFields: [
       "TglProduksi",

@@ -102,9 +102,13 @@ function _generateSingleInputSection(type, config, produksiConfig) {
     .map((k) => `d.${k} = j.${toCamelField(k)}`)
     .join(" AND ");
 
+  // Nama kolom di tabel mapping (default sama dengan kolom sumber)
+  const mapCol = (k) => config.mappingKeyColumns?.[k] || k;
+  const mappingKeyFields = keys.map(mapCol).join(", ");
+
   // mapping check for NOT EXISTS
   const mappingConditions = keys
-    .map((k) => `x.${k} = v.${toCamelField(k)}`)
+    .map((k) => `x.${mapCol(k)} = v.${toCamelField(k)}`)
     .join(" AND ");
 
   // skipped calculation
@@ -113,7 +117,7 @@ function _generateSingleInputSection(type, config, produksiConfig) {
     .join(" AND ");
 
   const mappingComparison = keys
-    .map((k) => `x.${k} = j.${toCamelField(k)}`)
+    .map((k) => `x.${mapCol(k)} = j.${toCamelField(k)}`)
     .join(" AND ");
 
   // Update DateUsage WHERE
@@ -138,7 +142,7 @@ v AS (
   SELECT j.* FROM j
   WHERE EXISTS (SELECT 1 FROM dbo.${config.sourceTable} d WITH (NOLOCK) WHERE ${whereConditions})
 )
-INSERT INTO dbo.${config.mappingTable} (${produksiConfig.codeColumn}, ${keyFields})
+INSERT INTO dbo.${config.mappingTable} (${produksiConfig.codeColumn}, ${mappingKeyFields})
 SELECT @no, ${keyFieldsLower}
 FROM v
 WHERE NOT EXISTS (
