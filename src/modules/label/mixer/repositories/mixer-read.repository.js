@@ -54,6 +54,7 @@ async function getAllMixerHeaders({
     SELECT h.NoMixer, h.DateCreate, h.IdMixer, mx.Jenis AS NamaMixer, h.IdStatus,
       CASE WHEN h.IdStatus = 1 THEN 'PASS' WHEN h.IdStatus = 0 THEN 'HOLD' ELSE '' END AS StatusText,
       h.Moisture, h.MaxMeltTemp, h.MinMeltTemp, h.MFI, h.Moisture2, h.Moisture3,
+      h.VisualNote,
       CASE WHEN EXISTS (SELECT 1 FROM dbo.Mixer_d d3 WHERE d3.NoMixer = h.NoMixer AND d3.DateUsage IS NULL) THEN CAST(0 AS bit) ELSE CAST(1 AS bit) END AS Used,
       ISNULL(CAST(h.HasBeenPrinted AS int), 0) AS HasBeenPrinted, h.Blok, h.IdLokasi,
       outInfo.OutputType, outInfo.OutputCode, outInfo.OutputNamaMesin

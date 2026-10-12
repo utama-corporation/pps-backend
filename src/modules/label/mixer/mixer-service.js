@@ -360,6 +360,7 @@ exports.createMixerCascade = async (payload) => {
         MFI: header.MFI ?? null,
         Moisture2: header.Moisture2 ?? null,
         Moisture3: header.Moisture3 ?? null,
+        VisualNote: header.VisualNote ?? null,
         Blok: header.Blok ?? null,
         IdLokasi: idLokasiVal,
       },
@@ -569,6 +570,12 @@ exports.updateMixerCascade = async (payload) => {
       "Moisture3",
       sql.Decimal(10, 3),
       header.Moisture3 ?? null,
+    );
+    setIf(
+      "VisualNote",
+      "VisualNote",
+      sql.VarChar(150),
+      header.VisualNote ?? null,
     );
     setIf("Blok", "Blok", sql.VarChar(50), header.Blok ?? null);
 

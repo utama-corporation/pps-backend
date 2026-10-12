@@ -90,15 +90,16 @@ module.exports = {
       .input("MFI", sql.Decimal(10, 3), header.MFI ?? null)
       .input("Moisture2", sql.Decimal(10, 3), header.Moisture2 ?? null)
       .input("Moisture3", sql.Decimal(10, 3), header.Moisture3 ?? null)
+      .input("VisualNote", sql.VarChar(150), header.VisualNote ?? null)
       .input("Blok", sql.VarChar(50), header.Blok ?? null)
       .input("IdLokasi", sql.Int, idLokasiVal).query(`
         INSERT INTO dbo.Mixer_h (
           NoMixer, IdMixer, DateCreate, IdStatus, CreateBy, DateTimeCreate,
-          Moisture, MaxMeltTemp, MinMeltTemp, MFI, Moisture2, Moisture3, Blok, IdLokasi
+          Moisture, MaxMeltTemp, MinMeltTemp, MFI, Moisture2, Moisture3, VisualNote, Blok, IdLokasi
         )
         VALUES (
           @NoMixer, @IdMixer, @DateCreate, @IdStatus, @CreateBy, @DateTimeCreate,
-          @Moisture, @MaxMeltTemp, @MinMeltTemp, @MFI, @Moisture2, @Moisture3, @Blok, @IdLokasi
+          @Moisture, @MaxMeltTemp, @MinMeltTemp, @MFI, @Moisture2, @Moisture3, @VisualNote, @Blok, @IdLokasi
         );
       `);
   },
