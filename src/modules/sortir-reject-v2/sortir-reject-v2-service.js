@@ -934,18 +934,40 @@ exports.deleteSortirReject = async (noBJSortir, ctx) => {
         })),
       );
 
+      // Kembalikan stok label: Qty += QtyKonsumsi dari log, lalu lepas
+      // DateUsage. Log harus dibaca SEBELUM dihapus di bawah, supaya jumlah
+      // yang dikembalikan persis sebesar yang dicatat saat create.
       await new sql.Request(tx)
+        .input("NoBJSortir", sql.VarChar(50), no)
         .input(
           "CodesJson",
           sql.NVarChar(sql.MAX),
           inputJson,
         ).query(`
-          UPDATE dbo.BahanPendukung
-          SET DateUsage = NULL
-          WHERE NoBahanPendukung IN (
-            SELECT j.code FROM OPENJSON(@CodesJson)
-            WITH (code varchar(50) '$.code') AS j
-          )
+          UPDATE b
+          SET b.Qty = ISNULL(b.Qty, 0) + ISNULL(k.QtyKonsumsi, 0),
+              b.DateUsage = NULL
+          FROM dbo.BahanPendukung b
+          INNER JOIN OPENJSON(@CodesJson)
+            WITH (code varchar(50) '$.code') AS j ON j.code = b.NoBahanPendukung
+          LEFT JOIN (
+            SELECT NoBahanPendukung, SUM(QtyKonsumsi) AS QtyKonsumsi
+            FROM dbo.BahanPendukungKonsumsi_d
+            WHERE NoProduksi = @NoBJSortir
+            GROUP BY NoBahanPendukung
+          ) k ON k.NoBahanPendukung = b.NoBahanPendukung
+        `);
+
+      // Buang catatan log konsumsi transaksi ini supaya tidak ada baris
+      // yatim dan tidak ter-restore dua kali.
+      await new sql.Request(tx)
+        .input("NoBJSortir", sql.VarChar(50), no).query(`
+          DELETE k
+          FROM dbo.BahanPendukungKonsumsi_d k
+          INNER JOIN dbo.BJSortirRejectInputLabelBahanPendukung map
+            ON map.NoBahanPendukung = k.NoBahanPendukung
+          WHERE k.NoProduksi = @NoBJSortir
+            AND map.NoBJSortir = @NoBJSortir
         `);
 
       await new sql.Request(tx)

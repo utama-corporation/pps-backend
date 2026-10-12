@@ -2468,7 +2468,13 @@ async function submitInjectBatch(payload, ctx, { forceClose = false, tx: existin
   const rejectList = isDowntime
     ? []
     : toSisaOutputList(payload?.reject, "idReject");
-  const isLastBatch =
+  // Sisa pcs hanya boleh terbit sebagai label pada batch penutup shift.
+  // Sumber kebenarannya jam: batch terakhir = hourStart + 1 jam >= HourEnd
+  // produksi (aturan yang sama dengan shouldComplete di bawah). Isi form
+  // bonggolan/reject hanya sinyal cadangan, bukan penentu — kalau form kosong
+  // pada bucket terakhir, sisa pcs tetap harus dilabelkan & dicatat sebagai
+  // defisit, bukan dibuang diam-diam.
+  let isLastBatch =
     bonggolanList.length > 0 || rejectList.length > 0 || forceClose;
 
   const validateSisaList = (entries, { label, idKey }) => {
@@ -2583,6 +2589,22 @@ async function submitInjectBatch(payload, ctx, { forceClose = false, tx: existin
     const header = headerRes.recordset?.[0];
     if (!header) {
       throw notFound(`NoProduksi tidak ditemukan: ${noProduksi}`);
+    }
+
+    // Header sudah ada di sini — perbarui isLastBatch dengan aturan jam.
+    if (!isLastBatch) {
+      const prodHourEnd = header.HourEnd
+        ? typeof header.HourEnd === "string"
+          ? header.HourEnd.substring(0, 8)
+          : new Date(header.HourEnd).toTimeString().substring(0, 8)
+        : null;
+      if (prodHourEnd) {
+        const toSec = (t) => {
+          const [h, m, s] = t.split(":").map(Number);
+          return h * 3600 + (m || 0) * 60 + (s || 0);
+        };
+        isLastBatch = toSec(hourStart.substring(0, 8)) >= toSec(prodHourEnd) - 3600;
+      }
     }
 
     const docDateOnly = toDateOnly(header.TglProduksi);
