@@ -774,6 +774,36 @@ exports.deleteMixerCascade = async (payload) => {
   }
 };
 
+/**
+ * Data untuk PDF QC Mixer (GET /labels/mixer/:nomixer/qc/pdf).
+ * Beda dari getByNoMixer: tidak butuh detail sak, cukup header + angka QC.
+ */
+exports.getQcPdfByNoMixer = async (noMixer) => {
+  const code = String(noMixer || "").trim();
+  if (!code) throw badReq("NoMixer wajib diisi");
+
+  const rs = await readRepo.getMixerQcPdfByNoMixer(code);
+  const row = rs.recordset?.[0];
+  if (!row) {
+    const e = new Error(`NoMixer ${code} tidak ditemukan`);
+    e.statusCode = 404;
+    throw e;
+  }
+
+  return {
+    NoMixer: row.NoMixer,
+    DateCreate: row.DateCreate,
+    JenisPlastik: row.JenisPlastik,
+    AvgMoisture: row.AvgMoisture,
+    MinMeltTemp: row.MinMeltTemp,
+    MaxMeltTemp: row.MaxMeltTemp,
+    MFI: row.MFI,
+    VisualNote: row.VisualNote,
+    CreateBy: row.CreateBy,
+    HasBeenPrinted: row.HasBeenPrinted,
+  };
+};
+
 exports.getPartialInfoByMixerAndSak = async (nomixer, nosak) => {
   const rowsRaw = await readRepo.getPartialInfoRowsByMixerAndSak(
     nomixer,

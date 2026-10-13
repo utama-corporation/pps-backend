@@ -87,4 +87,10 @@ router.get(
   ctrl.generatePdf,
 );
 
+router.get(
+  "/labels/mixer/:nomixer/qc/pdf",
+  requirePermission("label_mixer:read"),
+  ctrl.generateQcPdf,
+);
+
 module.exports = router;
