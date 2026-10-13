@@ -29,10 +29,17 @@ async function listUsers(q) {
   const result = await pool.request().query(`
     SELECT u.IdUsername, u.Username, u.FName, u.LName, u.EmployeeID, u.CompanyID, u.Nik,
       u.[Status], u.IsEnable,
-      ISNULL(g.UGroupName, '') AS GroupName
+      ISNULL((
+        STUFF((
+          SELECT ', ' + g2.UGroupName
+          FROM [dbo].[MstUserGroupMember] m2
+          INNER JOIN [dbo].[MstUserGroup] g2 ON g2.IdUGroup = m2.IdUGroup
+          WHERE m2.IdUsername = u.IdUsername
+          ORDER BY g2.UGroupName ASC
+          FOR XML PATH(''), TYPE
+        ).value('.', 'VARCHAR(MAX)'), 1, 2, '')
+      ), '') AS GroupName
     FROM [dbo].[MstUsername] u
-    LEFT JOIN [dbo].[MstUserGroupMember] m ON m.IdUsername = u.IdUsername
-    LEFT JOIN [dbo].[MstUserGroup] g ON g.IdUGroup = m.IdUGroup
     ORDER BY u.IdUsername ASC;
   `);
 
@@ -128,7 +135,7 @@ function normalizeCreate(body) {
   if (!employeeId) throw badReq('Employee ID wajib diisi.');
   if (!nik) throw badReq('NIK / Employee Code belum terbaca. Silahkan pilih karyawan dari tombol Cari.');
   if (!company) throw badReq('Silahkan gunakan tombol Cari Karyawan untuk memilih Employee ID dan database perusahaan.');
-  if (groupIds.length > 1) throw badReq('Group Permission tidak boleh lebih dari 1. Pilih hanya 1 group.');
+  if (!groupIds.length) throw badReq('Pilih minimal 1 Group Permission untuk user ini.');
   if (username.length > 25) throw badReq('Username maksimal 25 karakter.');
   if (fName.length > 25) throw badReq('Nama Depan maksimal 25 karakter.');
   if (lName.length > 25) throw badReq('Nama Belakang maksimal 25 karakter.');
@@ -222,8 +229,7 @@ function normalizeUpdate(body) {
   if (!idUsername) throw notFound('User tidak ditemukan');
   if (!fName) throw badReq('Silahkan isi Nama Depan.');
   if (!employeeId) throw badReq('Employee ID harus berupa angka.');
-  if (!groupIds.length) throw badReq('Pilih Group Permission (1 group) untuk user ini.');
-  if (groupIds.length > 1) throw badReq('Group Permission tidak boleh lebih dari 1. Pilih hanya 1 group.');
+  if (!groupIds.length) throw badReq('Pilih minimal 1 Group Permission untuk user ini.');
 
   return { idUsername, fName, lName, employeeId, resetPassword, groupIds };
 }

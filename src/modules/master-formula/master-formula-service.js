@@ -83,7 +83,7 @@ async function loadItemNameMap(pool, kategoriMap, itemIdsByKategori) {
       FROM [dbo].[${cfg.table}]
       WHERE ${cfg.idCol} IN (${list.join(',')});
     `);
-    for (const row of result.recordset || []) map[row.Id] = row.Nama;
+    for (const row of result.recordset || []) map[kategoriId + ":" + row.Id] = row.Nama;
   }
   return map;
 }
@@ -170,7 +170,7 @@ async function listFormula(q) {
   let data = rows.map((row) => {
     const kategori = kategoriMap[row.MainOutputKategoriId];
     const mainKategori = kategori ? kategori.NamaKategori : '';
-    const mainOutputNama = itemNameMap[toInt(row.MainOutputId)] || '';
+    const mainOutputNama = itemNameMap[toInt(row.MainOutputKategoriId) + ":" + toInt(row.MainOutputId)] || '';
     return {
       IdFormula: toInt(row.IdFormula),
       MainOutputKategoriId: toInt(row.MainOutputKategoriId),
@@ -257,18 +257,18 @@ async function getDetail(idFormula) {
     MainOutputKategoriId: toInt(header.MainOutputKategoriId),
     MainKategori: kategoriNama(header.MainOutputKategoriId),
     MainOutputId: toInt(header.MainOutputId),
-    MainOutputNama: itemNameMap[toInt(header.MainOutputId)] || '',
+    MainOutputNama: itemNameMap[toInt(header.MainOutputKategoriId) + ":" + toInt(header.MainOutputId)] || '',
     Inputs: inputs.map((row) => ({
       KategoriId: toInt(row.KategoriId),
       KategoriNama: kategoriNama(row.KategoriId),
       ItemId: toInt(row.ItemId),
-      ItemNama: itemNameMap[toInt(row.ItemId)] || '',
+      ItemNama: itemNameMap[toInt(row.KategoriId) + ":" + toInt(row.ItemId)] || '',
     })),
     Secondarys: secondarys.map((row) => ({
       KategoriId: toInt(row.KategoriId),
       KategoriNama: kategoriNama(row.KategoriId),
       ItemId: toInt(row.ItemId),
-      ItemNama: secondaryItemMap[toInt(row.ItemId)] || '',
+      ItemNama: secondaryItemMap[toInt(row.KategoriId) + ":" + toInt(row.ItemId)] || '',
     })),
   };
 }
