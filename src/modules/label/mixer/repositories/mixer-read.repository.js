@@ -267,12 +267,47 @@ async function hasUsedDetails(tx, noMixer) {
   return res.recordset.length > 0;
 }
 
+/**
+ * Data untuk PDF QC Mixer (GET /labels/mixer/:nomixer/qc/pdf).
+ *
+ * Moisture 1-3 dirata-rata supaya Operator cukup isi satu angka untuk
+ * headline di label, sama seperti broker (AvgDensity/AvgMoisture).
+ * Melt Temp ditampilkan sebagai rentang Min–Max karena keduanya diisi terpisah.
+ */
+async function getMixerQcPdfByNoMixer(noMixer) {
+  const pool = await poolPromise;
+  return pool.request().input("NoMixer", sql.VarChar(50), noMixer).query(`
+    SELECT TOP 1
+      h.NoMixer,
+      h.DateCreate,
+      COALESCE(mx.Jenis, '-') AS JenisPlastik,
+      CAST(
+        (
+          ISNULL(CAST(h.Moisture  AS decimal(18, 6)), 0) +
+          ISNULL(CAST(h.Moisture2 AS decimal(18, 6)), 0) +
+          ISNULL(CAST(h.Moisture3 AS decimal(18, 6)), 0)
+        ) / 3.0
+        AS decimal(10, 3)
+      ) AS AvgMoisture,
+      h.MinMeltTemp,
+      h.MaxMeltTemp,
+      h.MFI,
+      h.VisualNote,
+      h.CreateBy,
+      ISNULL(CAST(h.HasBeenPrinted AS int), 0) AS HasBeenPrinted
+    FROM dbo.Mixer_h h
+    LEFT JOIN dbo.MstMixer mx ON mx.IdMixer = h.IdMixer
+    WHERE h.NoMixer = @NoMixer
+  `);
+}
+
 module.exports = {
   getAllMixerHeaders,
   getMixerHeaderByNoMixer,
   getMixerDetailsByNoMixer,
   getPartialInfoRowsByMixerAndSak,
   getMixerHeaderForUpdate,
+  getMixerQcPdfByNoMixer,
   isMixerFromBongkarSusun,
   isNoMixerExists,
   hasUsedDetails,
