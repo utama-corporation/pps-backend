@@ -10,6 +10,9 @@ const { generateLabelPdf } = require("../../../core/utils/pdf/label-generator");
 const {
   buildMixerLabelHtml,
 } = require("../../../core/utils/pdf/templates/mixer-label-pdf/mixer-label-pdf");
+const {
+  buildMixerQcLabelHtml,
+} = require("../../../core/utils/pdf/templates/mixer-qc-label-pdf/mixer-qc-label-pdf");
 
 // GET all header mixer
 exports.getAll = async (req, res) => {
@@ -345,6 +348,68 @@ exports.generatePdf = async (req, res) => {
     return res.end(pdfBuffer);
   } catch (err) {
     console.error("Mixer PDF Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, message: err.message });
+  }
+};
+
+// GET /labels/mixer/:nomixer/qc/pdf
+exports.generateQcPdf = async (req, res) => {
+  try {
+    const NoMixer = String(req.params.nomixer || "").trim();
+    if (!NoMixer) {
+      return res
+        .status(400)
+        .json({ success: false, message: "nomixer wajib diisi" });
+    }
+
+    const row = await mixerService.getQcPdfByNoMixer(NoMixer);
+
+    const formatDecimal = (value) =>
+      value == null || Number.isNaN(Number(value))
+        ? "-"
+        : Number(value).toFixed(3);
+
+    const minTemp = row.MinMeltTemp;
+    const maxTemp = row.MaxMeltTemp;
+    const meltTemp =
+      minTemp == null && maxTemp == null
+        ? "-"
+        : `${minTemp == null ? "-" : formatDecimal(minTemp)} - ${
+            maxTemp == null ? "-" : formatDecimal(maxTemp)
+          }`;
+
+    const data = {
+      noLabel: row.NoMixer,
+      jenisPlastik: row.JenisPlastik,
+      moisture: formatDecimal(row.AvgMoisture),
+      meltTemp,
+      mfi: row.MFI == null ? "-" : String(row.MFI),
+      visualNote: row.VisualNote == null ? "-" : String(row.VisualNote),
+      tanggal: (() => {
+        const d = new Date(row.DateCreate);
+        const dd = String(d.getDate()).padStart(2, "0");
+        const mmm = d.toLocaleDateString("id-ID", { month: "short" });
+        const yy = String(d.getFullYear()).slice(-2);
+        return `${dd}-${mmm}-${yy}`;
+      })(),
+      createBy: row.CreateBy || "-",
+      watermarkText: row.HasBeenPrinted > 0 ? `COPY ${row.HasBeenPrinted}` : "",
+    };
+
+    const pdfBuffer = await generateLabelPdf(data, buildMixerQcLabelHtml, {
+      width: "80mm",
+    });
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="label-qc-${NoMixer}.pdf"`,
+      "Content-Length": pdfBuffer.length,
+    });
+
+    return res.end(pdfBuffer);
+  } catch (err) {
+    console.error("Mixer QC PDF Error:", err);
     const status = err.statusCode || 500;
     return res.status(status).json({ success: false, message: err.message });
   }
