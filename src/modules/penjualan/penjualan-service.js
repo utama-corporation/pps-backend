@@ -117,6 +117,7 @@ async function getHeaderDetail(noBJJual) {
         CASE
           WHEN d.KodeKategori = 'furniturewip' THEN mw.Nama
           WHEN d.KodeKategori = 'barangjadi' THEN mbj.NamaBJ
+          WHEN d.KodeKategori = 'barangdagang' THEN mbd.NamaBarangDagang
           ELSE NULL
         END AS NamaJenis,
         d.Pcs AS PcsRequired,
@@ -130,6 +131,8 @@ async function getHeaderDetail(noBJJual) {
         ON d.KodeKategori = 'furniturewip' AND mw.IdCabinetWIP = d.IdJenis
       LEFT JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
         ON d.KodeKategori = 'barangjadi' AND mbj.IdBJ = d.IdJenis
+      LEFT JOIN dbo.MstBarangDagang mbd WITH (NOLOCK)
+        ON d.KodeKategori = 'barangdagang' AND mbd.IdBarangDagang = d.IdJenis
       WHERE d.NoBJJual = @No
       ORDER BY d.KodeKategori, d.IdJenis
     `);

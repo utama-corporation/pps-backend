@@ -10,6 +10,7 @@ const {
   lockParentAndAvailablePcs,
   markParentFullyUsed,
   createPartial,
+  consumeParentQty,
 } = require("../../../core/shared/label-partial.helper");
 
 exports.scanLabel = async (noBJJual, noLabelRaw, ctx, options = {}) => {
@@ -24,7 +25,7 @@ exports.scanLabel = async (noBJJual, noLabelRaw, ctx, options = {}) => {
   const category = detectCategory(noLabel);
   if (!category) {
     throw badReq(
-      `Label ${noLabel} bukan kategori yang valid untuk Penjualan (harus furniturewip/barangjadi)`,
+      `Label ${noLabel} bukan kategori yang valid untuk Penjualan (harus furniturewip/barangjadi/barangdagang)`,
     );
   }
 
@@ -113,12 +114,16 @@ exports.scanLabel = async (noBJJual, noLabelRaw, ctx, options = {}) => {
     let wasPartialSplit = false;
     let partialCode = null;
 
+    const decrementQty = category === "barangdagang";
+
     if (parent.availablePcs <= sisaKuota) {
       // Pcs label pas atau kurang dari kebutuhan — pakai semua sisa pcs
       // label ini, tandai parent fully-consumed.
       consumedPcs = parent.availablePcs;
-      const affected = await markParentFullyUsed(tx, category, noLabel);
-      if (affected === 0) {
+      const ok = decrementQty
+        ? await consumeParentQty(tx, category, noLabel, consumedPcs, true)
+        : (await markParentFullyUsed(tx, category, noLabel)) > 0;
+      if (!ok) {
         throw conflict(`Label ${noLabel} baru saja dipakai oleh proses lain`);
       }
 
@@ -128,8 +133,9 @@ exports.scanLabel = async (noBJJual, noLabelRaw, ctx, options = {}) => {
       // NoPartial. Hanya konsumsi 1x-penuh atas label yang belum pernah
       // dipecah yang NoPartial-nya NULL. Tidak ada konfirmasi di sini:
       // seluruh sisa memang dibutuhkan baris ini, tidak ada yang perlu
-      // diputuskan user.
-      if (parent.parentPcs > parent.availablePcs) {
+      // diputuskan user. Kategori decrementQty (barang dagang) tidak punya
+      // tabel partial — Qty sudah live stock, jadi tanpa baris partial.
+      if (!decrementQty && parent.parentPcs > parent.availablePcs) {
         partialCode = await createPartial(tx, category, noLabel, consumedPcs);
         wasPartialSplit = true;
       }
@@ -158,9 +164,25 @@ exports.scanLabel = async (noBJJual, noLabelRaw, ctx, options = {}) => {
       // tetap tersedia di parent (DateUsage tetap NULL). NoLabel yang
       // dicatat di BJJualScanLabel_d TETAP kode label asli, bukan kode
       // partial-nya — kode partial cuma dipakai internal.
+      // Kategori decrementQty: kurangi Qty parent langsung (tanpa kode
+      // partial — tabel BarangDagang header-only, Qty = stok live).
       consumedPcs = sisaKuota;
-      partialCode = await createPartial(tx, category, noLabel, sisaKuota);
-      wasPartialSplit = true;
+      if (decrementQty) {
+        const ok = await consumeParentQty(
+          tx,
+          category,
+          noLabel,
+          consumedPcs,
+          false,
+        );
+        if (!ok) {
+          throw conflict(`Label ${noLabel} baru saja dipakai oleh proses lain`);
+        }
+        wasPartialSplit = true;
+      } else {
+        partialCode = await createPartial(tx, category, noLabel, sisaKuota);
+        wasPartialSplit = true;
+      }
     }
 
     // 5) Insert tracking row — NoLabel selalu kode label fisik asli yang
