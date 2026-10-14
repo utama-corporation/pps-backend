@@ -289,7 +289,7 @@ async function getInjectShiftHoursByDateAndShift({ tanggal, shift }) {
         AND CONVERT(date, h.ValidFrmDate) <= @Tanggal
       ORDER BY CONVERT(date, h.ValidFrmDate) DESC, h.IdShiftHourSet DESC
     )
-    SELECT
+    SELECT TOP 1
       ls.IdShiftHourSet,
       ls.ValidFrmDate,
       d.NoShift,
@@ -298,7 +298,19 @@ async function getInjectShiftHoursByDateAndShift({ tanggal, shift }) {
     FROM LatestSet ls
     INNER JOIN dbo.MstShiftHourSet_d d WITH (NOLOCK)
       ON d.IdShiftHourSet = ls.IdShiftHourSet
-     AND d.NoShift = @NoShift;
+     AND d.NoShift = @NoShift
+    -- Weekend (Minggu=1, Sabtu=7 pada DATEPART(WEEKDAY) SQL Server) boleh
+    -- punya jam berbeda untuk NoShift yang sama, mis. shift 1 hari biasa
+    -- 07:00-15:00 vs weekend 07:00-12:00. Baris yang cocok dengan hari
+    -- @Tanggal didahulukan. Kalau tidak ada baris weekend untuk NoShift ini
+    -- (dari data: weekend hanya didefinisikan untuk shift 1), baris hari
+    -- biasa yang dipakai - bukan hasil null.
+    ORDER BY CASE
+               WHEN ISNULL(d.IsWeekend, 0) = CASE
+                      WHEN DATEPART(WEEKDAY, @Tanggal) IN (1, 7) THEN 1 ELSE 0
+                    END THEN 0
+               ELSE 1
+             END;
   `;
 
   const result = await request.query(query);
@@ -353,7 +365,16 @@ async function getInjectCurrentShift() {
           OR c.CurrentTime < CAST(d.HourEnd AS time(0))
         )
       )
-    ORDER BY d.NoShift ASC;
+      -- Sama seperti getInjectShiftHoursByDateAndShift: baris weekend
+      -- didahulukan, dan kalau tidak ada untuk shift ini baris hari biasa
+      -- yang dipakai.
+    ORDER BY CASE
+               WHEN ISNULL(d.IsWeekend, 0) = CASE
+                      WHEN DATEPART(WEEKDAY, c.CurrentDate) IN (1, 7) THEN 1 ELSE 0
+                    END THEN 0
+               ELSE 1
+             END,
+             d.NoShift ASC;
   `;
 
   const result = await request.query(query);
