@@ -125,6 +125,7 @@ exports.getByNoBarangDagang = async (noBarangDagang) => {
         b.IdBarangDagang, md.NamaBarangDagang,
         b.Qty, b.Keterangan,
         b.IsPartial,
+        ISNULL(p.TotalPartialQty, 0) AS TotalPartialQty,
         ISNULL(CAST(b.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
         b.CreateBy,
         b.CreatedAt,
@@ -135,6 +136,11 @@ exports.getByNoBarangDagang = async (noBarangDagang) => {
       LEFT JOIN dbo.MstSupplier sup ON sup.IdSupplier = b.IdSupplier
       LEFT JOIN dbo.MstBarangDagang md ON md.IdBarangDagang = b.IdBarangDagang
       LEFT JOIN dbo.PenerimaanBarangDagang_d d ON d.NoBarangDagang = b.NoBarangDagang
+      OUTER APPLY (
+        SELECT SUM(ISNULL(p.Qty, 0)) AS TotalPartialQty
+        FROM dbo.BarangDagangPartial p
+        WHERE p.NoBarangDagang = b.NoBarangDagang
+      ) p
       WHERE b.NoBarangDagang = @NoBarangDagang
     `);
   return result.recordset?.[0] || null;

@@ -40,6 +40,18 @@ const UNKNOWN_BLOK_CODE = "TIDAK_DIKETAHUI";
 const UNKNOWN_LOCATION_ID = 0;
 const UNKNOWN_LOCATION_LABEL = "Lokasi Tidak Diketahui";
 
+// Kategori yang dihitung per pcs/qty (bukan berat). Kolom metrik di tabel
+// snapshot berbeda: furniturewip & barangjadi memakai Pcs, barangdagang Qty.
+const PCS_METRIC_CATEGORIES = new Set(["furniturewip", "barangdagang"]);
+
+function isPcsMetric(categoryCode) {
+  return PCS_METRIC_CATEGORIES.has(categoryCode);
+}
+
+function pcsMetricColumn(categoryCode) {
+  return categoryCode === "barangdagang" ? "Qty" : "Pcs";
+}
+
 // Stock opname v2 memakai tanggal WIB (UTC+7), bukan UTC, supaya batas
 // "hari ini" mengikuti waktu operasional gudang di Indonesia.
 const WIB_OFFSET_MS = 7 * 60 * 60 * 1000;
@@ -837,7 +849,8 @@ async function previewStockOpnameLabelCount({ categoryId }) {
   if (!cfg) throw badReq(`categoryCode tidak dikenali: ${categoryCode}`);
 
   // Furniture WIP dihitung per pcs, bukan berat.
-  const showWeight = categoryCode !== "furniturewip";
+  const showWeight = !isPcsMetric(categoryCode);
+  const pcsCol = pcsMetricColumn(categoryCode);
 
   // Reuse persis query sumber yang dipakai generateStockOpname (cteSql + finalSelectSql),
   // dibungkus GROUP BY jenis supaya tidak perlu insert apa pun untuk sekadar preview
@@ -851,7 +864,7 @@ async function previewStockOpnameLabelCount({ categoryId }) {
     SELECT
       src.${cfg.jenisColumn} AS typeId,
       COUNT(*) AS labelCount,
-      ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight" : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs"}
+      ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight" : `ROUND(SUM(ISNULL(src.${pcsCol}, 0)), 0) AS totalPcs`}
     FROM (
       ${cfg.finalSelectSql}
     ) AS src
@@ -1077,7 +1090,8 @@ async function getCompleteSummary({ stockOpnameNo }) {
   const { no, header, categoryRow, categoryCode, cfg } =
     await resolveStockOpnameCategory(pool, stockOpnameNo);
 
-  const showWeight = categoryCode !== "furniturewip";
+  const showWeight = !isPcsMetric(categoryCode);
+  const pcsCol = pcsMetricColumn(categoryCode);
   const scannedMatchSql = [
     "h.NoSO = src.NoSO",
     ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
@@ -1087,7 +1101,7 @@ async function getCompleteSummary({ stockOpnameNo }) {
     .query(`
       SELECT
         COUNT(*) AS labelCount,
-        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : `ROUND(SUM(ISNULL(src.${pcsCol}, 0)), 0) AS totalPcs,`}
         SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
       FROM dbo.${cfg.snapshotTable} AS src
       LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
@@ -1153,7 +1167,8 @@ async function getTypesInStockOpname({ stockOpnameNo }) {
   ].join(" AND ");
 
   // Furniture WIP dihitung per pcs, bukan berat.
-  const showWeight = categoryCode !== "furniturewip";
+  const showWeight = !isPcsMetric(categoryCode);
+  const pcsCol = pcsMetricColumn(categoryCode);
 
   const summaryRes = await pool
     .request()
@@ -1161,7 +1176,7 @@ async function getTypesInStockOpname({ stockOpnameNo }) {
     SELECT
       src.${jenisColumn} AS typeId,
       COUNT(*) AS labelCount,
-      ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+      ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : `ROUND(SUM(ISNULL(src.${pcsCol}, 0)), 0) AS totalPcs,`}
       SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
     FROM dbo.${cfg.snapshotTable} AS src
     LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
@@ -1253,7 +1268,8 @@ async function getStockOpnameSnapshot({
 
   // Furniture WIP dihitung per pcs, bukan berat — Berat tidak relevan
   // ditampilkan untuk kategori ini.
-  const showWeight = categoryCode !== "furniturewip";
+  const showWeight = !isPcsMetric(categoryCode);
+  const pcsCol = pcsMetricColumn(categoryCode);
   const displayColumns = showWeight
     ? cfg.insertColumns
     : cfg.insertColumns.filter((c) => c !== "Berat");
@@ -1309,7 +1325,7 @@ async function getStockOpnameSnapshot({
   const countQuery = `
     SELECT
       COUNT(*) AS total,
-      ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+      ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : `ROUND(SUM(ISNULL(src.${pcsCol}, 0)), 0) AS totalPcs,`}
       SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS totalScanned
     FROM dbo.${cfg.snapshotTable} AS src
     LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
@@ -1359,7 +1375,7 @@ async function getStockOpnameSnapshot({
       group.totalWeight =
         Math.round((group.totalWeight + (row.Berat ?? 0)) * 100) / 100;
     } else {
-      group.totalPcs += row.Pcs ?? 0;
+      group.totalPcs += row[pcsCol] ?? 0;
     }
     group.labels.push(row);
   }
@@ -1404,7 +1420,8 @@ async function getAllBlok({ stockOpnameNo }) {
   ].join(" AND ");
 
   // Furniture WIP dihitung per pcs, bukan berat.
-  const showWeight = categoryCode !== "furniturewip";
+  const showWeight = !isPcsMetric(categoryCode);
+  const pcsCol = pcsMetricColumn(categoryCode);
 
   // locationCount dihitung dari snapshot stock opname, bukan dari master lokasi.
   // Ini menjaga daftar blok tetap mengikuti data acuan yang benar-benar
@@ -1416,7 +1433,7 @@ async function getAllBlok({ stockOpnameNo }) {
         COUNT(DISTINCT CASE WHEN src.IdLokasi IS NOT NULL THEN src.IdLokasi END)
           + MAX(CASE WHEN src.IdLokasi IS NULL THEN 1 ELSE 0 END) AS locationCount,
         COUNT(*) AS labelCount,
-        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : `ROUND(SUM(ISNULL(src.${pcsCol}, 0)), 0) AS totalPcs,`}
         SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
       FROM dbo.${cfg.snapshotTable} AS src
       LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
@@ -1523,7 +1540,8 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
   ].join(" AND ");
 
   // Furniture WIP dihitung per pcs, bukan berat.
-  const showWeight = categoryCode !== "furniturewip";
+  const showWeight = !isPcsMetric(categoryCode);
+  const pcsCol = pcsMetricColumn(categoryCode);
 
   // Blok tidak diketahui: seluruh label tanpa Blok tercatat digabung jadi
   // satu bucket "Lokasi Tidak Diketahui" (IdLokasi tidak relevan tanpa Blok).
@@ -1533,7 +1551,7 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
       .input("stockOpnameNo", sql.VarChar, no).query(`
         SELECT
           COUNT(*) AS labelCount,
-          ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+          ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : `ROUND(SUM(ISNULL(src.${pcsCol}, 0)), 0) AS totalPcs,`}
           SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
         FROM dbo.${cfg.snapshotTable} AS src
         LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
@@ -1578,7 +1596,7 @@ async function getLocationsInBlok({ stockOpnameNo, blok }) {
         src.IdLokasi AS locationId,
         MAX(l.Description) AS description,
         COUNT(*) AS labelCount,
-        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : `ROUND(SUM(ISNULL(src.${pcsCol}, 0)), 0) AS totalPcs,`}
         SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
       FROM dbo.${cfg.snapshotTable} AS src
       LEFT JOIN dbo.MstLokasi AS l
@@ -1678,7 +1696,8 @@ async function getMyLokasiForStockOpname({
   ].join(" AND ");
 
   // Furniture WIP dihitung per pcs, bukan berat.
-  const showWeight = categoryCode !== "furniturewip";
+  const showWeight = !isPcsMetric(categoryCode);
+  const pcsCol = pcsMetricColumn(categoryCode);
 
   const locationRes = await pool
     .request()
@@ -1688,7 +1707,7 @@ async function getMyLokasiForStockOpname({
         src.IdLokasi AS locationId,
         MAX(l.Description) AS description,
         COUNT(*) AS labelCount,
-        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : `ROUND(SUM(ISNULL(src.${pcsCol}, 0)), 0) AS totalPcs,`}
         SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
       FROM dbo.${cfg.snapshotTable} AS src
       LEFT JOIN dbo.MstLokasi AS l
@@ -1778,7 +1797,8 @@ async function listMyLokasiWithLabelCount(idUsername) {
   for (const [noso, rowsForNoso] of rowsByNoso) {
     const categoryCode = categoryByNoso.get(noso) || null;
     const cfg = categoryCode && STOCK_OPNAME_SNAPSHOT_CONFIG[categoryCode];
-    const showWeight = categoryCode !== "furniturewip";
+    const showWeight = !isPcsMetric(categoryCode);
+  const pcsCol = pcsMetricColumn(categoryCode);
 
     const snapshotByKey = new Map();
     if (cfg) {
@@ -1794,7 +1814,7 @@ async function listMyLokasiWithLabelCount(idUsername) {
             src.Blok AS blok,
             src.IdLokasi AS locationId,
             COUNT(*) AS labelCount,
-            ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+            ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : `ROUND(SUM(ISNULL(src.${pcsCol}, 0)), 0) AS totalPcs,`}
             SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
           FROM dbo.${cfg.snapshotTable} AS src
           LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
@@ -1917,7 +1937,7 @@ async function insertStockOpnameHasil({
   };
 
   const hasSackCount = cfg.hasilColumns.includes("JmlhSak");
-  const hasPieceCount = cfg.hasilColumns.includes("Pcs");
+  const hasPieceCount = cfg.hasilColumns.includes(pcsMetricColumn(categoryCode));
 
   // SackCount/PieceCount/Weight TIDAK diterima dari body — diambil langsung dari baris
   // acuan (StockOpname{Kategori}) yang sudah dibekukan saat generate, supaya "hasil"
@@ -1984,13 +2004,14 @@ async function insertStockOpnameHasil({
   if (hasSackCount)
     insertReq.input("sackCount", sql.Int, referenceRow.JmlhSak ?? 0);
   if (hasPieceCount)
-    insertReq.input("pieceCount", sql.Float, referenceRow.Pcs ?? 0);
+    insertReq.input("pieceCount", sql.Float, referenceRow[pcsMetricColumn(categoryCode)] ?? 0);
 
   const valuePlaceholder = {
     [cfg.labelColumns[0]]: "@label",
     NoPallet: "@palletNo",
     JmlhSak: "@sackCount",
     Pcs: "@pieceCount",
+    Qty: "@pieceCount",
     Berat: "@weight",
   };
   const hasilColumnsSql = cfg.hasilColumns.join(", ");
@@ -2010,10 +2031,13 @@ async function insertStockOpnameHasil({
     categoryCode,
     labelNo: labelDisplay,
     sackCount: hasSackCount ? (referenceRow.JmlhSak ?? 0) : undefined,
-    pieceCount: hasPieceCount ? (referenceRow.Pcs ?? 0) : undefined,
-    // Furniture WIP dihitung per pcs, bukan berat.
-    weight:
-      categoryCode === "furniturewip" ? undefined : (referenceRow.Berat ?? 0),
+    pieceCount: hasPieceCount
+      ? (referenceRow[pcsMetricColumn(categoryCode)] ?? 0)
+      : undefined,
+    // Kategori pcs (furniturewip & barangdagang) dihitung per pcs/qty, bukan berat.
+    weight: isPcsMetric(categoryCode)
+      ? undefined
+      : (referenceRow.Berat ?? 0),
     referenceBlok: referenceRow.Blok ?? null,
     referenceLocationId: referenceRow.IdLokasi ?? null,
     scannedBlok: scannedBlok ?? UNKNOWN_BLOK_CODE,
@@ -2093,7 +2117,8 @@ async function getScanUserSummary({ stockOpnameNo }) {
     await resolveStockOpnameCategory(pool, stockOpnameNo);
 
   // Furniture WIP dihitung per pcs, bukan berat.
-  const showWeight = categoryCode !== "furniturewip";
+  const showWeight = !isPcsMetric(categoryCode);
+  const pcsCol = pcsMetricColumn(categoryCode);
 
   const res = await pool.request().input("stockOpnameNo", sql.VarChar, no)
     .query(`
@@ -2104,7 +2129,7 @@ async function getScanUserSummary({ stockOpnameNo }) {
         COUNT(*) AS labelCount,
         MIN(h.DateTimeScan) AS firstScanAt,
         MAX(h.DateTimeScan) AS lastScanAt,
-        ${showWeight ? "ROUND(SUM(ISNULL(h.Berat, 0)), 2) AS totalWeight" : "ROUND(SUM(ISNULL(h.Pcs, 0)), 0) AS totalPcs"}
+        ${showWeight ? "ROUND(SUM(ISNULL(h.Berat, 0)), 2) AS totalWeight" : `ROUND(SUM(ISNULL(h.${pcsCol}, 0)), 0) AS totalPcs`}
       FROM dbo.${cfg.hasilTable} AS h
       LEFT JOIN dbo.MstUsername AS u ON u.Username = h.Username
       WHERE h.NoSO = @stockOpnameNo
@@ -2151,6 +2176,11 @@ const LABEL_DATE_SOURCE = {
   furniturewip: { table: "dbo.FurnitureWIP", keyColumn: "NoFurnitureWIP" },
   barangjadi: { table: "dbo.BarangJadi", keyColumn: "NoBJ" },
   reject: { table: "dbo.RejectV2", keyColumn: "NoReject" },
+  barangdagang: {
+    table: "dbo.BarangDagang",
+    keyColumn: "NoBarangDagang",
+    dateColumn: "CreatedAt",
+  },
 };
 
 function labelDateExpr(categoryCode, labelColumn) {
@@ -2158,10 +2188,17 @@ function labelDateExpr(categoryCode, labelColumn) {
   if (!src) {
     return "CAST(NULL AS datetime) AS LabelDate";
   }
-  return `(SELECT TOP 1 CONVERT(datetime, sdt.DateCreate)
+  // BarangDagang tidak punya DateCreate/DateTimeCreate — tanggal pembuatan
+  // tersimpan di CreatedAt. Kategori lain tetap pakai DateCreate (dan
+  // DateTimeCreate sebagai tie-breaker urutan).
+  const dateCol = src.dateColumn || "DateCreate";
+  const orderExtra = src.dateColumn
+    ? ""
+    : ", sdt.DateTimeCreate DESC";
+  return `(SELECT TOP 1 CONVERT(datetime, sdt.${dateCol})
      FROM ${src.table} AS sdt
     WHERE sdt.${src.keyColumn} = src.${labelColumn}
-    ORDER BY sdt.DateCreate DESC, sdt.DateTimeCreate DESC) AS LabelDate`;
+    ORDER BY sdt.${dateCol} DESC${orderExtra}) AS LabelDate`;
 }
 
 // Dipakai laporan cetak — daftar label yang BELUM discan (src tanpa
@@ -2176,8 +2213,9 @@ async function getUnscannedLabels({ stockOpnameNo }) {
 
   // Furniture WIP dihitung per pcs, bukan berat — sama seperti flag
   // showWeight di getCompleteSummary/getTypesInStockOpname.
-  const showWeight = categoryCode !== "furniturewip";
-  const metricColumn = showWeight ? "Berat" : "Pcs";
+  const showWeight = !isPcsMetric(categoryCode);
+  const pcsCol = pcsMetricColumn(categoryCode);
+  const metricColumn = showWeight ? "Berat" : pcsCol;
 
   const scannedMatchSql = [
     "h.NoSO = src.NoSO",
@@ -2244,8 +2282,9 @@ async function getLocationMatchReport({ stockOpnameNo }) {
     stockOpnameNo,
   );
 
-  const showWeight = categoryCode !== "furniturewip";
-  const metricColumn = showWeight ? "Berat" : "Pcs";
+  const showWeight = !isPcsMetric(categoryCode);
+  const pcsCol = pcsMetricColumn(categoryCode);
+  const metricColumn = showWeight ? "Berat" : pcsCol;
 
   const scannedMatchSql = [
     "h.NoSO = src.NoSO",
@@ -2334,8 +2373,9 @@ async function getLaporanStockOpnameData({
     );
   }
 
-  const showWeight = categoryCode !== "furniturewip";
-  const metricColumn = showWeight ? "Berat" : "Pcs";
+  const showWeight = !isPcsMetric(categoryCode);
+  const pcsCol = pcsMetricColumn(categoryCode);
+  const metricColumn = showWeight ? "Berat" : pcsCol;
   const scannedMatchSql = [
     "h.NoSO = src.NoSO",
     ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
@@ -2371,7 +2411,7 @@ async function getLaporanStockOpnameData({
     reportReq.query(`
       SELECT
         COUNT(*) AS labelCount,
-        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : `ROUND(SUM(ISNULL(src.${pcsCol}, 0)), 0) AS totalPcs,`}
         SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
       FROM dbo.${cfg.snapshotTable} AS src
       LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
@@ -2384,7 +2424,7 @@ async function getLaporanStockOpnameData({
       SELECT
         src.${cfg.jenisColumn} AS typeId,
         COUNT(*) AS labelCount,
-        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : `ROUND(SUM(ISNULL(src.${pcsCol}, 0)), 0) AS totalPcs,`}
         SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
       FROM dbo.${cfg.snapshotTable} AS src
       LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
@@ -2396,7 +2436,7 @@ async function getLaporanStockOpnameData({
         COUNT(DISTINCT CASE WHEN src.IdLokasi IS NOT NULL THEN src.IdLokasi END)
           + MAX(CASE WHEN src.IdLokasi IS NULL THEN 1 ELSE 0 END) AS locationCount,
         COUNT(*) AS labelCount,
-        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalPcs,"}
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : `ROUND(SUM(ISNULL(src.${pcsCol}, 0)), 0) AS totalPcs,`}
         SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
       FROM dbo.${cfg.snapshotTable} AS src
       LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
@@ -2410,7 +2450,7 @@ async function getLaporanStockOpnameData({
         COUNT(*) AS labelCount,
         MIN(h.DateTimeScan) AS firstScanAt,
         MAX(h.DateTimeScan) AS lastScanAt,
-        ${showWeight ? "ROUND(SUM(ISNULL(h.Berat, 0)), 2) AS totalWeight" : "ROUND(SUM(ISNULL(h.Pcs, 0)), 0) AS totalPcs"}
+        ${showWeight ? "ROUND(SUM(ISNULL(h.Berat, 0)), 2) AS totalWeight" : `ROUND(SUM(ISNULL(h.${pcsCol}, 0)), 0) AS totalPcs`}
       FROM dbo.${cfg.hasilTable} AS h
       LEFT JOIN dbo.MstUsername AS u ON u.Username = h.Username
       WHERE h.NoSO = @stockOpnameNo
@@ -2419,7 +2459,7 @@ async function getLaporanStockOpnameData({
 
       SELECT
         COUNT(*) AS totalRecords,
-        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalUnscannedMetric" : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalUnscannedMetric"}
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalUnscannedMetric" : `ROUND(SUM(ISNULL(src.${pcsCol}, 0)), 0) AS totalUnscannedMetric`}
       FROM dbo.${cfg.snapshotTable} AS src
       LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
       WHERE src.NoSO = @stockOpnameNo AND h.${cfg.labelColumns[0]} IS NULL;
@@ -2427,7 +2467,7 @@ async function getLaporanStockOpnameData({
       SELECT
         src.${cfg.jenisColumn} AS typeId,
         COUNT(*) AS labelCount,
-        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalMetric" : "ROUND(SUM(ISNULL(src.Pcs, 0)), 0) AS totalMetric"}
+        ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalMetric" : `ROUND(SUM(ISNULL(src.${pcsCol}, 0)), 0) AS totalMetric`}
       FROM dbo.${cfg.snapshotTable} AS src
       LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
       WHERE src.NoSO = @stockOpnameNo AND h.${cfg.labelColumns[0]} IS NULL

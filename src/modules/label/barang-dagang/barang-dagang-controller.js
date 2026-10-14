@@ -119,11 +119,20 @@ exports.generatePdf = async (req, res) => {
 
     const lokasi = row.Blok ? `${row.Blok}${row.IdLokasi ?? ""}` : "";
 
+    // Qty yang tercetak = sisa yang belum terpakai partial
+    // (BarangDagang.Qty − SUM(BarangDagangPartial.Qty)) — sama seperti
+    // label barang jadi: reprint menampilkan sisa pcs, bukan qty awal.
+    const qtyAwal = Number(row.Qty) || 0;
+    const totalPartial = Number(row.TotalPartialQty) || 0;
+    const qtyCetak = Number(row.IsPartial) === 1
+      ? Math.max(qtyAwal - totalPartial, 0)
+      : qtyAwal;
+
     const data = {
       noLabel: row.NoBarangDagang,
       namaProduk: row.NamaBarangDagang,
       kode: row.NoBarangDagang,
-      qty: row.Qty,
+      qty: qtyCetak,
       tanggal: kodeLabel,
       batchCode: kodeLabel,
       createdAt: row.CreatedAt,

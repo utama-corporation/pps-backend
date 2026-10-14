@@ -720,7 +720,7 @@ async function upsertInputsAndPartials(req, res) {
   if (requestId) res.setHeader('x-request-id', requestId);
 
   // optional validate: at least one input exists
-  const hasInput = ['bb', 'bonggolan', 'bbPartial'].some((key) => Array.isArray(payload?.[key]) && payload[key].length > 0);
+  const hasInput = ['bb', 'bonggolan', 'reject', 'bbPartial', 'rejectPartial'].some((key) => Array.isArray(payload?.[key]) && payload[key].length > 0);
 
   // if (!hasInput) { ... } // kalau mau strict, aktifkan lagi
 
@@ -816,7 +816,7 @@ async function deleteInputsAndPartials(req, res) {
   if (requestId) res.setHeader('x-request-id', requestId);
 
   // Validate input
-  const hasInput = ['bb', 'bonggolan', 'bbPartial'].some(key => Array.isArray(payload?.[key]) && payload[key].length > 0);
+  const hasInput = ['bb', 'bonggolan', 'reject', 'bbPartial', 'rejectPartial'].some(key => Array.isArray(payload?.[key]) && payload[key].length > 0);
 
   if (!hasInput) {
     return res.status(400).json({

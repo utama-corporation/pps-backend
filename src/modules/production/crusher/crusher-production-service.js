@@ -914,6 +914,10 @@ async function deleteCrusherProduksi(noCrusherProduksi, ctx) {
         NoBonggolan varchar(50)
       );
 
+      DECLARE @RejectKeys TABLE (
+        NoReject varchar(50)
+      );
+
       ---------------------------------------------------------
       -- 1. BAHAN BAKU (FULL + PARTIAL)
       ---------------------------------------------------------
@@ -982,6 +986,45 @@ async function deleteCrusherProduksi(noCrusherProduksi, ctx) {
       SET b.DateUsage = NULL
       FROM dbo.Bonggolan b
       JOIN @BonggolanKeys k ON k.NoBonggolan = b.NoBonggolan;
+
+      ---------------------------------------------------------
+      -- 2b. REJECT (FULL ONLY)
+      ---------------------------------------------------------
+      INSERT INTO @RejectKeys (NoReject)
+      SELECT DISTINCT r.NoReject
+      FROM dbo.RejectV2 r
+      WHERE EXISTS (
+        SELECT 1 FROM dbo.CrusherProduksiInputReject map
+        WHERE map.NoCrusherProduksi = @NoCrusherProduksi
+          AND map.NoReject = r.NoReject
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM dbo.CrusherProduksiInputRejectPartial mp
+        JOIN dbo.RejectV2Partial rp ON rp.NoRejectPartial = mp.NoRejectPartial
+        WHERE mp.NoCrusherProduksi = @NoCrusherProduksi
+          AND rp.NoReject = r.NoReject
+      );
+
+      DELETE rp
+      FROM dbo.RejectV2Partial rp
+      JOIN dbo.CrusherProduksiInputRejectPartial mp
+        ON mp.NoRejectPartial = rp.NoRejectPartial
+      WHERE mp.NoCrusherProduksi = @NoCrusherProduksi;
+
+      DELETE FROM dbo.CrusherProduksiInputRejectPartial
+      WHERE NoCrusherProduksi = @NoCrusherProduksi;
+
+      DELETE FROM dbo.CrusherProduksiInputReject
+      WHERE NoCrusherProduksi = @NoCrusherProduksi;
+
+      UPDATE r
+      SET r.DateUsage = NULL,
+          r.IsPartial = CASE
+            WHEN EXISTS (SELECT 1 FROM dbo.RejectV2Partial rp WHERE rp.NoReject = r.NoReject)
+            THEN 1 ELSE 0 END
+      FROM dbo.RejectV2 r
+      JOIN @RejectKeys k ON k.NoReject = r.NoReject;
 
       ---------------------------------------------------------
       -- 3. DELETE HEADER (TRIGGER AUDIT AKAN JALAN)
@@ -1186,6 +1229,27 @@ async function fetchInputs(noCrusherProduksi) {
     LEFT JOIN dbo.MstBonggolan mb WITH (NOLOCK)
       ON mb.IdBonggolan = b.IdBonggolan
     WHERE ib.NoCrusherProduksi = @no
+
+    UNION ALL
+
+    /* Reject (full only) — jenis dari MstReject */
+    SELECT
+      'reject' AS Src,
+      ir.NoCrusherProduksi,
+      ir.NoReject AS Ref1,
+      CAST(NULL AS varchar(50)) AS Ref2,
+      CAST(NULL AS varchar(50)) AS Ref3,
+      rj.Berat AS Berat,
+      CAST(NULL AS decimal(18,3)) AS BeratAct,
+      CAST(NULL AS bit) AS IsPartial,
+      rj.IdReject AS IdJenis,
+      CAST(COALESCE(mr.NamaReject, 'Reject') AS varchar(100)) AS NamaJenis
+    FROM dbo.CrusherProduksiInputReject ir WITH (NOLOCK)
+    LEFT JOIN dbo.RejectV2 rj WITH (NOLOCK)
+      ON rj.NoReject = ir.NoReject
+    LEFT JOIN dbo.MstReject mr WITH (NOLOCK)
+      ON mr.IdReject = rj.IdReject
+    WHERE ir.NoCrusherProduksi = @no
     ORDER BY Ref1 DESC, Ref2 ASC;
 
 
@@ -1210,19 +1274,39 @@ async function fetchInputs(noCrusherProduksi) {
       ON jp.IdJenisPlastik = bbh.IdJenisPlastik
     WHERE pmap.NoCrusherProduksi = @no
     ORDER BY pmap.NoBBPartial DESC;
+
+    /* Reject partial → jenis reject */
+    SELECT
+      rmap.NoRejectPartial,
+      rdet.NoReject,
+      rdet.Berat,
+      rj.IdReject   AS IdJenis,
+      mr.NamaReject AS NamaJenis
+    FROM dbo.CrusherProduksiInputRejectPartial rmap WITH (NOLOCK)
+    LEFT JOIN dbo.RejectV2Partial rdet WITH (NOLOCK)
+      ON rdet.NoRejectPartial = rmap.NoRejectPartial
+    LEFT JOIN dbo.RejectV2 rj WITH (NOLOCK)
+      ON rj.NoReject = rdet.NoReject
+    LEFT JOIN dbo.MstReject mr WITH (NOLOCK)
+      ON mr.IdReject = rj.IdReject
+    WHERE rmap.NoCrusherProduksi = @no
+    ORDER BY rmap.NoRejectPartial DESC;
   `;
 
   const rs = await req.query(q);
 
   const mainRows = rs.recordsets?.[0] || [];
   const bbPart = rs.recordsets?.[1] || [];
+  const rejPart = rs.recordsets?.[2] || [];
 
   const out = {
     bb: [],
     bonggolan: [],
+    reject: [],
     summary: {
       bb: 0,
       bonggolan: 0,
+      reject: 0,
     },
   };
 
@@ -1251,6 +1335,12 @@ async function fetchInputs(noCrusherProduksi) {
           ...base,
         });
         break;
+      case "reject":
+        out.reject.push({
+          noReject: r.Ref1,
+          ...base,
+        });
+        break;
     }
   }
 
@@ -1267,9 +1357,20 @@ async function fetchInputs(noCrusherProduksi) {
     });
   }
 
+  for (const p of rejPart) {
+    out.reject.push({
+      noRejectPartial: p.NoRejectPartial,
+      noReject: p.NoReject ?? null,
+      berat: p.Berat ?? null,
+      idJenis: p.IdJenis ?? null,
+      namaJenis: p.NamaJenis ?? null,
+    });
+  }
+
   // Summary
   out.summary.bb = out.bb.length;
   out.summary.bonggolan = out.bonggolan.length;
+  out.summary.reject = out.reject.length;
 
   return out;
 }
@@ -1385,7 +1486,10 @@ async function validateLabel(labelCode) {
   const raw = String(labelCode || "").trim();
   if (!raw) throw new Error("Label code is required");
 
-  const prefix = raw.substring(0, 2).toUpperCase();
+  const prefix =
+    raw.substring(0, 3).toUpperCase() === "BF."
+      ? "BF."
+      : raw.substring(0, 2).toUpperCase();
 
   let query = "";
   let tableName = "";
@@ -1504,9 +1608,46 @@ async function validateLabel(labelCode) {
       `;
       return await run(raw);
 
+    // =========================
+    // BF. RejectV2 (berat = sisa setelah partial)
+    // =========================
+    case "BF.":
+      tableName = "RejectV2";
+      query = `
+        ;WITH PartialSum AS (
+          SELECT rp.NoReject, SUM(ISNULL(rp.Berat, 0)) AS BeratPartial
+          FROM dbo.RejectV2Partial AS rp WITH (NOLOCK)
+          WHERE rp.NoReject = @labelCode
+          GROUP BY rp.NoReject
+        )
+        SELECT
+          r.NoReject,
+          r.IdReject       AS idJenis,
+          mr.NamaReject    AS namaJenis,
+          r.DateCreate,
+          r.DateUsage,
+          r.IdWarehouse,
+          CAST(r.Berat - ISNULL(ps.BeratPartial, 0) AS DECIMAL(18,2)) AS berat,
+          r.Jam,
+          r.CreateBy,
+          r.DateTimeCreate,
+          r.Blok,
+          r.IdLokasi,
+          CASE WHEN ISNULL(ps.BeratPartial, 0) > 0
+            THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS isPartial
+        FROM dbo.RejectV2 AS r WITH (NOLOCK)
+        LEFT JOIN PartialSum AS ps ON ps.NoReject = r.NoReject
+        LEFT JOIN dbo.MstReject AS mr WITH (NOLOCK) ON mr.IdReject = r.IdReject
+        WHERE r.NoReject = @labelCode
+          AND r.DateUsage IS NULL
+          AND (r.Berat - ISNULL(ps.BeratPartial, 0)) > 0
+        ORDER BY r.NoReject;
+      `;
+      return await run(raw);
+
     default:
       throw new Error(
-        `Invalid prefix: ${prefix}. Crusher production only supports A. (Bahan Baku) and M. (Bonggolan)`,
+        `Invalid prefix: ${prefix}. Crusher production only supports A. (Bahan Baku), M. (Bonggolan) and BF. (Reject)`,
       );
   }
 }

@@ -34,8 +34,8 @@ function locLabel(blok, locationId) {
     .join("");
 }
 
-function qtyText(row, isFWIP, digits, unitLabel) {
-  const value = isFWIP ? row.totalPcs : row.totalWeight;
+function qtyText(row, isPcsMetric, digits, unitLabel) {
+  const value = isPcsMetric ? row.totalPcs : row.totalWeight;
   return `${fmtNum(value, digits)} ${unitLabel}`;
 }
 
@@ -85,18 +85,20 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
   const no = summary.stockOpnameNo;
   const cat = summary.categoryName;
   const tgl = summary.date;
-  const isFWIP = summary.categoryCode === "furniturewip";
-  const unit = isFWIP ? "pcs" : "kg";
-  const unitH = isFWIP ? "Pcs" : "Berat";
-  const dig = isFWIP ? 0 : 2;
+  const isPcsMetric =
+    summary.categoryCode === "furniturewip" ||
+    summary.categoryCode === "barangdagang";
+  const unit = isPcsMetric ? "pcs" : "kg";
+  const unitH = isPcsMetric ? "Pcs" : "Berat";
+  const dig = isPcsMetric ? 0 : 2;
   const tot = summary.total || {};
-  const totalVal = isFWIP ? tot.totalPcs : tot.totalWeight;
+  const totalVal = isPcsMetric ? tot.totalPcs : tot.totalWeight;
   const unscanned = unscannedLabels?.totalUnscannedPcs ?? unscannedLabels?.totalUnscannedWeight ?? 0;
-  const scanned = isFWIP ? (totalVal - unscanned) : Math.round((totalVal - unscanned) * 100) / 100;
+  const scanned = isPcsMetric ? (totalVal - unscanned) : Math.round((totalVal - unscanned) * 100) / 100;
   const unscannedData = unscannedLabels?.data || [];
   const unscannedTotalRecords = unscannedLabels?.totalRecords ?? unscannedData.length;
   const unscannedGroups = unscannedLabels?.groups || [];
-  const unitLabel = isFWIP ? "pcs" : "kg";
+  const unitLabel = isPcsMetric ? "pcs" : "kg";
 
   const content = [];
 
@@ -133,14 +135,14 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
       ? unscannedGroups.map((r) => ({
           typeName: r.typeName || "-",
           count: r.labelCount || 0,
-          metric: isFWIP ? (r.totalPcs ?? 0) : (r.totalWeight ?? 0),
+          metric: isPcsMetric ? (r.totalPcs ?? 0) : (r.totalWeight ?? 0),
         }))
       : [...unscannedData.reduce((map, r) => {
           const key = r.typeId ?? r.typeName ?? "-";
           if (!map.has(key)) map.set(key, { typeName: r.typeName || "-", count: 0, metric: 0 });
           const g = map.get(key);
           g.count += 1;
-          g.metric += isFWIP ? (r.pcs ?? 0) : (r.weight ?? 0);
+          g.metric += isPcsMetric ? (r.pcs ?? 0) : (r.weight ?? 0);
           return map;
         }, new Map()).values()];
 
@@ -220,7 +222,7 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
             { text: locLabel(r.scannedBlok, r.scannedLocationId), style: "cellRed" },
             { text: r.fullName || r.username || "-", style: "cell" },
             { text: fmtDateTime(r.scannedAt), style: "cellC" },
-            { text: fmtNum(isFWIP ? (r.pcs ?? 0) : (r.weight ?? 0), dig), style: "cellR" },
+            { text: fmtNum(isPcsMetric ? (r.pcs ?? 0) : (r.weight ?? 0), dig), style: "cellR" },
           ]),
         ],
       },
@@ -258,7 +260,7 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
             { text: fmtNum(r.labelCount), style: "cellC" },
             { text: fmtNum(r.scannedCount), style: "cellC" },
             { text: fmtNum(r.unscannedCount), style: r.unscannedCount > 0 ? "cellRedR" : "cellC" },
-            { text: qtyText(r, isFWIP, dig, unitLabel), style: "cellR" },
+            { text: qtyText(r, isPcsMetric, dig, unitLabel), style: "cellR" },
           ]),
         ],
       },
@@ -290,7 +292,7 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
             { text: fmtNum(r.labelCount), style: "cellC" },
             { text: fmtNum(r.scannedCount), style: "cellC" },
             { text: fmtNum(r.unscannedCount), style: r.unscannedCount > 0 ? "cellRedR" : "cellC" },
-            { text: qtyText(r, isFWIP, dig, unitLabel), style: "cellR" },
+            { text: qtyText(r, isPcsMetric, dig, unitLabel), style: "cellR" },
           ]),
         ],
       },
@@ -318,7 +320,7 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
           ...scanRows.map((r) => [
             { text: r.fullName || r.username || "-", style: "cell" },
             { text: fmtNum(r.labelCount), style: "cellC" },
-            { text: qtyText(r, isFWIP, dig, unitLabel), style: "cellR" },
+            { text: qtyText(r, isPcsMetric, dig, unitLabel), style: "cellR" },
             { text: fmtDateTime(r.firstScanAt), style: "cellC" },
             { text: fmtDateTime(r.lastScanAt), style: "cellC" },
           ]),

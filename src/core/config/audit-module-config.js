@@ -418,6 +418,8 @@ const MODULE_CONFIG = {
     inputTables: [
       "BrokerProduksiInputReject",
       "BrokerProduksiInputRejectPartial",
+      "CrusherProduksiInputReject",
+      "CrusherProduksiInputRejectPartial",
       "GilinganProduksiInputRejectV2",
       "GilinganProduksiInputRejectV2Partial",
       "BongkarSusunInputReject",
@@ -566,6 +568,8 @@ const MODULE_CONFIG = {
       "CrusherProduksiInputBB",
       "CrusherProduksiInputBBPartial",
       "CrusherProduksiInputBonggolan",
+      "CrusherProduksiInputReject",
+      "CrusherProduksiInputRejectPartial",
     ],
     scalarFields: [
       "Tanggal",

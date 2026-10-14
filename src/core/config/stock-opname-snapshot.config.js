@@ -476,6 +476,43 @@ const STOCK_OPNAME_SNAPSHOT_CONFIG = {
       INNER JOIN ranked ON ranked.NoReject = b.NoReject AND ranked.rn = 1
     `,
   },
+
+  // Barang dagang (prefix BD.) dihitung per Qty (pcs), bukan berat —
+  // parent Qty TIDAK dikurangi saat partial; sisa = Qty − SUM(BarangDagangPartial.Qty).
+  // Kolom CreatedAt (bukan DateCreate) dipakai sebagai filter tanggal snapshot.
+  barangdagang: {
+    flagColumn: "IsBarangDagang",
+    snapshotTable: "StockOpnameBarangDagang",
+    hasilTable: "StockOpnameHasilBarangDagang",
+    jenisColumn: "IdBarangDagang",
+    insertColumns: ["NoBarangDagang", "Qty", "Blok", "IdLokasi", "IdBarangDagang"],
+    labelColumns: ["NoBarangDagang"],
+    hasilColumns: ["NoBarangDagang", "Qty"],
+    hasDateCreateFilter: true,
+    cteSql: "",
+    finalSelectSql: `
+      SELECT
+        @noso AS NoSO,
+        b.NoBarangDagang,
+        CASE
+          WHEN ISNULL(b.IsPartial, 0) = 1 THEN
+            CASE WHEN ISNULL(b.Qty, 0) - ISNULL(p.TotalPartialQty, 0) < 0 THEN 0
+                 ELSE ISNULL(b.Qty, 0) - ISNULL(p.TotalPartialQty, 0) END
+          ELSE ISNULL(b.Qty, 0)
+        END AS Qty,
+        b.Blok,
+        b.IdLokasi,
+        b.IdBarangDagang
+      FROM dbo.BarangDagang AS b
+      OUTER APPLY (
+        SELECT SUM(ISNULL(p.Qty, 0)) AS TotalPartialQty
+        FROM dbo.BarangDagangPartial AS p
+        WHERE p.NoBarangDagang = b.NoBarangDagang
+      ) AS p
+      WHERE b.DateUsage IS NULL
+        AND b.CreatedAt < @tanggal
+    `,
+  },
 };
 
 module.exports = { STOCK_OPNAME_SNAPSHOT_CONFIG };

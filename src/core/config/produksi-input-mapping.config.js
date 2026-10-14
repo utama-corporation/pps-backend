@@ -237,6 +237,12 @@ const INPUT_CONFIGS = {
       mappingTable: "CrusherProduksiInputBonggolan",
       dateUsageColumn: "DateUsage",
     },
+    reject: {
+      sourceTable: "RejectV2",
+      keys: ["NoReject"],
+      mappingTable: "CrusherProduksiInputReject",
+      dateUsageColumn: "DateUsage",
+    },
   },
 
   gilinganProduksi: {
