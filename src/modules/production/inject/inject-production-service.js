@@ -75,6 +75,18 @@ async function getMasterShiftWindow(runner, tanggal, noShift) {
       INNER JOIN dbo.MstShiftHourSet_d d WITH (NOLOCK)
         ON d.IdShiftHourSet = ls.IdShiftHourSet
       WHERE d.NoShift = @NoShift;
+    -- Weekend (Minggu=1, Sabtu=7 pada DATEPART/WEEKDAY SQL Server) boleh punya
+    -- jam berbeda untuk NoShift yang sama, mis. shift 1 hari biasa 07:00-15:00
+    -- vs weekend 07:00-12:00. Baris yang cocok dengan hari @Tanggal
+    -- didahulukan; kalau tidak ada baris weekend untuk NoShift ini, baris hari
+    -- biasa yang dipakai. Tanpa ORDER BY ini, TOP 1 di atas mengambil salah
+    -- satu dari dua baris itu secara acak.
+    ORDER BY CASE
+               WHEN ISNULL(d.IsWeekend, 0) = CASE
+                      WHEN DATEPART(WEEKDAY, @Tanggal) IN (1, 7) THEN 1 ELSE 0
+                    END THEN 0
+               ELSE 1
+             END;
     `);
 
   const ref = res.recordset?.[0];
