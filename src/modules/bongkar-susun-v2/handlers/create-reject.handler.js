@@ -271,26 +271,43 @@ exports.createBongkarSusunReject = async (payload, ctx) => {
         `);
     }
 
-    // Tandai terpakai hanya label yang benar-benar habis: sisa berat
-    // (setelah semua partial, termasuk yang dibuat transaksi ini) <= 0.
-    await new sql.Request(tx)
-      .input("Tanggal", sql.Date, nowDate)
-      .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson).query(`
-        UPDATE r
+    // Tandai terpakai hanya label yang benar-benar habis. Sisa label =
+    // Berat - (partial sebelumnya + berat terpakai siklus ini).
+    //
+    // PENTING: sisa TIDAK bisa dibaca dari SUM(dbo.RejectV2Partial) di DB,
+    // karena label yang dipakai UTUH tanpa partial sebelumnya tidak pernah
+    // dibuatkan baris RejectV2Partial sama sekali (lihat loop di atas).
+    // Kalau sisa dihitung dari DB, label utuh itu selalu terbaca "masih ada
+    // sisa" dan DateUsage tidak pernah terisi — labelnya jadi tetap
+    // tersedia di sistem walau sudah dipakai. Karena itu `used` yang sudah
+    // dihitung di atas ikut diperhitungkan di sini.
+    const exhaustedCodes = [];
+    for (const row of inputDataRes.recordset) {
+      const berat = Number(row.Berat || 0);
+      const partialSebelumnya = Number(row.TotalPartialBerat || 0);
+      const used = Number(usedByLabel.get(row.NoReject) || 0);
+      if (berat - partialSebelumnya - used <= 0.001) {
+        exhaustedCodes.push(row.NoReject);
+      }
+    }
+
+    if (exhaustedCodes.length > 0) {
+      await new sql.Request(tx)
+        .input("Tanggal", sql.Date, nowDate)
+        .input(
+          "CodesJson",
+          sql.NVarChar(sql.MAX),
+          JSON.stringify(exhaustedCodes.map((c) => ({ code: c }))),
+        ).query(`
+        UPDATE dbo.RejectV2
         SET DateUsage = @Tanggal
-        FROM dbo.RejectV2 r
-        LEFT JOIN (
-          SELECT NoReject, SUM(ISNULL(Berat, 0)) AS TotalPartialBerat
-          FROM dbo.RejectV2Partial
-          GROUP BY NoReject
-        ) rp ON rp.NoReject = r.NoReject
-        WHERE r.NoReject IN (
+        WHERE NoReject IN (
           SELECT j.code FROM OPENJSON(@CodesJson)
           WITH (code varchar(50) '$.code') AS j
         )
-        AND r.DateUsage IS NULL
-        AND (ISNULL(r.Berat, 0) - ISNULL(rp.TotalPartialBerat, 0)) <= 0
+        AND DateUsage IS NULL
       `);
+    }
 
     const refRow = inputDataRes.recordset[0];
     const createdOutputs = [];
