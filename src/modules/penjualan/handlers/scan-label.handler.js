@@ -24,7 +24,7 @@ exports.scanLabel = async (noBJJual, noLabelRaw, ctx, options = {}) => {
   const category = detectCategory(noLabel);
   if (!category) {
     throw badReq(
-      `Label ${noLabel} bukan kategori yang valid untuk Penjualan (harus furniturewip/barangjadi)`,
+      `Label ${noLabel} bukan kategori yang valid untuk Penjualan (harus furniturewip/barangjadi/barangdagang)`,
     );
   }
 
@@ -115,15 +115,16 @@ exports.scanLabel = async (noBJJual, noLabelRaw, ctx, options = {}) => {
 
     if (parent.availablePcs <= sisaKuota) {
       // Pcs label pas atau kurang dari kebutuhan — pakai semua sisa pcs
-      // label ini, tandai parent fully-consumed.
+      // label ini, tandai parent fully-consumed. Parent qty TIDAK dikurangi
+      // (konvensi sama dengan barang jadi): sisa dihitung dari SUM partial.
       consumedPcs = parent.availablePcs;
-      const affected = await markParentFullyUsed(tx, category, noLabel);
-      if (affected === 0) {
+      const ok = (await markParentFullyUsed(tx, category, noLabel)) > 0;
+      if (!ok) {
         throw conflict(`Label ${noLabel} baru saja dipakai oleh proses lain`);
       }
 
       // Kalau label ini SUDAH pernah dipecah sebelumnya (sisa tersedia <
-      // Pcs asli parent), sisa terakhirnya pun dicatat sebagai baris
+      // qty asli parent), sisa terakhirnya pun dicatat sebagai baris
       // partial — supaya SETIAP konsumsi atas label ber-partial punya
       // NoPartial. Hanya konsumsi 1x-penuh atas label yang belum pernah
       // dipecah yang NoPartial-nya NULL. Tidak ada konfirmasi di sini:
@@ -154,10 +155,10 @@ exports.scanLabel = async (noBJJual, noLabelRaw, ctx, options = {}) => {
       };
     } else {
       // User sudah konfirmasi — pecah label jadi partial sejumlah sisa
-      // kebutuhan (bookkeeping availablePcs untuk modul lain), sisanya
-      // tetap tersedia di parent (DateUsage tetap NULL). NoLabel yang
-      // dicatat di BJJualScanLabel_d TETAP kode label asli, bukan kode
-      // partial-nya — kode partial cuma dipakai internal.
+      // kebutuhan (bookkeeping availablePcs untuk modul lain), parent qty
+      // TIDAK dikurangi — hanya IsPartial=1, DateUsage tetap NULL (sisa
+      // tetap tersedia di parent). NoLabel yang dicatat di
+      // BJJualScanLabel_d TETAP kode label asli, bukan kode partial-nya.
       consumedPcs = sisaKuota;
       partialCode = await createPartial(tx, category, noLabel, sisaKuota);
       wasPartialSplit = true;
