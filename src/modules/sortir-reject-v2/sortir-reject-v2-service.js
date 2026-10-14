@@ -370,12 +370,33 @@ exports.getDetail = async (noBJSortir) => {
           bp.IdCabinetMaterial AS idJenis,
           cm.Nama AS namaJenis,
           ISNULL(bp.Qty, 0) AS pcs,
+          -- qty yang benar-benar DIPAKAI pada transaksi ini.
+          --
+          -- Sortir reject mengosongkan Qty label (SET Qty = 0) saat memakai
+          -- bahan pendukung, jadi Qty label sendiri selalu 0 di baris ini dan
+          -- tidak berguna untuk ditampilkan. Jumlah yang keluar dicatat di
+          -- dbo.BahanPendukungKonsumsi_d dengan NoProduksi = NoBJSortir.
+          --
+          -- Fallback ke QtyAwal untuk transaksi lama yang dibuat sebelum log
+          -- konsumsi ada (tabel diperkenalkan bersama fitur ini). QtyAwal
+          -- adalah qty saat label dibuat, dan sortir reject selalu memakai
+          -- label secara penuh - jadi QtyAwal = qty terpakai. Jangan pakai
+          -- (QtyAwal - Qty): itu jumlah kumulatif seluruh pemakaian label,
+          -- bukan per transaksi.
+          COALESCE(k.QtyKonsumsi, bp.QtyAwal, 0) AS qty,
           ISNULL(CAST(bp.HasBeenPrinted AS int), 0) AS hasBeenPrinted
         FROM dbo.BJSortirRejectInputLabelBahanPendukung map
         INNER JOIN dbo.BahanPendukung bp
           ON bp.NoBahanPendukung = map.NoBahanPendukung
         LEFT JOIN dbo.MstCabinetMaterial cm
           ON cm.IdCabinetMaterial = bp.IdCabinetMaterial
+        LEFT JOIN (
+          SELECT NoProduksi, NoBahanPendukung, SUM(QtyKonsumsi) AS QtyKonsumsi
+          FROM dbo.BahanPendukungKonsumsi_d
+          GROUP BY NoProduksi, NoBahanPendukung
+        ) k
+          ON k.NoProduksi = @NoBJSortir
+         AND k.NoBahanPendukung = map.NoBahanPendukung
         WHERE map.NoBJSortir = @NoBJSortir
         ORDER BY map.NoBahanPendukung ASC
       `);
@@ -393,6 +414,13 @@ exports.getDetail = async (noBJSortir) => {
       (sum, row) => sum + Number(row.pcs || 0),
       0,
     );
+    // Total qty bahan pendukung. Separate dari totalPcsInput karena bahan
+    // pendukung tidak ber-pcs: pcs label selalu 0 karena Qty di-nolkan saat
+    // dipakai, jadi totalPcsInput tidak bisa dipakai untuk kategori ini.
+    const bahanPendukungRows = inputsBahanPendukungRes.recordset || [];
+    const totalQtyInput = bahanPendukungRows.length
+      ? bahanPendukungRows.reduce((sum, row) => sum + Number(row.qty || 0), 0)
+      : null;
 
     return {
       ...header,
@@ -405,6 +433,7 @@ exports.getDetail = async (noBJSortir) => {
       balance: hasBarangJadiOutput
         ? Math.abs(totalPcsInput - totalPcsOutput) < 0.001
         : null,
+      totalQtyInput,
       inputs,
       outputs: {
         barangJadi: outputsRes.recordset || [],
@@ -457,17 +486,28 @@ exports.getDetail = async (noBJSortir) => {
       .request()
       .input("NoBJSortir", sql.VarChar(50), no).query(`
         SELECT
+          'bahanPendukung' AS category,
           map.NoBahanPendukung,
           bp.CreatedAt AS DateCreate,
           bp.IdCabinetMaterial AS idJenis,
           cm.Nama AS namaJenis,
           ISNULL(bp.Qty, 0) AS pcs,
+          -- Sama seperti getDetail: qty terpakai diambil dari log konsumsi,
+          -- fallback QtyAwal untuk transaksi lama sebelum log ada.
+          COALESCE(k.QtyKonsumsi, bp.QtyAwal, 0) AS qty,
           ISNULL(CAST(bp.HasBeenPrinted AS int), 0) AS hasBeenPrinted
         FROM dbo.BJSortirRejectInputLabelBahanPendukung map
         INNER JOIN dbo.BahanPendukung bp
           ON bp.NoBahanPendukung = map.NoBahanPendukung
         LEFT JOIN dbo.MstCabinetMaterial cm
           ON cm.IdCabinetMaterial = bp.IdCabinetMaterial
+        LEFT JOIN (
+          SELECT NoProduksi, NoBahanPendukung, SUM(QtyKonsumsi) AS QtyKonsumsi
+          FROM dbo.BahanPendukungKonsumsi_d
+          GROUP BY NoProduksi, NoBahanPendukung
+        ) k
+          ON k.NoProduksi = @NoBJSortir
+         AND k.NoBahanPendukung = map.NoBahanPendukung
         WHERE map.NoBJSortir = @NoBJSortir
         ORDER BY map.NoBahanPendukung ASC
       `);
