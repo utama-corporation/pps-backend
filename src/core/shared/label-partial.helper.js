@@ -3,8 +3,11 @@ const { generateNextCode } = require("../utils/sequence-code-helper");
 
 // Konfigurasi per-kategori untuk memecah label fisik jadi partial. Dipakai
 // bareng oleh modul yang scan label & butuh "partial consumption" (penjualan,
-// retur-v3). Key = kodeKategori ('barangjadi' | 'furniturewip') — string yang
-// sama persis dipakai kedua modul.
+// retur-v3). Key = kodeKategori ('barangjadi' | 'furniturewip' |
+// 'barangdagang') — string yang sama persis dipakai semua modul pemakai.
+// parentQtyColumn: nama kolom qty pada parent (default 'Pcs'; barang dagang
+// memakai 'Qty'). Parent TIDAK PERNAH di-decrement — sisa stok dihitung
+// on-the-fly dari parentQty - SUM(partial).
 const PARTIAL_CONFIG = {
   furniturewip: {
     parentTable: "FurnitureWIP",
@@ -24,26 +27,25 @@ const PARTIAL_CONFIG = {
     partialParentColumn: "NoBJ",
     partialPrefix: "BL.",
   },
-  // Barang dagang header-only: stok = kolom Qty (bukan Pcs), TANPA tabel
-  // partial. Partial dilakukan dengan mengurangi Qty parent langsung
-  // (decrementQty) — lihat consumeParentQty(). Karena Qty di-decrement,
-  // availablePcs selalu = Qty parent (tidak ada SUM partial).
   barangdagang: {
     parentTable: "BarangDagang",
     parentColumn: "NoBarangDagang",
     jenisColumn: "IdBarangDagang",
-    qtyColumn: "Qty",
-    partialTable: null,
-    decrementQty: true,
+    parentQtyColumn: "Qty",
+    partialTable: "BarangDagangPartial",
+    partialColumn: "NoBarangDagangPartial",
+    partialParentColumn: "NoBarangDagang",
+    partialQtyColumn: "Qty",
+    partialPrefix: "BO.",
   },
 };
 
 // Lock parent label row (belum pernah fully-consumed) + hitung sisa pcs
-// yang masih tersedia (Pcs parent dikurangi total yang sudah dipecah jadi
+// yang masih tersedia (qty parent dikurangi total yang sudah dipecah jadi
 // partial sebelumnya — baik oleh modul lain maupun oleh modul pemanggil).
 async function lockParentAndAvailablePcs(tx, category, noLabel) {
   const cfg = PARTIAL_CONFIG[category];
-  const qtyColumn = cfg.qtyColumn || "Pcs";
+  const qtyColumn = cfg.parentQtyColumn || "Pcs";
 
   const parentRes = await new sql.Request(tx).input(
     "NoLabel",
@@ -57,19 +59,13 @@ async function lockParentAndAvailablePcs(tx, category, noLabel) {
   const parent = parentRes.recordset?.[0];
   if (!parent) return null;
 
-  // Kategori decrementQty (barang dagang): Qty sudah "live stock" — tiap
-  // konsumsi mengurangi Qty parent langsung, jadi tidak ada SUM partial.
-  if (cfg.decrementQty) {
-    const parentPcs = Number(parent.ParentPcs || 0);
-    return { ...parent, parentPcs, availablePcs: Math.max(parentPcs, 0) };
-  }
-
+  const partialQtyColumn = cfg.partialQtyColumn || "Pcs";
   const partialRes = await new sql.Request(tx).input(
     "NoLabel",
     sql.VarChar(50),
     noLabel,
   ).query(`
-      SELECT ISNULL(SUM(Pcs), 0) AS PartialPcs
+      SELECT ISNULL(SUM(${partialQtyColumn}), 0) AS PartialPcs
       FROM dbo.${cfg.partialTable} WITH (UPDLOCK, HOLDLOCK)
       WHERE ${cfg.partialParentColumn} = @NoLabel
     `);
@@ -98,9 +94,9 @@ async function markParentFullyUsed(tx, category, noLabel) {
   return res.rowsAffected?.[0] || 0;
 }
 
-// Pecah [pcs] dari parent jadi baris partial baru — parent.Pcs TIDAK
+// Pecah [pcs] dari parent jadi baris partial baru — parent qty TIDAK
 // dikurangi (konvensi yang sama dipakai modul lain: sisa pcs parent
-// dihitung on-the-fly dari Pcs - SUM(partial)), parent hanya ditandai
+// dihitung on-the-fly dari qty - SUM(partial)), parent hanya ditandai
 // IsPartial=1 dan DateUsage TETAP NULL (sisanya masih bisa dipakai lagi).
 async function createPartial(tx, category, noLabel, pcs) {
   const cfg = PARTIAL_CONFIG[category];
@@ -123,11 +119,12 @@ async function createPartial(tx, category, noLabel, pcs) {
     partialCode = await gen();
   }
 
+  const partialQtyColumn = cfg.partialQtyColumn || "Pcs";
   await new sql.Request(tx)
     .input("Code", sql.VarChar(50), partialCode)
     .input("Parent", sql.VarChar(50), noLabel)
     .input("Pcs", sql.Float, pcs).query(`
-      INSERT INTO dbo.${cfg.partialTable} (${cfg.partialColumn}, ${cfg.partialParentColumn}, Pcs)
+      INSERT INTO dbo.${cfg.partialTable} (${cfg.partialColumn}, ${cfg.partialParentColumn}, ${partialQtyColumn})
       VALUES (@Code, @Parent, @Pcs)
     `);
 
@@ -140,40 +137,9 @@ async function createPartial(tx, category, noLabel, pcs) {
   return partialCode;
 }
 
-// Konsumsi [pcs] dari parent kategori decrementQty (barang dagang): Qty
-// parent dikurangi langsung. `fully` = habiskan sisa sampai 0 & tandai
-// DateUsage. Return false kalau Qty tidak cukup / sudah terpakai (race).
-async function consumeParentQty(tx, category, noLabel, pcs, fully) {
-  const cfg = PARTIAL_CONFIG[category];
-  if (!cfg || !cfg.decrementQty) {
-    throw new Error(`Kategori ${category} bukan kategori decrementQty`);
-  }
-
-  if (fully) {
-    const res = await new sql.Request(tx)
-      .input("NoLabel", sql.VarChar(50), noLabel)
-      .input("Pcs", sql.Int, pcs).query(`
-          UPDATE dbo.${cfg.parentTable}
-          SET Qty = Qty - @Pcs, DateUsage = GETDATE()
-          WHERE ${cfg.parentColumn} = @NoLabel AND DateUsage IS NULL AND Qty >= @Pcs
-        `);
-    return (res.rowsAffected?.[0] || 0) > 0;
-  }
-
-  const res = await new sql.Request(tx)
-    .input("NoLabel", sql.VarChar(50), noLabel)
-    .input("Pcs", sql.Int, pcs).query(`
-        UPDATE dbo.${cfg.parentTable}
-        SET Qty = Qty - @Pcs, IsPartial = 1
-        WHERE ${cfg.parentColumn} = @NoLabel AND DateUsage IS NULL AND Qty >= @Pcs
-      `);
-  return (res.rowsAffected?.[0] || 0) > 0;
-}
-
 module.exports = {
   PARTIAL_CONFIG,
   lockParentAndAvailablePcs,
   markParentFullyUsed,
   createPartial,
-  consumeParentQty,
 };
