@@ -97,7 +97,6 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
   const scanned = isPcsMetric ? (totalVal - unscanned) : Math.round((totalVal - unscanned) * 100) / 100;
   const unscannedData = unscannedLabels?.data || [];
   const unscannedTotalRecords = unscannedLabels?.totalRecords ?? unscannedData.length;
-  const unscannedGroups = unscannedLabels?.groups || [];
   const unitLabel = isPcsMetric ? "pcs" : "kg";
 
   const content = [];
@@ -123,7 +122,7 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
     style: "summaryTbl",
   });
 
-  // === LABEL BELUM DITEMUKAN (dikelompokkan per jenis) ===
+  // === LABEL BELUM DITEMUKAN ===
   if (unscannedTotalRecords > 0) {
     content.push({ text: "Label Belum Ditemukan", style: "h2" });
     content.push({
@@ -131,61 +130,42 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
       style: "callout",
     });
 
-    const grouped = unscannedGroups.length > 0
-      ? unscannedGroups.map((r) => ({
-          typeName: r.typeName || "-",
-          count: r.labelCount || 0,
-          metric: isPcsMetric ? (r.totalPcs ?? 0) : (r.totalWeight ?? 0),
-        }))
-      : [...unscannedData.reduce((map, r) => {
-          const key = r.typeId ?? r.typeName ?? "-";
-          if (!map.has(key)) map.set(key, { typeName: r.typeName || "-", count: 0, metric: 0 });
-          const g = map.get(key);
-          g.count += 1;
-          g.metric += isPcsMetric ? (r.pcs ?? 0) : (r.weight ?? 0);
-          return map;
-        }, new Map()).values()];
-
-    const sorted = grouped.sort((a, b) => a.typeName.localeCompare(b.typeName));
-    const tableTotalMetric = unscannedGroups.length > 0
-      ? grouped.reduce((sum, g) => sum + g.metric, 0)
-      : unscanned;
-
-    let no = 0;
-    const hdr = [
-      { text: "No", style: "hdrCell" },
-      { text: "Keterangan", style: "hdrCell" },
-      { text: "Jmlh Label", style: "hdrCellR" },
-      { text: unitH, style: "hdrCellR" },
-    ];
-
-    const bodyRows = [];
-    for (const g of sorted) {
-      no += 1;
-      bodyRows.push([
-        { text: fmtNum(no, 0), style: "cellC" },
-        { text: g.typeName, style: "cell" },
-        { text: fmtNum(g.count, 0), style: "cellR" },
-        { text: fmtNum(g.metric, dig), style: "cellR" },
-      ]);
-    }
-
-    bodyRows.push([
-      { text: "", style: "cell" },
-      { text: `TOTAL (${fmtNum(unscannedTotalRecords)} label)`, style: "cell" },
-      { text: "", style: "cell" },
-      { text: fmtNum(tableTotalMetric, dig), style: "cellR" },
-    ]);
-
+    const printedUnscanned = unscannedData.slice(0, MAX_UNSCANNED_ROWS_PRINTED);
     content.push({
       table: {
         headerRows: 1,
         widths: ["auto", "*", "auto", "auto"],
-        body: [hdr, ...bodyRows],
+        body: [
+          [
+            { text: "No. Label / Tgl", style: "hdrCell" },
+            { text: "Jenis", style: "hdrCell" },
+            { text: "Tercatat", style: "hdrCellC" },
+            { text: unitH, style: "hdrCellR" },
+          ],
+          ...printedUnscanned.map((r) => [
+            labelCell(r),
+            { text: r.typeName || "-", style: "cell" },
+            { text: locLabel(r.blok, r.locationId), style: "cellC" },
+            { text: fmtNum(isPcsMetric ? (r.pcs ?? 0) : (r.weight ?? 0), dig), style: "cellR" },
+          ]),
+          [
+            { text: `TOTAL (${fmtNum(unscannedTotalRecords)} label)`, style: "cell" },
+            { text: "", style: "cell" },
+            { text: "", style: "cellC" },
+            { text: fmtNum(unscanned, dig), style: "cellR" },
+          ],
+        ],
       },
       layout: tblLayout(true),
       style: "summaryTbl",
     });
+
+    if (unscannedTotalRecords > printedUnscanned.length) {
+      content.push({
+        text: `Menampilkan ${fmtNum(printedUnscanned.length)} dari ${fmtNum(unscannedTotalRecords)} label belum ditemukan.`,
+        style: "note",
+      });
+    }
   } else {
     content.push({ text: "Label Belum Ditemukan", style: "h2" });
     content.push({ text: "Seluruh label ditemukan saat opname.", style: "callout" });
