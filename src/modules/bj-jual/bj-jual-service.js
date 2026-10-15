@@ -82,6 +82,73 @@ async function getAllBJJual(
   return { data, total };
 }
 
+const BJJUAL_ITEM_CATEGORIES = {
+  barangjadi: { table: "dbo.MstBarangJadi", column: "IdBJ" },
+  furniturewip: { table: "dbo.MstCabinetWIP", column: "IdCabinetWIP" },
+  barangdagang: { table: "dbo.MstBarangDagang", column: "IdBarangDagang" },
+};
+
+// Normalisasi + validasi payload items BJJualItem_d.
+// Return [] jika client tidak mengirim items (kompatibel dengan tablet lama).
+function normalizeBJJualItems(rawItems) {
+  if (rawItems == null) return [];
+  if (!Array.isArray(rawItems)) throw badReq("items harus berupa array");
+  if (rawItems.length === 0) throw badReq("items minimal 1 baris");
+
+  const seen = new Set();
+  return rawItems.map((it, idx) => {
+    const kodeKategori = String(it?.kodeKategori ?? "").trim().toLowerCase();
+    if (!BJJUAL_ITEM_CATEGORIES[kodeKategori]) {
+      throw badReq(
+        `items[${idx}].kodeKategori tidak valid (harus furniturewip/barangjadi/barangdagang)`,
+      );
+    }
+    const idJenis = Number(it?.idJenis);
+    if (!Number.isInteger(idJenis) || idJenis <= 0) {
+      throw badReq(`items[${idx}].idJenis harus angka > 0`);
+    }
+    const pcs = Number(it?.pcs);
+    if (!Number.isInteger(pcs) || pcs <= 0) {
+      throw badReq(`items[${idx}].pcs harus bilangan bulat > 0`);
+    }
+    const key = `${kodeKategori}:${idJenis}`;
+    if (seen.has(key)) {
+      throw badReq(
+        `items: duplikat kategori+jenis (${kodeKategori} / ${idJenis}) — gabungkan pcs-nya`,
+      );
+    }
+    seen.add(key);
+    return { kodeKategori, idJenis, pcs };
+  });
+}
+
+// Cek tiap idJenis ada di master sesuai kategori (dalam transaksi).
+async function assertItemsAgainstMasters(tx, items) {
+  const grouped = new Map();
+  for (const item of items) {
+    if (!grouped.has(item.kodeKategori)) grouped.set(item.kodeKategori, []);
+    grouped.get(item.kodeKategori).push(item.idJenis);
+  }
+
+  for (const [kodeKategori, ids] of grouped) {
+    const { table, column } = BJJUAL_ITEM_CATEGORIES[kodeKategori];
+    const req = new sql.Request(tx);
+    const names = ids.map((_, i) => `@id${i}`);
+    ids.forEach((id, i) => req.input(`id${i}`, sql.Int, id));
+
+    const res = await req.query(
+      `SELECT ${column} AS Id FROM ${table} WHERE ${column} IN (${names.join(", ")})`,
+    );
+    const found = new Set((res.recordset || []).map((r) => Number(r.Id)));
+    const missing = ids.filter((id) => !found.has(id));
+    if (missing.length > 0) {
+      throw badReq(
+        `items: idJenis tidak ditemukan di master ${kodeKategori} (${missing.join(", ")})`,
+      );
+    }
+  }
+}
+
 async function createBJJual(payload, ctx) {
   const body = payload && typeof payload === "object" ? payload : {};
 
@@ -92,6 +159,24 @@ async function createBJJual(payload, ctx) {
   if (!body?.tanggal) must.push("tanggal");
   if (body?.idPembeli == null) must.push("idPembeli");
   if (must.length) throw badReq(`Field wajib: ${must.join(", ")}`);
+
+  // ===============================
+  // InvoiceType (opsional: DOK/DO, maks 10)
+  // ===============================
+  let invoiceType = null;
+  if (body?.invoiceType != null) {
+    const it = String(body.invoiceType).trim();
+    if (it.length > 0) {
+      if (it.length > 10) throw badReq("InvoiceType maksimal 10 karakter");
+      invoiceType = it;
+    }
+  }
+
+  // ===============================
+  // Items BJJualItem_d (opsional; jika
+  // dikirim wajib valid & lengkap)
+  // ===============================
+  const items = normalizeBJJualItems(body?.items);
 
   // ===============================
   // Validasi ctx / audit
@@ -162,6 +247,13 @@ async function createBJJual(payload, ctx) {
     }
 
     // ===============================
+    // Validasi item ke master jenis
+    // ===============================
+    if (items.length > 0) {
+      await assertItemsAgainstMasters(tx, items);
+    }
+
+    // ===============================
     // Insert header (tanpa OUTPUT)
     // ===============================
     const rqIns = new sql.Request(tx);
@@ -171,7 +263,22 @@ async function createBJJual(payload, ctx) {
       .input("IdPembeli", sql.Int, body.idPembeli)
       .input("Remark", sql.VarChar(255), body.remark ?? null);
 
-    const insertSql = `
+    // InvoiceType hanya ditulis bila dikirim (jaga default DB / alur lama).
+    const hasInvoiceType = invoiceType != null;
+    if (hasInvoiceType) {
+      rqIns.input("InvoiceType", sql.VarChar(10), invoiceType);
+    }
+
+    const insertSql = hasInvoiceType
+      ? `
+      INSERT INTO dbo.BJJual_h (
+        NoBJJual, Tanggal, IdPembeli, IdWarehouse, Remark, InvoiceType
+      )
+      VALUES (
+        @NoBJJual, @Tanggal, @IdPembeli, 1, @Remark, @InvoiceType
+      );
+    `
+      : `
       INSERT INTO dbo.BJJual_h (
         NoBJJual, Tanggal, IdPembeli, Remark
       )
@@ -181,6 +288,28 @@ async function createBJJual(payload, ctx) {
     `;
 
     await rqIns.query(insertSql);
+
+    // ===============================
+    // Insert item BJJualItem_d
+    // ===============================
+    for (const item of items) {
+      const rqItem = new sql.Request(tx);
+      rqItem
+        .input("NoBJJual", sql.VarChar(50), noBJJual)
+        .input("KodeKategori", sql.VarChar(50), item.kodeKategori)
+        .input("IdJenis", sql.Int, item.idJenis)
+        .input("Pcs", sql.Int, item.pcs)
+        .input("CreateBy", sql.VarChar(50), actorUsername);
+
+      await rqItem.query(`
+        INSERT INTO dbo.BJJualItem_d (
+          NoBJJual, KodeKategori, IdJenis, Pcs, CreateBy, DateTimeCreate
+        )
+        VALUES (
+          @NoBJJual, @KodeKategori, @IdJenis, @Pcs, @CreateBy, GETDATE()
+        );
+      `);
+    }
 
     // ===============================
     // SELECT ulang header
@@ -536,6 +665,13 @@ async function deleteBJJual(noBJJual, ctx) {
       WHERE NoBJJual = @NoBJJual;
 
       DELETE FROM dbo.BJJual_dLabelFurnitureWIP
+      WHERE NoBJJual = @NoBJJual;
+
+      /* G2) DELETE SCAN + ITEM (FK scan → item; item tanpa FK ke header) */
+      DELETE FROM dbo.BJJualScanLabel_d
+      WHERE NoBJJual = @NoBJJual;
+
+      DELETE FROM dbo.BJJualItem_d
       WHERE NoBJJual = @NoBJJual;
 
       /* H) DELETE HEADER LAST */

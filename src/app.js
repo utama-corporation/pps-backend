@@ -94,6 +94,7 @@ const masterKategoriRoutes = require("./modules/master-kategori/master-kategori-
 const tradeInRoutes = require("./modules/trade-in/trade-in-routes");
 const laporanBrokerRoutes = require("./modules/laporan/broker/broker-route");
 const laporanBarangJadiRoutes = require("./modules/laporan/barangjadi/barangjadi-route");
+const laporanBarangDagangRoutes = require("./modules/laporan/barangdagang/barangdagang-route");
 const laporanRoutes = require("./modules/laporan/laporan-route");
 const masterPermissionGroupRoutes = require("./modules/master-permission-group/master-permission-group-routes");
 const mstUserRoutes = require("./modules/mst-user/mst-user-route");
@@ -208,6 +209,7 @@ app.use("/api/trade-in", tradeInRoutes);
 app.use("/api/retur-v3", returV3Routes);
 app.use("/api/laporan/broker", laporanBrokerRoutes);
 app.use("/api/laporan/barang-jadi", laporanBarangJadiRoutes);
+app.use("/api/laporan/barang-dagang", laporanBarangDagangRoutes);
 app.use("/api/laporan", laporanRoutes);
 app.use("/api/master-permission-group", masterPermissionGroupRoutes);
 app.use("/api/mst-user", mstUserRoutes);
