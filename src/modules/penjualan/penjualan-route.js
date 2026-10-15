@@ -31,4 +31,28 @@ router.post(
   penjualanController.scanLabel,
 );
 
+router.post(
+  "/:noBJJual/items",
+  verifyToken,
+  attachPermissions,
+  requirePermission("penjualan:create"),
+  penjualanController.addItem,
+);
+
+router.patch(
+  "/:noBJJual/items",
+  verifyToken,
+  attachPermissions,
+  requirePermission("penjualan:create"),
+  penjualanController.updateItem,
+);
+
+router.delete(
+  "/:noBJJual/items",
+  verifyToken,
+  attachPermissions,
+  requirePermission("penjualan:create"),
+  penjualanController.deleteItem,
+);
+
 module.exports = router;

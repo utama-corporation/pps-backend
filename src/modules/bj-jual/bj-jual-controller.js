@@ -106,8 +106,10 @@ async function createBJJual(req, res) {
       tanggal: b.tanggal || b.tglJual || b.tgl || null, // required
       idPembeli: toInt(b.idPembeli), // required
       remark: b.remark ?? null,
+      invoiceType: toStrUndef(b.invoiceType) ?? null,
+      items: Array.isArray(b.items) ? b.items : undefined,
 
-      // ✅ audit field (server-side)
+      // �o. audit field (server-side)
       createBy: actorUsername,
     };
 

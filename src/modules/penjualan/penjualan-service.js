@@ -1,6 +1,199 @@
 const { sql, poolPromise } = require("../../core/config/db");
-const { badReq, notFound } = require("../../core/utils/http-error");
+const { badReq, notFound, conflict } = require("../../core/utils/http-error");
 const { scanLabel } = require("./handlers/scan-label.handler");
+
+// Kategori yang boleh dijual — sama dengan scan-label.category-registry.
+const ITEM_CATEGORIES = {
+  barangjadi: { table: "dbo.MstBarangJadi", column: "IdBJ" },
+  furniturewip: { table: "dbo.MstCabinetWIP", column: "IdCabinetWIP" },
+  barangdagang: { table: "dbo.MstBarangDagang", column: "IdBarangDagang" },
+};
+
+function normalizeLineInput(body) {
+  const b = body && typeof body === "object" ? body : {};
+
+  const kodeKategori = String(b.kodeKategori ?? "").trim().toLowerCase();
+  if (!ITEM_CATEGORIES[kodeKategori]) {
+    throw badReq(
+      "kodeKategori tidak valid (harus furniturewip/barangjadi/barangdagang)",
+    );
+  }
+
+  const idJenis = Number(b.idJenis);
+  if (!Number.isInteger(idJenis) || idJenis <= 0) {
+    throw badReq("idJenis harus angka > 0");
+  }
+
+  const pcs = Number(b.pcs);
+  if (!Number.isInteger(pcs) || pcs <= 0) {
+    throw badReq("pcs harus bilangan bulat > 0");
+  }
+
+  return { kodeKategori, idJenis, pcs };
+}
+
+// Header wajib ada dan belum complete agar line boleh diubah.
+async function getEditableHeader(noBJJual) {
+  const pool = await poolPromise;
+  const res = await pool
+    .request()
+    .input("No", sql.VarChar(50), noBJJual)
+    .query(
+      `SELECT NoBJJual, IsComplete FROM dbo.BJJual_h WITH (UPDLOCK)
+       WHERE NoBJJual = @No`,
+    );
+
+  const header = res.recordset?.[0];
+  if (!header) throw notFound(`BJJual ${noBJJual} tidak ditemukan`);
+  if (Number(header.IsComplete) === 1) {
+    throw conflict("DO sudah complete, item tidak bisa diubah");
+  }
+  return header;
+}
+
+async function getLineScanPcs(noBJJual, kodeKategori, idJenis) {
+  const pool = await poolPromise;
+  const res = await pool
+    .request()
+    .input("NoBJJual", sql.VarChar(50), noBJJual)
+    .input("KodeKategori", sql.VarChar(50), kodeKategori)
+    .input("IdJenis", sql.Int, idJenis)
+    .query(
+      `SELECT ISNULL(SUM(Pcs), 0) AS PcsScanned
+       FROM dbo.BJJualScanLabel_d WITH (NOLOCK)
+       WHERE NoBJJual = @NoBJJual AND KodeKategori = @KodeKategori AND IdJenis = @IdJenis`,
+    );
+  return Number(res.recordset?.[0]?.PcsScanned ?? 0);
+}
+
+async function assertJenisExists(kodeKategori, idJenis) {
+  const pool = await poolPromise;
+  const { table, column } = ITEM_CATEGORIES[kodeKategori];
+  const res = await pool
+    .request()
+    .input("IdJenis", sql.Int, idJenis)
+    .query(`SELECT 1 AS Ok FROM ${table} WHERE ${column} = @IdJenis`);
+  if (!res.recordset?.[0]) {
+    throw badReq(
+      `idJenis tidak ditemukan di master ${kodeKategori} (${idJenis})`,
+    );
+  }
+}
+
+async function addItem(noBJJual, body, ctx) {
+  const no = String(noBJJual || "").trim();
+  if (!no) throw badReq("noBJJual wajib");
+  const line = normalizeLineInput(body);
+  const createBy =
+    String(ctx?.actorUsername || "").trim() || "system";
+
+  await getEditableHeader(no);
+  await assertJenisExists(line.kodeKategori, line.idJenis);
+
+  const pool = await poolPromise;
+  const dup = await pool
+    .request()
+    .input("NoBJJual", sql.VarChar(50), no)
+    .input("KodeKategori", sql.VarChar(50), line.kodeKategori)
+    .input("IdJenis", sql.Int, line.idJenis)
+    .query(
+      `SELECT 1 AS Ok FROM dbo.BJJualItem_d
+       WHERE NoBJJual = @NoBJJual AND KodeKategori = @KodeKategori AND IdJenis = @IdJenis`,
+    );
+  if (dup.recordset?.[0]) {
+    throw conflict(
+      `Item sudah ada (${line.kodeKategori} / ${line.idJenis}) — ubah pcs-nya saja`,
+    );
+  }
+
+  await pool
+    .request()
+    .input("NoBJJual", sql.VarChar(50), no)
+    .input("KodeKategori", sql.VarChar(50), line.kodeKategori)
+    .input("IdJenis", sql.Int, line.idJenis)
+    .input("Pcs", sql.Int, line.pcs)
+    .input("CreateBy", sql.VarChar(50), createBy)
+    .query(
+      `INSERT INTO dbo.BJJualItem_d (NoBJJual, KodeKategori, IdJenis, Pcs, CreateBy, DateTimeCreate)
+       VALUES (@NoBJJual, @KodeKategori, @IdJenis, @Pcs, @CreateBy, GETDATE())`,
+    );
+
+  return { noBJJual: no, ...line };
+}
+
+async function updateItem(noBJJual, body) {
+  const no = String(noBJJual || "").trim();
+  if (!no) throw badReq("noBJJual wajib");
+  const line = normalizeLineInput(body);
+
+  await getEditableHeader(no);
+
+  const scanned = await getLineScanPcs(no, line.kodeKategori, line.idJenis);
+  if (scanned > 0) {
+    throw conflict(
+      "Baris sudah ada label yang discan — pcs tidak bisa diubah",
+    );
+  }
+
+  const pool = await poolPromise;
+  const res = await pool
+    .request()
+    .input("NoBJJual", sql.VarChar(50), no)
+    .input("KodeKategori", sql.VarChar(50), line.kodeKategori)
+    .input("IdJenis", sql.Int, line.idJenis)
+    .input("Pcs", sql.Int, line.pcs)
+    .query(
+      `UPDATE dbo.BJJualItem_d SET Pcs = @Pcs
+       WHERE NoBJJual = @NoBJJual AND KodeKategori = @KodeKategori AND IdJenis = @IdJenis`,
+    );
+  if (!res.rowsAffected?.[0]) {
+    throw notFound(
+      `Item tidak ditemukan (${line.kodeKategori} / ${line.idJenis})`,
+    );
+  }
+
+  return { noBJJual: no, ...line };
+}
+
+async function deleteItem(noBJJual, query) {
+  const no = String(noBJJual || "").trim();
+  if (!no) throw badReq("noBJJual wajib");
+
+  const b = query && typeof query === "object" ? query : {};
+  const kodeKategori = String(b.kodeKategori ?? "").trim().toLowerCase();
+  if (!ITEM_CATEGORIES[kodeKategori]) {
+    throw badReq(
+      "kodeKategori tidak valid (harus furniturewip/barangjadi/barangdagang)",
+    );
+  }
+  const idJenis = Number(b.idJenis);
+  if (!Number.isInteger(idJenis) || idJenis <= 0) {
+    throw badReq("idJenis harus angka > 0");
+  }
+
+  await getEditableHeader(no);
+
+  const scanned = await getLineScanPcs(no, kodeKategori, idJenis);
+  if (scanned > 0) {
+    throw conflict("Baris sudah ada label yang discan — tidak bisa dihapus");
+  }
+
+  const pool = await poolPromise;
+  const res = await pool
+    .request()
+    .input("NoBJJual", sql.VarChar(50), no)
+    .input("KodeKategori", sql.VarChar(50), kodeKategori)
+    .input("IdJenis", sql.Int, idJenis)
+    .query(
+      `DELETE FROM dbo.BJJualItem_d
+       WHERE NoBJJual = @NoBJJual AND KodeKategori = @KodeKategori AND IdJenis = @IdJenis`,
+    );
+  if (!res.rowsAffected?.[0]) {
+    throw notFound(`Item tidak ditemukan (${kodeKategori} / ${idJenis})`);
+  }
+
+  return { noBJJual: no, kodeKategori, idJenis };
+}
 
 async function getHeaders(
   page = 1,
@@ -174,4 +367,7 @@ module.exports = {
   getHeaders,
   getHeaderDetail,
   scanLabel,
+  addItem,
+  updateItem,
+  deleteItem,
 };

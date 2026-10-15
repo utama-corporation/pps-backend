@@ -142,8 +142,76 @@ async function scanLabel(req, res) {
   }
 }
 
+async function addItem(req, res) {
+  const noBJJual = String(req.params.noBJJual || "").trim();
+  if (!noBJJual) {
+    return res.status(400).json({ success: false, message: "noBJJual wajib" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res
+      .status(401)
+      .json({ success: false, message: "Unauthorized (actorId missing)" });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+
+  try {
+    const data = await penjualanService.addItem(
+      noBJJual,
+      req.body,
+      { actorId, actorUsername },
+    );
+    return res
+      .status(201)
+      .json({ success: true, message: "Item berhasil ditambahkan", data });
+  } catch (err) {
+    console.error("[penjualan][addItem]", err);
+    return sendError(res, err, "Gagal menambah item");
+  }
+}
+
+async function updateItem(req, res) {
+  const noBJJual = String(req.params.noBJJual || "").trim();
+  if (!noBJJual) {
+    return res.status(400).json({ success: false, message: "noBJJual wajib" });
+  }
+
+  try {
+    const data = await penjualanService.updateItem(noBJJual, req.body);
+    return res
+      .status(200)
+      .json({ success: true, message: "Item berhasil diperbarui", data });
+  } catch (err) {
+    console.error("[penjualan][updateItem]", err);
+    return sendError(res, err, "Gagal memperbarui item");
+  }
+}
+
+async function deleteItem(req, res) {
+  const noBJJual = String(req.params.noBJJual || "").trim();
+  if (!noBJJual) {
+    return res.status(400).json({ success: false, message: "noBJJual wajib" });
+  }
+
+  try {
+    const data = await penjualanService.deleteItem(noBJJual, req.query);
+    return res
+      .status(200)
+      .json({ success: true, message: "Item berhasil dihapus", data });
+  } catch (err) {
+    console.error("[penjualan][deleteItem]", err);
+    return sendError(res, err, "Gagal menghapus item");
+  }
+}
+
 module.exports = {
   getHeaders,
   getHeaderDetail,
   scanLabel,
+  addItem,
+  updateItem,
+  deleteItem,
 };
