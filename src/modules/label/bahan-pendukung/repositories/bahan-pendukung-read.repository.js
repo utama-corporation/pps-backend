@@ -18,6 +18,13 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
       b.IdCabinetMaterial,
       cm.Nama AS NamaCabinetMaterial,
       b.Qty,
+      -- QtyAwal = kuantitas asli dari pembelian. Dikirimkan karena klien
+      -- butuh tahu sisa (QtyAwal - Qty): kolom IsPartial tidak cared oleh
+      -- jalur konsumsi parsial produksi (produksi-upsert-sql.generator.js
+      -- hanya meng-update kolom Qty), jadi status "terpakai sebagian" harus
+      -- disimpulkan dari selisih Qty vs QtyAwal — sama seperti yang dipakai
+      -- layar Penerimaan Bahan Pendukung.
+      b.QtyAwal,
       b.Keterangan,
       b.IsPartial,
       CASE WHEN b.DateUsage IS NULL THEN CAST(0 AS bit) ELSE CAST(1 AS bit) END AS Used,

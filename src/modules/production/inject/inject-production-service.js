@@ -167,6 +167,56 @@ function fmtHM(totalMinutes) {
   return `${pad2(Math.floor(minOfDay / 60))}:${pad2(minOfDay % 60)}`;
 }
 
+// Ubah kolom jam SQL (string "HH:MM:SS" / Date / object mssql) jadi "HH:MM:SS".
+function toHourEndString(value) {
+  if (!value) return null;
+  if (typeof value === "string") return value.substring(0, 8) || null;
+  if (value instanceof Date) return value.toTimeString().substring(0, 8);
+  // Objek dari driver mssql (sql.DateTime / typecode 42) menyimpan waktu di .value
+  const raw = value && value.value !== undefined ? value.value : null;
+  if (raw instanceof Date) return raw.toTimeString().substring(0, 8);
+  if (typeof raw === "string") return raw.substring(0, 8) || null;
+  return null;
+}
+
+/**
+ * Sisa durasi shift (dalam detik) dari jam bucket sampai jam akhir shift.
+ *
+ * Menangani shift yang melewati tengah malam. Tanpa handling ini, perbandingan
+ * angka mentah selalu dianggap benar untuk shift seperti 23:00 → 07:00: jam
+ * bucket (82800 dtk) selalu lebih besar dari HourEnd (25200 dtk) dikurangi 1
+ * jam, sehingga bucket PERTAMA dianggap bucket terakhir — label sisa pcs &
+ * IsComplete jadi terbit di bucket 23:00-00:00. Lihat isLastShiftBucket.
+ *
+ * Mengembalikan null kalau salah satu jam tidak terbaca.
+ */
+function secondsUntilShiftEnd(batchHourStartRaw, prodHourEndRaw) {
+  const start = parseMinutesHM(normalizeTimeString(batchHourStartRaw));
+  const end = parseMinutesHM(normalizeTimeString(prodHourEndRaw));
+  if (start == null || end == null) return null;
+
+  let remainMin = end - start;
+  // Sisa <= 0 berarti jam akhir ada di hari berikutnya (shift lintas tengah
+  // malam). Shift 24 jam (HourEnd == HourStart) otomatis jadi 24 jam — sama
+  // seperti aturan buildQcBuckets di atas.
+  if (remainMin <= 0) remainMin += 24 * 60;
+  return remainMin * 60;
+}
+
+/**
+ * Apakah bucket pada jam `batchHourStartRaw` adalah bucket penutup shift,
+ * yaitu tinggal <= 1 jam sebelum HourEnd produksi (bucket terakhir: jam bucket
+ * + 1 jam = HourEnd).
+ *
+ * WAJIB dipakai untuk setiap keputusan "bucket terakhir" supaya pembuatan
+ * label sisa pcs dan penandaan IsComplete memakai perhitungan yang sama.
+ */
+function isLastShiftBucket(batchHourStartRaw, prodHourEndRaw) {
+  const remain = secondsUntilShiftEnd(batchHourStartRaw, prodHourEndRaw);
+  if (remain == null) return false;
+  return remain <= 3600;
+}
+
 // Bangun instant "YYYY-MM-DDTHH:mm:00" (naive, tanpa offset/Z) untuk
 // tglDateStr + (baseMinutes + offsetMinutes) menit sejak tengah malam,
 // menangani rollover ke hari berikutnya (mis. shift 23:00-07:00).
@@ -2592,19 +2642,11 @@ async function submitInjectBatch(payload, ctx, { forceClose = false, tx: existin
     }
 
     // Header sudah ada di sini — perbarui isLastBatch dengan aturan jam.
+    // Pakai isLastShiftBucket (bukan perbandingan detik mentah) supaya shift
+    // lintas tengah malam seperti 23:00 → 07:00 tidak menganggap bucket
+    // pertama sebagai bucket penutup shift.
     if (!isLastBatch) {
-      const prodHourEnd = header.HourEnd
-        ? typeof header.HourEnd === "string"
-          ? header.HourEnd.substring(0, 8)
-          : new Date(header.HourEnd).toTimeString().substring(0, 8)
-        : null;
-      if (prodHourEnd) {
-        const toSec = (t) => {
-          const [h, m, s] = t.split(":").map(Number);
-          return h * 3600 + (m || 0) * 60 + (s || 0);
-        };
-        isLastBatch = toSec(hourStart.substring(0, 8)) >= toSec(prodHourEnd) - 3600;
-      }
+      isLastBatch = isLastShiftBucket(hourStart, toHourEndString(header.HourEnd));
     }
 
     const docDateOnly = toDateOnly(header.TglProduksi);
@@ -2919,24 +2961,12 @@ async function submitInjectBatch(payload, ctx, { forceClose = false, tx: existin
         `);
     }
 
-    // Batch terakhir = hourStart batch + 1 jam == HourEnd produksi → set IsComplete
-    const batchHourStart = hourStart.substring(0, 8);
-    const prodHourEnd = header.HourEnd
-      ? typeof header.HourEnd === "string"
-        ? header.HourEnd.substring(0, 8)
-        : new Date(header.HourEnd).toTimeString().substring(0, 8)
-      : null;
-
+    // Batch terakhir = jam bucket + 1 jam == HourEnd produksi → set IsComplete.
+    // Memakai helper yang sama dengan isLastBatch di atas supaya label sisa pcs
+    // dan IsComplete selalu terbit pada bucket yang sama.
     const shouldComplete =
-      forceClose ||
-      (() => {
-        if (!prodHourEnd) return false;
-        const toSec = (t) => {
-          const [h, m, s] = t.split(":").map(Number);
-          return h * 3600 + (m || 0) * 60 + (s || 0);
-        };
-        return toSec(batchHourStart) >= toSec(prodHourEnd) - 3600;
-      })();
+      forceClose || isLastShiftBucket(hourStart, toHourEndString(header.HourEnd));
+
     if (shouldComplete) {
       // Bukan langsung IsComplete=1 — batch terakhir (baik alami maupun
       // forceClose dari terminate) hanya membuat request approval.
@@ -6470,6 +6500,10 @@ async function fetchInjectDowntimeRows(noProduksi) {
 }
 
 module.exports = {
+  // Helper waktu shift — diekspor untuk unit test (lihat __tests__).
+  isLastShiftBucket,
+  secondsUntilShiftEnd,
+  buildQcBuckets,
   getAllProduksi,
   getProduksiByDate,
   getFurnitureWipListByNoProduksi,

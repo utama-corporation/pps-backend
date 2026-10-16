@@ -119,11 +119,17 @@ exports.generatePdf = async (req, res) => {
 
     const lokasi = row.Blok ? `${row.Blok}${row.IdLokasi ?? ""}` : "";
 
+    // Angka QTY pada label cetak memakai kolom Qty (stok live), bukan QtyAwal,
+    // supaya label ikut berkurang saat ada produksi yang mengambil sebagian.
+    // Catatan: pada CETAK PERTAMA nilainya tetap sama dengan QtyAwal karena
+    // belum ada produksi yang memotong; Qty baru berbeda setelah label
+    // dipakai sebagian, jadi perubahan ini hanya terlihat pada reprint
+    // (yang sudah diberi watermark "COPY n").
     const data = {
       noLabel: row.NoBahanPendukung,
       namaProduk: row.NamaCabinetMaterial,
       kode: row.NoBahanPendukung,
-      qty: row.QtyAwal ?? row.Qty,
+      qty: row.Qty,
       tanggal: kodeLabel,
       batchCode: kodeLabel,
       createdAt: row.CreatedAt,
