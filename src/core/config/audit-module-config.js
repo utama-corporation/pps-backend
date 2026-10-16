@@ -102,6 +102,7 @@ const MODULE_CONFIG = {
       "GilinganProduksiInputCrusher",
       "MixerProduksiInputCrusher",
       "BongkarSusunInputCrusher",
+      "InjectProduksiInputCrusher",
     ],
     outputDisplayConfig: {
       CrusherProduksiOutput: {
@@ -711,6 +712,7 @@ const MODULE_CONFIG = {
       "InjectProduksiInputGilinganPartial",
       "InjectProduksiInputMixer",
       "InjectProduksiInputMixerPartial",
+      "InjectProduksiInputCrusher",
     ],
     scalarFields: [
       "TglProduksi",

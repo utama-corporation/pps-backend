@@ -1455,8 +1455,9 @@ async function validateLabel(req, res) {
 
 /**
  * ✅ UPSERT Inputs & Partials untuk Inject Production
- * Support: broker, mixer, gilingan, furnitureWip, cabinetMaterial (UPSERT)
+ * Support: broker, mixer, gilingan, crusher, furnitureWip, cabinetMaterial (UPSERT)
  * Support: partials (existing + new)
+ * Catatan: crusher tidak punya partial (tidak ada dbo.CrusherPartial).
  */
 async function upsertInputsAndPartials(req, res) {
   const noProduksi = String(req.params.noProduksi || "").trim();
@@ -1515,6 +1516,7 @@ async function upsertInputsAndPartials(req, res) {
     "broker",
     "mixer",
     "gilingan",
+    "crusher",
     "furnitureWip",
     "cabinetMaterial",
     "brokerPartial",
@@ -1643,6 +1645,7 @@ async function deleteInputsAndPartials(req, res) {
     "broker",
     "mixer",
     "gilingan",
+    "crusher",
     "furnitureWip",
     "cabinetMaterial",
     "cabinetWIP",

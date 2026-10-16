@@ -321,6 +321,12 @@ const INPUT_CONFIGS = {
       mappingTable: "InjectProduksiInputGilingan",
       dateUsageColumn: "DateUsage",
     },
+    crusher: {
+      sourceTable: "Crusher",
+      keys: ["NoCrusher"],
+      mappingTable: "InjectProduksiInputCrusher",
+      dateUsageColumn: "DateUsage",
+    },
     mixer: {
       sourceTable: "Mixer_d",
       keys: ["NoMixer", "NoSak"],

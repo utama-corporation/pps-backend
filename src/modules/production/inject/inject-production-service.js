@@ -4222,6 +4222,15 @@ async function updateInjectProduksiTanggal(noProduksi, tglProduksi, ctx) {
           )
         );
 
+      -- Crusher tidak punya tabel partial, jadi cukup cek tabel link biasa.
+      UPDATE cu SET cu.DateUsage = @TglProduksi
+      FROM dbo.Crusher AS cu
+      WHERE cu.DateUsage IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM dbo.InjectProduksiInputCrusher map
+          WHERE map.NoProduksi = @NoProduksi AND map.NoCrusher = cu.NoCrusher
+        );
+
       UPDATE m SET m.DateUsage = @TglProduksi
       FROM dbo.Mixer_d AS m
       WHERE m.DateUsage IS NOT NULL
@@ -4487,6 +4496,33 @@ async function fetchInputs(noProduksi) {
 
     UNION ALL
 
+    /* ===== Crusher (FULL) ===== */
+    /* Label crusher single-table: tidak ada IsPartial/BeratAct di dbo.Crusher,
+       jadi kedua kolom itu NULL. Tidak ada tabel partial crusher. */
+    SELECT
+      'crusher' AS Src,
+      ic.NoProduksi,
+      ic.NoCrusher AS Ref1,
+      CAST(NULL AS varchar(50)) AS Ref2,
+      CAST(NULL AS varchar(50)) AS Ref3,
+
+      cu.Berat AS Berat,
+      CAST(NULL AS decimal(18,3)) AS BeratAct,
+      CAST(NULL AS bit) AS IsPartial,
+      cu.IdCrusher    AS IdJenis,
+      mcu.NamaCrusher AS NamaJenis,
+      CAST(NULL AS varchar(50)) AS NamaUOM,
+      CAST(NULL AS int) AS Pcs,
+      CAST(NULL AS nvarchar(max)) AS NoBahanPendukung
+    FROM dbo.InjectProduksiInputCrusher ic WITH (NOLOCK)
+    LEFT JOIN dbo.Crusher cu WITH (NOLOCK)
+      ON cu.NoCrusher = ic.NoCrusher
+    LEFT JOIN dbo.MstCrusher mcu WITH (NOLOCK)
+      ON mcu.IdCrusher = cu.IdCrusher
+    WHERE ic.NoProduksi = @no
+
+    UNION ALL
+
     /* ===== Cabinet Material ===== */
     SELECT
       'material' AS Src,
@@ -4600,12 +4636,14 @@ async function fetchInputs(noProduksi) {
     broker: [],
     mixer: [],
     gilingan: [],
+    crusher: [],
     cabinetMaterial: [],
     summary: {
       furnitureWip: 0,
       broker: 0,
       mixer: 0,
       gilingan: 0,
+      crusher: 0,
       cabinetMaterial: 0,
     },
   };
@@ -4648,6 +4686,13 @@ async function fetchInputs(noProduksi) {
       case "gilingan":
         out.gilingan.push({
           noGilingan: r.Ref1,
+          ...base,
+        });
+        break;
+
+      case "crusher":
+        out.crusher.push({
+          noCrusher: r.Ref1,
           ...base,
         });
         break;
@@ -4718,6 +4763,7 @@ async function fetchInputs(noProduksi) {
   out.summary.broker = out.broker.length;
   out.summary.mixer = out.mixer.length;
   out.summary.gilingan = out.gilingan.length;
+  out.summary.crusher = out.crusher.length;
   out.summary.cabinetMaterial = out.cabinetMaterial.length;
 
   return out;
@@ -4932,6 +4978,8 @@ function getInjectInputCategoryCodeByPrefix(prefix) {
       return "mixer";
     case "V.":
       return "gilingan";
+    case "F.":
+      return "crusher";
     default:
       return null;
   }
@@ -5176,6 +5224,35 @@ async function validateLabel(labelCode) {
     }
 
     // =========================================================
+    // F. = Crusher (label single-table, tidak ada partial)
+    // =========================================================
+    case "F.": {
+      tableName = "Crusher";
+      query = `
+        SELECT
+          c.NoCrusher,
+          c.DateCreate,
+          c.IdCrusher    AS idJenis,
+          mc.NamaCrusher AS namaJenis,
+          c.IdWarehouse,
+          c.DateUsage,
+          c.Berat,
+          c.IdStatus,
+          c.Blok,
+          c.IdLokasi,
+          c.CreateBy,
+          c.DateTimeCreate
+        FROM dbo.Crusher AS c WITH (NOLOCK)
+        LEFT JOIN dbo.MstCrusher AS mc WITH (NOLOCK)
+          ON mc.IdCrusher = c.IdCrusher
+        WHERE c.NoCrusher = @labelCode
+          AND c.DateUsage IS NULL
+        ORDER BY c.NoCrusher;
+      `;
+      return await run(raw);
+    }
+
+    // =========================================================
     // BP. = BahanPendukung (belum terpakai — DateUsage IS NULL)
     // =========================================================
     case "BP.": {
@@ -5211,7 +5288,7 @@ async function validateLabel(labelCode) {
 
     default:
       throw new Error(
-        `Invalid prefix: ${prefix}. Valid prefixes (Inject): BB., D., H., V., BP.`,
+        `Invalid prefix: ${prefix}. Valid prefixes (Inject): BB., D., H., V., F., BP.`,
       );
   }
 }
@@ -5356,8 +5433,9 @@ async function validateInputLabelForNoProduksi(noProduksi, labelCode) {
  */
 /**
  * ✅ Upsert inputs & partials untuk Inject Production dengan audit context
- * Support: broker, mixer, gilingan, furnitureWip, cabinetMaterial (UPSERT)
+ * Support: broker, mixer, gilingan, crusher, furnitureWip, cabinetMaterial (UPSERT)
  * Support: partials (existing + new)
+ * Catatan: crusher tidak punya partial (tidak ada dbo.CrusherPartial).
  */
 async function upsertInputsAndPartials(noProduksi, payload, ctx) {
   const no = String(noProduksi || "").trim();
