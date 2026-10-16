@@ -8,6 +8,7 @@ async function getAllLokasiAktif(idWarehouseList = null) {
   let query = '';
 
   // Kalau ada query ?idWarehouse=1,2,3,5,4
+  //tes tambah
   if (idWarehouseList && idWarehouseList.trim() !== '') {
     // kirim sebagai string ke SQL: "1,2,3,5,4"
     request.input('IdWarehouseList', sql.VarChar, idWarehouseList);
