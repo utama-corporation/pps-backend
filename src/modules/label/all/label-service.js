@@ -1342,7 +1342,7 @@ async function getAllLabelsV2(
           GROUP BY ${colNo}
         ) rp ON rp.${colNo} = t.${colNo}${j.join}
         WHERE t.DateUsage IS NULL`;
-    } else if (["barangadagang", "bahanpendukung"].includes(kode)) {
+    } else if (["barangdagang", "bahanpendukung"].includes(kode)) {
       const j = jenisJoin("t");
       sub = `
         SELECT
