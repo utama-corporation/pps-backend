@@ -852,10 +852,39 @@ exports.updateBrokerCascade = async (payload) => {
     // ===============================
     // [A] TUTUP TRANSAKSI CHECK (UPDATE)
     // ===============================
+    // Update QC-only (nilai kualitas & catatan) boleh dilakukan pada label
+    // lama. Yang divalidasi adalah tanggal QC (DateQc) atau hari ini, bukan
+    // DateCreate label — QC dicatat pada periode saat QC dilakukan, sehingga
+    // tidak mengubah data periode yang sudah ditutup.
+    const QC_ONLY_KEYS = [
+      "Density",
+      "Density2",
+      "Density3",
+      "Moisture",
+      "Moisture2",
+      "Moisture3",
+      "MaxMeltTemp",
+      "MinMeltTemp",
+      "MFI",
+      "VisualNote",
+      "DateQc",
+    ];
+    const headerKeys = Object.keys(header).filter(
+      (k) => header[k] !== undefined && k !== "UpdateBy",
+    );
+    const isQcOnlyUpdate =
+      !details &&
+      headerKeys.length > 0 &&
+      headerKeys.every((k) => QC_ONLY_KEYS.includes(k));
+
     await assertNotLocked({
-      date: existingDateOnly,
+      date: isQcOnlyUpdate
+        ? resolveEffectiveDateForCreate(header.DateQc)
+        : existingDateOnly,
       runner: tx,
-      action: `update broker ${NoBroker}`,
+      action: isQcOnlyUpdate
+        ? `update QC broker ${NoBroker}`
+        : `update broker ${NoBroker}`,
       useLock: true,
     });
 
