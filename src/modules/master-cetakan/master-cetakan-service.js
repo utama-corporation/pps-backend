@@ -539,7 +539,7 @@ async function remove(keyRaw, username) {
 }
 
 async function createMaster(table, idCol, nameCol, maxLen, extraCols, label, name, username) {
-  const nama = String(name ?? '').trim().replace(/s+/g, ' ').toUpperCase();
+  const nama = String(name ?? '').trim().replace(/\s+/g, ' ').toUpperCase();
   if (!nama) throw badReq(`Nama ${label} wajib diisi`);
   if (nama.length > maxLen) throw badReq(`Nama ${label} maksimal ${maxLen} karakter`);
 
