@@ -123,7 +123,27 @@ async function removeWarnaMaterial(req, res) {
   }
 }
 
+async function createCetakan(req, res) {
+  try {
+    const data = await service.createCetakan(req.body?.namaCetakan, req.username);
+    return res.status(201).json({ success: true, message: 'Cetakan baru berhasil ditambahkan', data });
+  } catch (error) {
+    return fail(res, error, 'creating cetakan');
+  }
+}
+
+async function createWarna(req, res) {
+  try {
+    const data = await service.createWarna(req.body?.warna, req.username);
+    return res.status(201).json({ success: true, message: 'Warna baru berhasil ditambahkan', data });
+  } catch (error) {
+    return fail(res, error, 'creating warna');
+  }
+}
+
 module.exports = {
+  createCetakan,
+  createWarna,
   getAllActive,
   getOptions,
   listWarnaMaterial,

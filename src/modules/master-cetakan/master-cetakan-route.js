@@ -53,4 +53,20 @@ router.delete(
   ctrl.removeWarnaMaterial,
 );
 
+// Tambah master Cetakan / Warna baru dari form Tambah (IdBJ cetakan dikosongkan)
+router.post(
+  "/new-cetakan",
+  verifyToken,
+  attachPermissions,
+  requirePermission("datamastercetakan:create"),
+  ctrl.createCetakan,
+);
+router.post(
+  "/new-warna",
+  verifyToken,
+  attachPermissions,
+  requirePermission("datamastercetakan:create"),
+  ctrl.createWarna,
+);
+
 module.exports = router;

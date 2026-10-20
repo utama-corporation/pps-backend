@@ -207,6 +207,36 @@ async function deleteItem(req, res) {
   }
 }
 
+async function deletePenjualan(req, res) {
+  const noBJJual = String(req.params.noBJJual || "").trim();
+  if (!noBJJual) {
+    return res.status(400).json({ success: false, message: "noBJJual wajib" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res
+      .status(401)
+      .json({ success: false, message: "Unauthorized (actorId missing)" });
+  }
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+
+  try {
+    const data = await penjualanService.deletePenjualan(noBJJual, {
+      actorId,
+      actorUsername,
+      requestId: makeRequestId(req),
+    });
+    return res
+      .status(200)
+      .json({ success: true, message: "Penjualan berhasil dihapus", data });
+  } catch (err) {
+    console.error("[penjualan][deletePenjualan]", err);
+    return sendError(res, err, "Gagal menghapus penjualan");
+  }
+}
+
 module.exports = {
   getHeaders,
   getHeaderDetail,
@@ -214,4 +244,5 @@ module.exports = {
   addItem,
   updateItem,
   deleteItem,
+  deletePenjualan,
 };

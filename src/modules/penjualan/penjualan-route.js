@@ -55,4 +55,12 @@ router.delete(
   penjualanController.deleteItem,
 );
 
+router.delete(
+  "/:noBJJual",
+  verifyToken,
+  attachPermissions,
+  requirePermission("penjualan:delete"),
+  penjualanController.deletePenjualan,
+);
+
 module.exports = router;
