@@ -35,6 +35,44 @@ async function stokBarangJadiV2PdfHandler(req, res) {
   }
 }
 
+async function hasilProduksiPdfHandler(req, res) {
+  const tglAwal = String(req.query.tglAwal || "").trim();
+  const tglAkhir = String(req.query.tglAkhir || "").trim();
+
+  console.log(
+    "Generating Laporan Hasil Produksi Barang Jadi PDF | Username:",
+    req.username,
+    "| tglAwal:",
+    tglAwal,
+    "| tglAkhir:",
+    tglAkhir,
+  );
+
+  try {
+    const buffer = await service.getHasilProduksiPdf({
+      tglAwal,
+      tglAkhir,
+      username: req.username,
+    });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="Hasil-Produksi-Barang-Jadi-${tglAwal}_${tglAkhir}.pdf"`,
+    );
+    return res.send(Buffer.from(buffer));
+  } catch (error) {
+    console.error("Error generating Laporan Hasil Produksi Barang Jadi PDF:", error);
+    const statusCode = error.statusCode || 500;
+    return res.status(statusCode).json({
+      success: false,
+      message: statusCode === 500 ? "Internal Server Error" : error.message,
+      ...(statusCode === 500 ? { error: error.message } : {}),
+    });
+  }
+}
+
 module.exports = {
   stokBarangJadiV2PdfHandler,
+  hasilProduksiPdfHandler,
 };
