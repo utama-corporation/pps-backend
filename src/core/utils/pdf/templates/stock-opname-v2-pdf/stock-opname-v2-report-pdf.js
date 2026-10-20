@@ -292,7 +292,17 @@ function buildLocationMatchSection(locationMatch, unit) {
 
 // ── Rincian per Jenis ─────────────────────────────────────────────────────
 
-function buildJenisSection(perJenis, unit) {
+function buildJenisSection(perJenis, unit, categoryName) {
+  // Barang Jadi: urutkan berdasarkan nama Jenis (ASC).
+  if (perJenis && /barang\s*jadi/i.test(categoryName || "")) {
+    perJenis = [...perJenis].sort((a, b) =>
+      String(a.typeName ?? "").localeCompare(String(b.typeName ?? ""), "id", {
+        numeric: true,
+        sensitivity: "base",
+      }),
+    );
+  }
+
   if (!perJenis || perJenis.length === 0) {
     return sectionBlock("Rekap per Jenis", noData("Belum ada data jenis."));
   }
@@ -412,7 +422,7 @@ function buildStockOpnameV2ReportHtml({
     buildSummarySection(summary, unit, scannedMetric, unscannedMetric),
     buildUnscannedLabelsSection(unscannedLabels, unit, unscannedMetric, summary.total),
     buildLocationMatchSection(locationMatch, unit),
-    buildJenisSection(summary.perJenis, unit),
+    buildJenisSection(summary.perJenis, unit, summary.categoryName),
     buildBlokSection(summary.perBlok, unit),
     buildScanUserSection(scanSummary, unit),
   ].join("");
