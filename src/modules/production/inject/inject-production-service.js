@@ -2868,6 +2868,15 @@ async function submitInjectBatch(payload, ctx, { forceClose = false, tx: existin
         );
       }
 
+      // InjectProduksiBatch_d.IdJenis NOT NULL. Item tanpa jenis hanya sah
+      // bila tidak ada pcs sama sekali (mis. bucket penutup yang dikosongkan
+      // saat split) — baris nol pcs tidak perlu dicatat. Selain itu tolak
+      // dengan pesan jelas, jangan biarkan jatuh ke error SQL 515.
+      if (item.idJenis == null) {
+        if (totalPcs === 0 && item.carryOverOut === 0) continue;
+        throw badReq("idJenis wajib diisi jika ada pcs pada batch ini");
+      }
+
       await new sql.Request(tx)
         .input("IdBatch", sql.Int, idBatch)
         .input("IdJenis", sql.Int, item.idJenis)
