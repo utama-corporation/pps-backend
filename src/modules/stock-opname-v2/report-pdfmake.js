@@ -7,6 +7,17 @@ const pdfMake = require("pdfmake/build/pdfmake");
 const pdfFonts = require("pdfmake/build/vfs_fonts");
 pdfMake.vfs = pdfFonts;
 
+// Barang Jadi: Rekap per Jenis diurutkan berdasarkan nama Jenis (ASC).
+function sortJenisBarangJadi(rows, categoryName) {
+  if (!/barang\s*jadi/i.test(categoryName || "")) return rows;
+  return [...rows].sort((a, b) =>
+    String(a.typeName ?? "").localeCompare(String(b.typeName ?? ""), "id", {
+      numeric: true,
+      sensitivity: "base",
+    }),
+  );
+}
+
 const MAX_UNSCANNED_ROWS_PRINTED = 2000;
 const MAX_MISMATCH_ROWS_PRINTED = 300;
 
@@ -220,7 +231,7 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
   }
 
   // === REKAP PER JENIS ===
-  const perJenis = summary.perJenis || [];
+  const perJenis = sortJenisBarangJadi(summary.perJenis || [], summary.categoryName);
   if (perJenis.length > 0) {
     content.push({ text: "Rekap per Jenis", style: "h2" });
     content.push({
