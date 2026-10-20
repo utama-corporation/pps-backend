@@ -739,7 +739,7 @@ exports.deleteItem = async (noRetur, idItem, ctx) => {
 // POST /:noRetur/export-gsu. Idempotent-guard: jika NoRetur sudah pernah
 // diekspor (Remarks = NoRetur di AR_SalesReturnTransit), proses ditolak.
 // ---------------------------------------------------------------------------
-const GSU_TRANSIT_DB = "AS_GSU_TEST5.dbo";
+const GSU_TRANSIT_DB = "AS_GSU.dbo";
 
 async function exportToGsuInTx(tx, noRetur, actorUsername) {
   // 0) Duplikat check — sudah pernah diekspor ke AS_GSU?
