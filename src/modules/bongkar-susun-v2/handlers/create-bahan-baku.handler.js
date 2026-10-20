@@ -8,11 +8,12 @@ const { detectCategory } = require("../bongkar-susun-v2-category-registry");
 
 function parseInputLabel(labelCode) {
   const code = String(labelCode || "").trim();
-  if (!code.startsWith("A.")) return null;
-  const raw = code.slice(2);
+  const prefix = code.startsWith("AB.") ? "AB." : code.startsWith("A.") ? "A." : null;
+  if (!prefix) return null;
+  const raw = code.slice(prefix.length);
   const parts = raw.split("-");
   if (parts.length !== 2) return null;
-  const noBahanBaku = `A.${parts[0].trim()}`;
+  const noBahanBaku = `${prefix}${parts[0].trim()}`;
   const noPallet = Number.parseInt(parts[1], 10);
   if (!noBahanBaku || !Number.isFinite(noPallet) || noPallet <= 0) return null;
   return { noBahanBaku, noPallet };
@@ -68,7 +69,7 @@ exports.createBongkarSusunBahanBaku = async (payload, ctx) => {
     const parsed = parseInputLabel(code);
     if (!parsed) {
       throw badReq(
-        `Label input ${code} harus memakai format A.<NoBahanBaku>-<NoPallet>`,
+        `Label input ${code} harus memakai format A./AB.<NoBahanBaku>-<NoPallet>`,
       );
     }
     const key = `${parsed.noBahanBaku}-${parsed.noPallet}`;

@@ -5,17 +5,13 @@ const {
 const { conflict } = require("../../../core/utils/http-error");
 
 function normalizeNoBahanBaku(labelCode) {
-  const code = String(labelCode || "").trim();
-  if (code.startsWith("A.")) {
-    return code.split("-")[0];
-  }
-  return code.split("-")[0];
+  return String(labelCode || "").trim().split("-")[0];
 }
 
 function parseNoPallet(labelCode) {
   const code = String(labelCode || "").trim();
-  const raw = code.startsWith("A.") ? code.slice(2) : code;
-  const parts = raw.split("-");
+  // Prefix A. / AB. tidak mengandung "-", jadi split langsung aman.
+  const parts = code.split("-");
   return parts.length > 1 ? parts[1] : null;
 }
 
@@ -24,7 +20,7 @@ exports.getLabelInfoBahanBaku = async (labelCode) => {
   const noPallet = parseNoPallet(labelCode);
   if (!noPallet) {
     const e = new Error(
-      `Label ${labelCode} harus memakai format A.<NoBahanBaku>-<NoPallet>`,
+      `Label ${labelCode} harus memakai format A./AB.<NoBahanBaku>-<NoPallet>`,
     );
     e.statusCode = 400;
     throw e;

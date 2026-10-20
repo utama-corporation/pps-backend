@@ -538,7 +538,90 @@ async function remove(keyRaw, username) {
   }
 }
 
+async function createMaster(table, idCol, nameCol, maxLen, extraCols, label, name, username) {
+  const nama = String(name ?? '').trim().replace(/\s+/g, ' ').toUpperCase();
+  if (!nama) throw badReq(`Nama ${label} wajib diisi`);
+  if (nama.length > maxLen) throw badReq(`Nama ${label} maksimal ${maxLen} karakter`);
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  try {
+    const dup = await tx
+      .request()
+      .input('Nama', sql.VarChar(maxLen), nama)
+      .query(
+        `SELECT TOP 1 [${idCol}] AS Id FROM [dbo].[${table}] WITH (UPDLOCK, HOLDLOCK)
+         WHERE UPPER(LTRIM(RTRIM([${nameCol}]))) = @Nama`,
+      );
+    if (dup.recordset.length > 0) throw conflict(`${label} "${nama}" sudah ada`);
+
+    // Id tidak identity → MAX + 1 (sama seperti aplikasi desktop)
+    const next = await tx
+      .request()
+      .query(
+        `SELECT ISNULL(MAX([${idCol}]), 0) + 1 AS Id FROM [dbo].[${table}] WITH (UPDLOCK, HOLDLOCK)`,
+      );
+    const id = next.recordset[0].Id;
+
+    await tx
+      .request()
+      .input('Id', sql.Int, id)
+      .input('Nama', sql.VarChar(maxLen), nama)
+      .query(
+        `INSERT INTO [dbo].[${table}] ([${idCol}], [${nameCol}], [Enable]${extraCols.names})
+         VALUES (@Id, @Nama, 1${extraCols.values})`,
+      );
+
+    await insertHistory(tx, username, `User ${username} menambah ${label} baru ${nama} (Id ${id})`);
+    await tx.commit();
+    return { id, nama };
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch {
+      // transaksi mungkin sudah gagal ditutup driver
+    }
+    throw error;
+  }
+}
+
+// IdBJ dibiarkan NULL; kolom ukuran/berat diisi 0 seperti data cetakan yang ada.
+async function createCetakan(name, username) {
+  const r = await createMaster(
+    'MstCetakan',
+    'IdCetakan',
+    'NamaCetakan',
+    50,
+    {
+      names:
+        ', Lebar, Panjang, Tebal, BeratCetakan, BeratCavity, JumlahCavity, HotRunner, HydrolicCore, ElectricalSwitch, InputAngin, InputAir, CycleTime, PcsPerJam',
+      values: ', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0',
+    },
+    'Cetakan',
+    name,
+    username,
+  );
+  return { idCetakan: r.id, namaCetakan: r.nama };
+}
+
+async function createWarna(name, username) {
+  const r = await createMaster(
+    'MstWarna',
+    'IdWarna',
+    'Warna',
+    15,
+    { names: '', values: '' },
+    'Warna',
+    name,
+    username,
+  );
+  return { idWarna: r.id, warna: r.nama };
+}
+
 module.exports = {
+  createCetakan,
+  createWarna,
   getAllActive,
   getOptions,
   listWarnaMaterial,

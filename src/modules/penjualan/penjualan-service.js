@@ -1,6 +1,12 @@
 const { sql, poolPromise } = require("../../core/config/db");
 const { badReq, notFound, conflict } = require("../../core/utils/http-error");
 const { scanLabel } = require("./handlers/scan-label.handler");
+const { applyAuditContext } = require("../../core/utils/db-audit-context");
+const {
+  assertNotLocked,
+  loadDocDateOnlyFromConfig,
+} = require("../../core/shared/tutup-transaksi-guard");
+const { PARTIAL_CONFIG } = require("../../core/shared/label-partial.helper");
 
 // Kategori yang boleh dijual — sama dengan scan-label.category-registry.
 const ITEM_CATEGORIES = {
@@ -195,6 +201,128 @@ async function deleteItem(noBJJual, query) {
   return { noBJJual: no, kodeKategori, idJenis };
 }
 
+// Hapus seluruh DO beserta jejak scan-nya. Label yang pernah discan
+// dikembalikan ke kondisi sebelum scan:
+//  - baris partial yang dibuat scan (NoPartial) dihapus,
+//  - parent.DateUsage di-NULL-kan bila setelah itu masih ada sisa pcs
+//    (dan tidak ada DO lain yang memakai label itu secara penuh),
+//  - parent.IsPartial di-reset ke 0 bila tidak ada partial tersisa.
+async function deletePenjualan(noBJJual, ctx) {
+  const no = String(noBJJual || "").trim();
+  if (!no) throw badReq("noBJJual wajib");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername: String(ctx?.actorUsername || "").trim() || "system",
+    requestId: String(ctx?.requestId || "").trim(),
+  };
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    await applyAuditContext(new sql.Request(tx), auditCtx);
+
+    const { docDateOnly } = await loadDocDateOnlyFromConfig({
+      entityKey: "bjJual",
+      codeValue: no,
+      runner: tx,
+      useLock: true,
+      throwIfNotFound: true,
+    });
+    await assertNotLocked({
+      date: docDateOnly,
+      runner: tx,
+      action: "delete BJJual",
+      useLock: true,
+    });
+
+    const scansRes = await new sql.Request(tx)
+      .input("No", sql.VarChar(13), no)
+      .query(`
+        SELECT Id, KodeKategori, NoLabel, NoPartial
+        FROM dbo.BJJualScanLabel_d WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoBJJual = @No
+      `);
+    const scans = scansRes.recordset || [];
+
+    // 1) Hapus jejak scan, lalu item, lalu header (urutan sesuai FK).
+    await new sql.Request(tx)
+      .input("No", sql.VarChar(13), no)
+      .query(`DELETE FROM dbo.BJJualScanLabel_d WHERE NoBJJual = @No`);
+
+    // 2) Hapus partial yang dibuat scan ini.
+    for (const s of scans) {
+      const cfg = PARTIAL_CONFIG[s.KodeKategori];
+      if (!cfg || !s.NoPartial) continue;
+      await new sql.Request(tx)
+        .input("Code", sql.VarChar(50), s.NoPartial)
+        .query(
+          `DELETE FROM dbo.${cfg.partialTable} WHERE ${cfg.partialColumn} = @Code`,
+        );
+    }
+
+    // 3) Kembalikan parent: DateUsage NULL + IsPartial sesuai sisa partial.
+    const seen = new Set();
+    for (const s of scans) {
+      const cfg = PARTIAL_CONFIG[s.KodeKategori];
+      const key = `${s.KodeKategori}|${s.NoLabel}`;
+      if (!cfg || seen.has(key)) continue;
+      seen.add(key);
+
+      const qtyCol = cfg.parentQtyColumn || "Pcs";
+      const partialQtyCol = cfg.partialQtyColumn || "Pcs";
+      await new sql.Request(tx)
+        .input("NoLabel", sql.VarChar(50), s.NoLabel)
+        .input("Kategori", sql.VarChar(20), s.KodeKategori)
+        .query(`
+          UPDATE p
+          SET p.DateUsage = CASE
+                WHEN p.DateUsage IS NOT NULL
+                 AND NOT EXISTS (
+                   SELECT 1 FROM dbo.BJJualScanLabel_d x
+                   WHERE x.NoLabel = @NoLabel AND x.KodeKategori = @Kategori
+                     AND x.NoPartial IS NULL)
+                 AND p.${qtyCol} - ISNULL((
+                   SELECT SUM(pt.${partialQtyCol}) FROM dbo.${cfg.partialTable} pt
+                   WHERE pt.${cfg.partialParentColumn} = p.${cfg.parentColumn}), 0) > 0
+                THEN NULL ELSE p.DateUsage END,
+              p.IsPartial = CASE
+                WHEN EXISTS (
+                   SELECT 1 FROM dbo.${cfg.partialTable} pt
+                   WHERE pt.${cfg.partialParentColumn} = p.${cfg.parentColumn})
+                THEN p.IsPartial ELSE 0 END
+          FROM dbo.${cfg.parentTable} p
+          WHERE p.${cfg.parentColumn} = @NoLabel
+        `);
+    }
+
+    await new sql.Request(tx)
+      .input("No", sql.VarChar(13), no)
+      .query(`DELETE FROM dbo.BJJualItem_d WHERE NoBJJual = @No`);
+    await new sql.Request(tx)
+      .input("No", sql.VarChar(13), no)
+      .query(`DELETE FROM dbo.BJJual_h WHERE NoBJJual = @No`);
+
+    await tx.commit();
+    return {
+      noBJJual: no,
+      labelsReleased: seen.size,
+      partialsDeleted: scans.filter((s) => s.NoPartial).length,
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
+}
+
 async function getHeaders(
   page = 1,
   pageSize = 20,
@@ -370,4 +498,5 @@ module.exports = {
   addItem,
   updateItem,
   deleteItem,
+  deletePenjualan,
 };

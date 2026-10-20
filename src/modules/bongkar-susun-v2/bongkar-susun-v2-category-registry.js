@@ -4,7 +4,9 @@ function normalizeLabelCode(labelCode) {
 
 function detectCategory(labelCode) {
   const code = normalizeLabelCode(labelCode);
-  if (code.startsWith("A.")) return "bahanBaku";
+  // A. = bahan baku, AB. = bahan baku pakai (tabel & alur sama; prefix ikut
+  // NoBahanBaku sehingga label output otomatis tetap AB.).
+  if (code.startsWith("A.") || code.startsWith("AB.")) return "bahanBaku";
   if (code.startsWith("BA.")) return "barangJadi";
   // BF. (reject) harus dicek SEBELUM B. supaya tidak tertelan prefix 2 huruf.
   if (code.startsWith("BF.")) return "reject";

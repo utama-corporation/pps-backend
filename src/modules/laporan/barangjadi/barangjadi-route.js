@@ -11,4 +11,7 @@ router.use(verifyToken, attachPermissions, requirePermission("laporan:read"));
 // GET /api/laporan/barang-jadi/stok-v2/pdf?tglAkhir=YYYY-MM-DD
 router.get("/stok-v2/pdf", verifyToken, ctrl.stokBarangJadiV2PdfHandler);
 
+// GET /api/laporan/barang-jadi/hasil-produksi/pdf?tglAwal=YYYY-MM-DD&tglAkhir=YYYY-MM-DD
+router.get("/hasil-produksi/pdf", verifyToken, ctrl.hasilProduksiPdfHandler);
+
 module.exports = router;

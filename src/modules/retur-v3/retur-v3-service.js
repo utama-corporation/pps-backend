@@ -739,7 +739,7 @@ exports.deleteItem = async (noRetur, idItem, ctx) => {
 // POST /:noRetur/export-gsu. Idempotent-guard: jika NoRetur sudah pernah
 // diekspor (Remarks = NoRetur di AR_SalesReturnTransit), proses ditolak.
 // ---------------------------------------------------------------------------
-const GSU_TRANSIT_DB = "AS_GSU.dbo";
+const GSU_TRANSIT_DB = "AS_GSU_TEST5.dbo";
 
 async function exportToGsuInTx(tx, noRetur, actorUsername) {
   // 0) Duplikat check — sudah pernah diekspor ke AS_GSU?
@@ -763,7 +763,8 @@ async function exportToGsuInTx(tx, noRetur, actorUsername) {
         B.IdItem,
         B.Pcs,
         B.KategoriInput,
-        G.ItemID
+        G.ItemID,
+        G.UOMID1, G.UOMID2, G.UOMID3, G.UOMID4
       FROM dbo.BJReturV3_h A
       INNER JOIN dbo.BJReturV3Item_d B ON B.NoRetur = A.NoRetur
       LEFT JOIN dbo.MstBarangJadi BJ ON BJ.IdBJ = B.IdJenis AND B.KodeKategori = 'barangjadi'
@@ -830,11 +831,21 @@ async function exportToGsuInTx(tx, noRetur, actorUsername) {
   // 5) Insert detail (TransitID = header; TransitDetailID identity auto)
   for (const row of rows) {
     const remark = String(row.KategoriInput || "");
+    // Qty retur dalam Pcs (satuan terkecil, mis. BH) -> UOMLevel = level UOM
+    // terkecil yang terisi pada master item, bukan selalu 1.
+    let uomLevel = 1;
+    for (let lv = 4; lv >= 1; lv--) {
+      const uomId = row[`UOMID${lv}`];
+      if (uomId !== null && uomId !== undefined && Number(uomId) > 0) {
+        uomLevel = lv;
+        break;
+      }
+    }
     await new sql.Request(tx)
       .input("TransitID", sql.Int, transitId)
       .input("ItemID", sql.Int, Number(row.ItemID))
       .input("Quantity", sql.Int, Number(row.Pcs))
-      .input("UOMLevel", sql.Int, 1)
+      .input("UOMLevel", sql.Int, uomLevel)
       .input("Remark", sql.NVarChar(500), remark).query(`
         INSERT INTO ${GSU_TRANSIT_DB}.AR_SalesReturnTransitDetails (
           TransitID, SourceInvoiceID, SourceInvoiceDetailID,
@@ -842,7 +853,7 @@ async function exportToGsuInTx(tx, noRetur, actorUsername) {
           ImportedReturnID, ImportedReturnDetailID
         ) VALUES (
           @TransitID, 0, 0,
-          @ItemID, @Quantity, @UOMLevel, 4, @Remark,
+          @ItemID, @Quantity, @UOMLevel, 22, @Remark,
           0, 0
         )
       `);

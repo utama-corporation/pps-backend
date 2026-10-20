@@ -266,7 +266,241 @@ async function getStokBarangJadiV2Pdf({ tglAkhir, warehouse, username }) {
   }
 }
 
+/**
+ * Laporan Hasil Produksi Barang Jadi (crosstab per mesin).
+ * Sumber : SP_LaporanHasilProduksi(@TglAwal, @TglAkhir) -> Tanggal, NamaMesin, NamaBJ, Pcs, Ket
+ * Group  : NamaMesin (satu tabel per mesin, halaman baru per mesin)
+ * Baris  : NamaBJ
+ * Kolom  : Tanggal (format hari: 01..31)
+ * Nilai  : SUM(Pcs), ditambah kolom Total dan baris TOTAL per mesin.
+ */
+const MAX_HARI = 31;
+
+function isoDate(value) {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value ?? "").slice(0, 10);
+}
+
+function enumerateDates(from, to) {
+  const out = [];
+  const cur = new Date(`${from}T00:00:00Z`);
+  const end = new Date(`${to}T00:00:00Z`);
+  while (cur <= end && out.length <= MAX_HARI) {
+    out.push(cur.toISOString().slice(0, 10));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return out;
+}
+
+async function getHasilProduksiCrosstab({ tglAwal, tglAkhir }) {
+  const start = parseDate(tglAwal, "Tanggal awal");
+  const end = parseDate(tglAkhir, "Tanggal akhir");
+  if (start > end) throw badReq("Tanggal awal tidak boleh melebihi tanggal akhir");
+
+  const pool = await poolPromise;
+  const result = await pool
+    .request()
+    .input("TglAwal", sql.Date, start)
+    .input("TglAkhir", sql.Date, end)
+    .execute("dbo.SP_LaporanHasilProduksi");
+
+  const perMesin = new Map(); // NamaMesin -> Map<NamaBJ, Map<tanggal, pcs>>
+  const tanggalAda = new Set();
+
+  for (const r of result.recordset || []) {
+    const tgl = isoDate(r.Tanggal);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(tgl)) continue;
+    const mesin = String(r.NamaMesin ?? "").trim() || "(Tanpa Mesin)";
+    const nama = String(r.NamaBJ ?? "").trim() || "-";
+    const pcs = Number(r.Pcs) || 0;
+
+    tanggalAda.add(tgl);
+    if (!perMesin.has(mesin)) perMesin.set(mesin, new Map());
+    const perBj = perMesin.get(mesin);
+    if (!perBj.has(nama)) perBj.set(nama, new Map());
+    const cells = perBj.get(nama);
+    cells.set(tgl, (cells.get(tgl) || 0) + pcs);
+  }
+
+  const range = enumerateDates(start, end);
+  const dates =
+    range.length <= MAX_HARI ? range : [...tanggalAda].sort().slice(0, MAX_HARI);
+
+  const groups = [...perMesin.keys()]
+    .sort((a, b) => a.localeCompare(b, "id", { numeric: true }))
+    .map((mesin) => {
+      const perBj = perMesin.get(mesin);
+      const totalHari = Object.fromEntries(dates.map((d) => [d, 0]));
+      let grand = 0;
+      const rows = [...perBj.keys()]
+        .sort((a, b) => a.localeCompare(b, "id", { numeric: true }))
+        .map((nama) => {
+          const cells = perBj.get(nama);
+          let total = 0;
+          const hari = {};
+          for (const d of dates) {
+            const v = cells.get(d) || 0;
+            hari[d] = v;
+            total += v;
+            totalHari[d] += v;
+          }
+          grand += total;
+          return { nama, hari, total };
+        });
+      return { mesin, rows, totalHari, grand };
+    });
+
+  return { tglAwal: start, tglAkhir: end, dates, groups };
+}
+
+function buildHasilProduksiHtml({ tglAwal, tglAkhir, dates, groups }) {
+  const fmtCell = (v) => (Number(v) ? formatNumber(v) : "");
+  const periode = `${formatDateId(tglAwal)} s/d ${formatDateId(tglAkhir)}`;
+
+  const colgroup = `<colgroup>
+      <col style="width:210px" />
+      ${dates.map(() => "<col />").join("")}
+      <col style="width:64px" />
+    </colgroup>`;
+
+  const head = `<tr>
+      <th class="left">Nama</th>
+      ${dates.map((d) => `<th class="center">${d.slice(8, 10)}</th>`).join("")}
+      <th class="right">Total</th>
+    </tr>`;
+
+  const sections = groups
+    .map((g) => {
+      const body = g.rows
+        .map(
+          (r) => `
+        <tr>
+          <td class="left name">${escapeHtml(r.nama)}</td>
+          ${dates.map((d) => `<td class="right">${fmtCell(r.hari[d])}</td>`).join("")}
+          <td class="right strong">${formatNumber(r.total)}</td>
+        </tr>`,
+        )
+        .join("");
+      const foot = `<tr class="grand">
+        <td class="left">TOTAL</td>
+        ${dates.map((d) => `<td class="right">${fmtCell(g.totalHari[d])}</td>`).join("")}
+        <td class="right">${formatNumber(g.grand)}</td>
+      </tr>`;
+      // Mesin dengan baris sedikit tidak dipotong antar halaman; yang panjang boleh
+      // berlanjut (header tabel diulang). Mesin berikutnya mengalir di halaman yang sama.
+      return `<section class="mesin${g.rows.length <= 25 ? " keep" : ""}">
+    <div class="mesin-title">${escapeHtml(g.mesin)}</div>
+    <table class="data">
+      ${colgroup}
+      <thead>${head}</thead>
+      <tbody>${body}</tbody>
+      <tfoot>${foot}</tfoot>
+    </table>
+  </section>`;
+    })
+    .join("");
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 8px; color: #1e293b; }
+  .report-header {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-bottom: 2px solid #1e40af; padding-bottom: 8px; margin-bottom: 10px;
+  }
+  .report-title { font-size: 16px; font-weight: 700; color: #1e40af; }
+  .report-subtitle { font-size: 10px; color: #64748b; margin-top: 2px; }
+  .report-meta { text-align: right; font-size: 14px; color: #1e293b; }
+  .mesin { margin-bottom: 14px; }
+  .mesin.keep { page-break-inside: avoid; }
+  .mesin-title {
+    font-size: 11px; font-weight: 700; color: #1e40af; padding: 3px 0;
+    page-break-after: avoid;
+  }
+  table.data { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  table.data thead { display: table-header-group; }
+  table.data tfoot { display: table-row-group; }
+  table.data tr { page-break-inside: avoid; }
+  table.data th {
+    background: #1e40af; color: #fff; font-size: 8px; padding: 4px 2px;
+    border: 1px solid #1e3a8a;
+  }
+  table.data td {
+    padding: 2px 3px; border: 1px solid #e2e8f0; height: 15px; white-space: nowrap;
+    font-size: 7.5px;
+  }
+  table.data tbody tr:nth-child(even) td { background: #f8fafc; }
+  td.name { overflow: hidden; text-overflow: ellipsis; font-size: 8px; }
+  tr.grand td { background: #1e40af !important; color: #fff; font-weight: 700; }
+  .left { text-align: left; padding-left: 5px; }
+  .center { text-align: center; }
+  .right { text-align: right; }
+  .strong { font-weight: 700; background: #eef2ff !important; }
+</style>
+</head>
+<body>
+  <div class="report-header">
+    <div>
+      <div class="report-title">Hasil Produksi Barang Jadi</div>
+      <div class="report-subtitle">Periode: ${escapeHtml(periode)} &middot; Satuan: Pcs</div>
+    </div>
+    <div class="report-meta">Jumlah mesin: ${groups.length}</div>
+  </div>
+  ${sections || '<p class="center">Tidak ada data.</p>'}
+</body>
+</html>`;
+}
+
+async function getHasilProduksiPdf({ tglAwal, tglAkhir, username }) {
+  const who = String(username ?? "-").trim() || "-";
+  const printedAt = new Date().toLocaleString("id-ID", {
+    weekday: "long",
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  const data = await getHasilProduksiCrosstab({ tglAwal, tglAkhir });
+  const html = buildHasilProduksiHtml(data);
+
+  const browser = await getPdfBrowser();
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1123, height: 794 });
+
+  try {
+    await page.goto("about:blank", { waitUntil: "domcontentloaded" });
+    await page.evaluate((h) => {
+      document.open();
+      document.write(h);
+      document.close();
+    }, html);
+
+    return await page.pdf({
+      format: "A4",
+      landscape: true,
+      printBackground: true,
+      displayHeaderFooter: true,
+      headerTemplate: "<span></span>",
+      footerTemplate: `
+        <div style="width:100%; font-size:8px; color:#94a3b8; font-family:'Segoe UI',Arial,sans-serif; display:flex; justify-content:space-between; padding:0 8mm;">
+          <span>Print by ${escapeHtml(who)} on ${escapeHtml(printedAt)}</span>
+          <span>Halaman <span class="pageNumber"></span> dari <span class="totalPages"></span></span>
+        </div>`,
+      margin: { top: "8mm", right: "8mm", bottom: "14mm", left: "8mm" },
+    });
+  } finally {
+    await page.close();
+  }
+}
+
 module.exports = {
   getStokBarangJadiV2Crosstab,
   getStokBarangJadiV2Pdf,
+  getHasilProduksiCrosstab,
+  getHasilProduksiPdf,
 };
