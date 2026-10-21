@@ -2,6 +2,7 @@ const sql = require('mssql');
 const puppeteer = require('puppeteer');
 const { poolPromise } = require('../../core/config/db');
 const { badReq, notFound } = require('../../core/utils/http-error');
+const { buildRekapHtml, renderRekapPdf } = require('./rekap/rekap-pdf');
 
 function parseDate(value, label) {
   const raw = String(value ?? '').trim();
@@ -552,6 +553,14 @@ async function rekapHarian({ jenis, tglAkhir }) {
   return rekapProduksi(key, { tglAkhir });
 }
 
+async function getRekapProduksiPdf({ jenis, tglAkhir, username }) {
+  const key = String(jenis ?? '').trim();
+  const tanggal = parseDate(tglAkhir, 'Tanggal');
+  const data = await rekapProduksi(key, { tglAkhir: tanggal });
+  const html = buildRekapHtml({ jenis: key, tglAkhir: tanggal, rows: data.rows });
+  return renderRekapPdf({ html, username });
+}
+
 // ---------------------------------------------------------------------------
 // Laporan Stok Barang Dagang — SP_LapStokBarangDagang(@TglAkhir, @Warehouse)
 // ---------------------------------------------------------------------------
@@ -763,6 +772,7 @@ module.exports = {
   umurKategori,
   produksiKategori,
   rekapProduksi,
+  getRekapProduksiPdf,
   semuaLabel,
   dashboardProduktifitas,
   hasilProduksi,

@@ -22,7 +22,10 @@ router.get('/mutasi/:jenis', verifyToken, ctrl.mutasiUmum);
 router.get('/umur/:jenis', verifyToken, ctrl.umurKategori);
 router.get('/produksi/:jenis', verifyToken, ctrl.produksiKategori);
 router.get('/rekap/:jenis', verifyToken, ctrl.rekapProduksi);
+// PDF rekap produksi (sumber data sama dengan /rekap/:jenis, format PDF).
+router.get('/rekap/:jenis/pdf', verifyToken, ctrl.rekapProduksiPdf);
 router.get('/rekap-harian', verifyToken, ctrl.rekapHarian);
+router.get('/rekap-harian/pdf', verifyToken, ctrl.rekapProduksiPdf);
 router.get('/semua-label', verifyToken, ctrl.semuaLabel);
 router.get('/dashboard-produktifitas', verifyToken, ctrl.dashboardProduktifitas);
 router.get('/hasil-produksi', verifyToken, ctrl.hasilProduksi);

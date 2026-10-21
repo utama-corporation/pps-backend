@@ -130,6 +130,27 @@ async function rekapProduksi(req, res) {
   }
 }
 
+async function rekapProduksiPdf(req, res) {
+  const jenis = String(req.params.jenis || req.query.jenis || '').trim();
+  const { tglAkhir } = req.query;
+  try {
+    const buffer = await service.getRekapProduksiPdf({
+      jenis,
+      tglAkhir,
+      username: req.username,
+    });
+    const safeJenis = jenis.replace(/[^A-Za-z0-9_-]+/g, '-') || 'rekap';
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="Laporan-Rekap-Produksi-${safeJenis}-${tglAkhir}.pdf"`,
+    );
+    return res.send(Buffer.from(buffer));
+  } catch (error) {
+    return fail(res, error, `rekap ${jenis} pdf`);
+  }
+}
+
 async function semuaLabel(req, res) {
   try {
     const data = await service.semuaLabel();
@@ -216,6 +237,7 @@ module.exports = {
   umurKategori,
   produksiKategori,
   rekapProduksi,
+  rekapProduksiPdf,
   semuaLabel,
   dashboardProduktifitas,
   hasilProduksi,

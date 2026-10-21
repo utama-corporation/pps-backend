@@ -833,24 +833,11 @@ exports.updateBrokerCascade = async (payload) => {
       throw e;
     }
 
-    // Cek apakah NoBroker berasal dari BongkarSusun — jika ya, tolak edit
-    const bsoCheck = await new sql.Request(tx)
-      .input("NoBroker", sql.VarChar(50), NoBroker)
-      .query(
-        `SELECT TOP 1 1 FROM dbo.BongkarSusunOutputBroker WHERE NoBroker = @NoBroker`,
-      );
-
-    if (bsoCheck.recordset.length > 0) {
-      throw conflict(
-        "Data tidak dapat diubah: label ini berasal dari Bongkar Susun.",
-      );
-    }
-
     const existingDateCreate = exist.recordset[0]?.DateCreate;
     const existingDateOnly = toDateOnly(existingDateCreate);
 
     // ===============================
-    // [A] TUTUP TRANSAKSI CHECK (UPDATE)
+    // [QC-ONLY DETECTION]
     // ===============================
     // Update QC-only (nilai kualitas & catatan) boleh dilakukan pada label
     // lama. Yang divalidasi adalah tanggal QC (DateQc) atau hari ini, bukan
@@ -869,6 +856,9 @@ exports.updateBrokerCascade = async (payload) => {
       "VisualNote",
       "DateQc",
     ];
+    // IdStatus (1=PASS, 0=HOLD) merupakan bagian dari hasil QC, jadi boleh
+    // ikut diubah pada saat penginputan QC.
+    const QC_ALLOWED_KEYS = [...QC_ONLY_KEYS, "IdStatus"];
     const headerKeys = Object.keys(header).filter(
       (k) => header[k] !== undefined && k !== "UpdateBy",
     );
@@ -876,13 +866,43 @@ exports.updateBrokerCascade = async (payload) => {
       !details &&
       headerKeys.length > 0 &&
       headerKeys.every((k) => QC_ONLY_KEYS.includes(k));
+    // Varian yang juga menerima perubahan status QC (dipakai untuk label BS).
+    const isQcOnlyUpdateWithStatus =
+      !details &&
+      !hasProduksi &&
+      headerKeys.length > 0 &&
+      headerKeys.every((k) => QC_ALLOWED_KEYS.includes(k));
 
+    // Cek apakah NoBroker berasal dari BongkarSusun. Data label hasil BS
+    // (jenis, warehouse, tanggal, detail sak, output) tetap terkunci, TAPI
+    // penginputan hasil QC boleh — QC label BS diukur setelah label dibuat.
+    const bsoCheck = await new sql.Request(tx)
+      .input("NoBroker", sql.VarChar(50), NoBroker)
+      .query(
+        `SELECT TOP 1 1 FROM dbo.BongkarSusunOutputBroker WHERE NoBroker = @NoBroker`,
+      );
+
+    const isFromBongkarSusun = bsoCheck.recordset.length > 0;
+    if (isFromBongkarSusun && !isQcOnlyUpdateWithStatus) {
+      throw conflict(
+        "Data tidak dapat diubah: label ini berasal dari Bongkar Susun. Hanya penginputan QC (Density/Moisture/MFI/status) yang diizinkan.",
+      );
+    }
+
+    // Penginputan QC pada label BS divalidasi terhadap periode saat QC
+    // dilakukan (DateQc / hari ini), sama seperti QC-only pada label biasa.
+    const isQcUpdate =
+      isQcOnlyUpdate || (isFromBongkarSusun && isQcOnlyUpdateWithStatus);
+
+    // ===============================
+    // [A] TUTUP TRANSAKSI CHECK (UPDATE)
+    // ===============================
     await assertNotLocked({
-      date: isQcOnlyUpdate
+      date: isQcUpdate
         ? resolveEffectiveDateForCreate(header.DateQc)
         : existingDateOnly,
       runner: tx,
-      action: isQcOnlyUpdate
+      action: isQcUpdate
         ? `update QC broker ${NoBroker}`
         : `update broker ${NoBroker}`,
       useLock: true,
