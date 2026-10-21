@@ -1,6 +1,9 @@
 // penerimaan-bahan-baku-controller.js
 const service = require("./penerimaan-bahan-baku-service");
 const {
+  generateLaporanPenerimaanBahanBakuPdf,
+} = require("./laporan-penerimaan-bahan-baku-pdf");
+const {
   getActorId,
   getActorUsername,
   makeRequestId,
@@ -239,7 +242,26 @@ async function laporan(req, res) {
   }
 }
 
+async function laporanBahanBakuPdf(req, res) {
+  try {
+    const rows = await service.getLaporanBahanBakuRows({
+      noPenerimaan: req.params.noPenerimaan,
+      noBahanBaku: req.query.noBahanBaku,
+    });
+    const pdf = await generateLaporanPenerimaanBahanBakuPdf(rows, { user: req.username });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="Laporan Penerimaan Bahan Baku ${req.params.noPenerimaan}.pdf"`,
+    );
+    return res.status(200).send(pdf);
+  } catch (error) {
+    return sendError(res, error, "Error laporan PDF PenerimaanBahanBaku:");
+  }
+}
+
 module.exports = {
+  laporanBahanBakuPdf,
   updatePallet,
   removePallet,
   addSaks,

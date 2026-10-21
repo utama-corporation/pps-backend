@@ -98,6 +98,7 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
   const tgl = summary.date;
   const isPcsMetric =
     summary.categoryCode === "furniturewip" ||
+    summary.categoryCode === "barangjadi" ||
     summary.categoryCode === "barangdagang";
   const unit = isPcsMetric ? "pcs" : "kg";
   const unitH = isPcsMetric ? "Pcs" : "Berat";
@@ -231,9 +232,8 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
   }
 
   // === REKAP PER JENIS ===
-  // Rekap per Jenis: Barang Jadi → Pcs, Barang Dagang → Qty (bukan berat).
-  const jenisPcsMetric = isPcsMetric || summary.categoryCode === "barangjadi";
-  const jenisUnitH = summary.categoryCode === "barangdagang" ? "Qty" : jenisPcsMetric ? "Pcs" : "Berat";
+  // Rekap per Jenis: Barang Dagang → Qty, kategori pcs lain → Pcs.
+  const jenisUnitH = summary.categoryCode === "barangdagang" ? "Qty" : unitH;
   const perJenis = sortJenisBarangJadi(summary.perJenis || [], summary.categoryName);
   if (perJenis.length > 0) {
     content.push({ text: "Rekap per Jenis", style: "h2" });
@@ -254,7 +254,7 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
             { text: fmtNum(r.labelCount), style: "cellC" },
             { text: fmtNum(r.scannedCount), style: "cellC" },
             { text: fmtNum(r.unscannedCount), style: r.unscannedCount > 0 ? "cellRedR" : "cellC" },
-            { text: qtyText(r, jenisPcsMetric, jenisPcsMetric ? 0 : dig, summary.categoryCode === "barangdagang" ? "" : jenisPcsMetric ? "pcs" : unitLabel), style: "cellR" },
+            { text: qtyText(r, isPcsMetric, dig, summary.categoryCode === "barangdagang" ? "" : unitLabel), style: "cellR" },
           ]),
         ],
       },

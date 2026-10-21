@@ -48,6 +48,9 @@ router.delete(
   ctrl.removeSak,
 );
 router.get("/:noPenerimaan/laporan", canRead, ctrl.laporan);
+// Laporan Penerimaan Bahan Baku (per pallet) langsung dalam bentuk PDF.
+// Opsional ?noBahanBaku= untuk membatasi ke satu dokumen bahan baku.
+router.get("/:noPenerimaan/laporan/bahan-baku/pdf", canRead, ctrl.laporanBahanBakuPdf);
 router.delete("/:noPenerimaan", canDelete, ctrl.remove);
 // Tandai penerimaan sebagai selesai (IsComplete = 1).
 router.patch("/:noPenerimaan/complete", canUpdate, ctrl.complete);

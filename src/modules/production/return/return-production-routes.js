@@ -3,6 +3,8 @@ const express = require("express");
 const router = express.Router();
 
 const verifyToken = require("../../../core/middleware/verify-token");
+const attachPermissions = require("../../../core/middleware/attach-permissions");
+const requirePermission = require("../../../core/middleware/require-permission");
 const returnController = require("./return-production-controller");
 
 // ✅ GET ALL (paging + search + optional date range)
@@ -48,6 +50,8 @@ router.get(
 router.get(
   "/return/:noRetur/outputs/barang-dagang",
   verifyToken,
+  attachPermissions,
+  requirePermission("retur_old:read"),
   returnController.getOutputsBarangDagangByNoRetur,
 );
 
@@ -56,12 +60,16 @@ router.get(
 router.post(
   "/return/:noRetur/outputs",
   verifyToken,
+  attachPermissions,
+  requirePermission("retur_old:create"),
   returnController.addOutputs,
 );
 
 router.delete(
   "/return/:noRetur/outputs/:kodeKategori/:labelCode",
   verifyToken,
+  attachPermissions,
+  requirePermission("retur_old:delete"),
   returnController.deleteOutput,
 );
 
@@ -84,6 +92,12 @@ router.get(
 router.post("/return/import-as-gsu", verifyToken, returnController.importAsGsu);
 
 // Detail 1 retur — harus paling bawah supaya tidak menangkap path statis di atas.
-router.get("/return/:noRetur", verifyToken, returnController.getReturnDetail);
+router.get(
+  "/return/:noRetur",
+  verifyToken,
+  attachPermissions,
+  requirePermission("retur_old:read"),
+  returnController.getReturnDetail,
+);
 
 module.exports = router;

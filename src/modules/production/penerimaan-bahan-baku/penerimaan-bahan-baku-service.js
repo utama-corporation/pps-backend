@@ -1192,7 +1192,47 @@ async function getLaporanPenerimaan(noPenerimaan) {
   return { perPallet: rows.recordset || [] };
 }
 
+// Data Laporan Penerimaan Bahan Baku (per pallet, padanan query
+// LblLapBahanBaku_LinkClicked di FrmBahanBakuv2.vb). Tanpa noPenerimaan, data
+// diambil langsung per NoBahanBaku seperti query VB (dipakai juga untuk
+// dokumen lama yang belum punya NoPenerimaan).
+async function getLaporanBahanBakuRows({ noPenerimaan, noBahanBaku } = {}) {
+  const nbb = noBahanBaku ? String(noBahanBaku).trim() : "";
+  let rows;
+  if (noPenerimaan) {
+    const { perPallet } = await getLaporanPenerimaan(noPenerimaan);
+    rows = nbb ? perPallet.filter((r) => r.NoBahanBaku === nbb) : perPallet;
+  } else if (nbb) {
+    const pool = await poolPromise;
+    const res = await pool.request().input("NoBahanBaku", sql.VarChar(20), nbb).query(`
+      SELECT
+        A.NoBahanBaku,
+        CONVERT(varchar(10), A.DateCreate, 23) AS DateCreate,
+        C.NmSupplier AS NamaSupplier,
+        D.Nama AS Jenis,
+        B.NoPallet,
+        CASE WHEN ISNULL(E.IsLembab, 0) = 1 THEN 'LEMBAB' ELSE 'KERING' END AS Kondisi,
+        COUNT(E.NoSak) AS JumlahSak,
+        SUM(ISNULL(E.Berat, 0)) AS Berat
+      FROM dbo.BahanBaku_h A
+      INNER JOIN dbo.BahanBakuPallet_h B ON A.NoBahanBaku = B.NoBahanBaku
+      INNER JOIN dbo.MstSupplier C ON A.IdSupplier = C.IdSupplier
+      INNER JOIN dbo.MstBahanBaku D ON B.IdJenisPlastik = D.IdBB
+      INNER JOIN dbo.BahanBaku_d E ON B.NoBahanBaku = E.NoBahanBaku AND B.NoPallet = E.NoPallet
+      WHERE A.NoBahanBaku = @NoBahanBaku
+      GROUP BY A.NoBahanBaku, A.DateCreate, C.NmSupplier, D.Nama, B.NoPallet, ISNULL(E.IsLembab, 0)
+      ORDER BY A.NoBahanBaku ASC
+    `);
+    rows = res.recordset || [];
+  } else {
+    throw badReq("noPenerimaan atau noBahanBaku wajib diisi");
+  }
+  if (!rows.length) throw notFound("Data laporan penerimaan bahan baku tidak ditemukan");
+  return rows;
+}
+
 module.exports = {
+  getLaporanBahanBakuRows,
   updatePalletPenerimaan,
   addSaksPenerimaan,
   deleteSakPenerimaan,
