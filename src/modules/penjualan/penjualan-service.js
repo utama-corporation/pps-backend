@@ -397,7 +397,7 @@ async function getHeaders(
     LEFT JOIN dbo.MstPembeli p WITH (NOLOCK)
       ON h.IdPembeli = p.IdPembeli
     ${qWhere}
-    ORDER BY h.Tanggal DESC, h.NoBJJual DESC
+    ORDER BY h.Tanggal DESC, h.Remark DESC 
     OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;
   `;
 

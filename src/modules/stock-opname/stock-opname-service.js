@@ -10,6 +10,7 @@ async function getNoStockOpname(
   limit = 10,
   isAscend = null,
   search = "",
+  prefix = "",
 ) {
   try {
     const pool = await poolPromise;
@@ -23,6 +24,10 @@ async function getNoStockOpname(
       const searchTerm = search.trim().replace(/'/g, "''");
       whereClause += `AND soh.NoSO LIKE '%${searchTerm}%'`;
     }
+
+    // Hanya nomor SO berawalan prefix (mis. "AA" = SO Ascend); hanya huruf/angka.
+    const safePrefix = String(prefix || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 5);
+    if (safePrefix) whereClause += ` AND soh.NoSO LIKE '${safePrefix}%'`;
 
     // Get total count
     const totalQuery = `

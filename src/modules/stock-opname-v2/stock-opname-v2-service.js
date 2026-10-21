@@ -2680,7 +2680,7 @@ async function getLaporanStockOpnameHtml({ stockOpnameNo }) {
   });
 }
 
-async function getLaporanStockOpnamePdf({ stockOpnameNo }) {
+async function getLaporanStockOpnamePdf({ stockOpnameNo, versi = "stock" }) {
   const { summary, scanSummary, unscannedLabels, locationMatch } =
     await getLaporanStockOpnameData({
       stockOpnameNo,
@@ -2689,7 +2689,7 @@ async function getLaporanStockOpnamePdf({ stockOpnameNo }) {
       mismatchDetailLimit: PDF_MISMATCH_DETAIL_LIMIT,
     });
 
-  return generatePdfPdfmake({ summary, scanSummary, unscannedLabels, locationMatch });
+  return generatePdfPdfmake({ summary, scanSummary, unscannedLabels, locationMatch, versi });
 }
 
 async function deleteStockOpname({ stockOpnameNo, ctx }) {

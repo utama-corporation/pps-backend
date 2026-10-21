@@ -12,6 +12,9 @@ const {
   saveStockOpnameAscendHasilHandler,
   fetchQtyUsageHandler,
   deleteStockOpnameHasilAscendHandler,
+  ascendOptionsHandler,
+  createAscendHandler,
+  ascendReportPdfHandler,
 } = require("./stock-opname-controller");
 
 const router = express.Router();
@@ -72,6 +75,15 @@ router.delete(
   "/no-stock-opname/:noso/ascend/hasil/:itemId",
   verifyToken,
   deleteStockOpnameHasilAscendHandler,
+);
+
+// Buat header SO Ascend (pilihan warehouse/kategori/famili + simpan) dan laporan PDF.
+router.get("/ascend/options", verifyToken, ascendOptionsHandler);
+router.post("/ascend", verifyToken, createAscendHandler);
+router.get(
+  "/no-stock-opname/:noso/ascend/report/pdf",
+  verifyToken,
+  ascendReportPdfHandler,
 );
 
 module.exports = router;
