@@ -45,6 +45,26 @@ router.get(
   returnController.getOutputsBarangJadiByNoRetur,
 );
 
+router.get(
+  "/return/:noRetur/outputs/barang-dagang",
+  verifyToken,
+  returnController.getOutputsBarangDagangByNoRetur,
+);
+
+// Buat label output baru (barangjadi | furniturewip | barangdagang) untuk 1 retur.
+// Body: { items: [{ kodeKategori, idJenis, qty, jumlahLabel? }] }
+router.post(
+  "/return/:noRetur/outputs",
+  verifyToken,
+  returnController.addOutputs,
+);
+
+router.delete(
+  "/return/:noRetur/outputs/:kodeKategori/:labelCode",
+  verifyToken,
+  returnController.deleteOutput,
+);
+
 // GET /api/production/return/import-as-gsu/:date - fetch data from AS_GSU
 router.get(
   "/return/import-as-gsu/:date(\\d{4}-\\d{2}-\\d{2})",
@@ -62,5 +82,8 @@ router.get(
 
 // POST /api/production/return/import-as-gsu - import selected items
 router.post("/return/import-as-gsu", verifyToken, returnController.importAsGsu);
+
+// Detail 1 retur — harus paling bawah supaya tidak menangkap path statis di atas.
+router.get("/return/:noRetur", verifyToken, returnController.getReturnDetail);
 
 module.exports = router;

@@ -23,10 +23,13 @@ const {
   generateFurnitureWipLabel,
 } = require("./handlers/generate-furniture-wip.handler");
 const {
+  generateBarangDagangLabel,
+} = require("./handlers/generate-barang-dagang.handler");
+const {
   generateRejectLabel,
 } = require("./handlers/generate-reject.handler");
 
-const ALLOWED_KODE_KATEGORI = ["barangjadi", "furniturewip"];
+const ALLOWED_KODE_KATEGORI = ["barangjadi", "furniturewip", "barangdagang"];
 const ALLOWED_KATEGORI_INPUT = ["BAGUS", "REJECT"];
 
 function assertKodeKategori(value, field = "kodeKategori") {
@@ -45,6 +48,10 @@ async function jenisExists(tx, kodeKategori, idJenis) {
   const rq = new sql.Request(tx).input("Id", sql.Int, idJenis);
   if (kodeKategori === "barangjadi") {
     const r = await rq.query(`SELECT 1 FROM dbo.MstBarangJadi WHERE IdBJ=@Id`);
+    return r.recordset.length > 0;
+  }
+  if (kodeKategori === "barangdagang") {
+    const r = await rq.query(`SELECT 1 FROM dbo.MstBarangDagang WHERE IdBarangDagang=@Id`);
     return r.recordset.length > 0;
   }
   const r = await rq.query(`SELECT 1 FROM dbo.MstCabinetWIP WHERE IdCabinetWIP=@Id`);
@@ -169,11 +176,13 @@ exports.getDetail = async (noRetur) => {
         CASE
           WHEN it.KodeKategori = 'barangjadi' THEN mbj.NamaBJ
           WHEN it.KodeKategori = 'furniturewip' THEN mcw.Nama
+          WHEN it.KodeKategori = 'barangdagang' THEN mbd.NamaBarangDagang
         END AS NamaJenis,
         mr.NamaReject
       FROM dbo.BJReturV3Item_d it
       LEFT JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = it.IdJenis AND it.KodeKategori = 'barangjadi'
       LEFT JOIN dbo.MstCabinetWIP mcw ON mcw.IdCabinetWIP = it.IdJenis AND it.KodeKategori = 'furniturewip'
+      LEFT JOIN dbo.MstBarangDagang mbd ON mbd.IdBarangDagang = it.IdJenis AND it.KodeKategori = 'barangdagang'
       LEFT JOIN dbo.MstReject mr ON mr.IdReject = it.IdReject
       WHERE it.NoRetur = @No
       ORDER BY it.IdItem ASC
@@ -573,11 +582,13 @@ exports.addItems = async (noRetur, items, ctx) => {
         CASE
           WHEN it.KodeKategori = 'barangjadi' THEN mbj.NamaBJ
           WHEN it.KodeKategori = 'furniturewip' THEN mcw.Nama
+          WHEN it.KodeKategori = 'barangdagang' THEN mbd.NamaBarangDagang
         END AS NamaJenis,
         mr.NamaReject
       FROM dbo.BJReturV3Item_d it
       LEFT JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = it.IdJenis AND it.KodeKategori = 'barangjadi'
       LEFT JOIN dbo.MstCabinetWIP mcw ON mcw.IdCabinetWIP = it.IdJenis AND it.KodeKategori = 'furniturewip'
+      LEFT JOIN dbo.MstBarangDagang mbd ON mbd.IdBarangDagang = it.IdJenis AND it.KodeKategori = 'barangdagang'
       LEFT JOIN dbo.MstReject mr ON mr.IdReject = it.IdReject
       WHERE it.IdItem IN (
         SELECT j.id FROM OPENJSON(@IdsJson) WITH (id int '$.id') AS j
@@ -671,11 +682,13 @@ exports.updateItem = async (noRetur, idItem, payload, ctx) => {
           CASE
             WHEN it.KodeKategori = 'barangjadi' THEN mbj.NamaBJ
             WHEN it.KodeKategori = 'furniturewip' THEN mcw.Nama
+            WHEN it.KodeKategori = 'barangdagang' THEN mbd.NamaBarangDagang
           END AS NamaJenis,
           mr.NamaReject
         FROM dbo.BJReturV3Item_d it
         LEFT JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = it.IdJenis AND it.KodeKategori = 'barangjadi'
         LEFT JOIN dbo.MstCabinetWIP mcw ON mcw.IdCabinetWIP = it.IdJenis AND it.KodeKategori = 'furniturewip'
+        LEFT JOIN dbo.MstBarangDagang mbd ON mbd.IdBarangDagang = it.IdJenis AND it.KodeKategori = 'barangdagang'
         LEFT JOIN dbo.MstReject mr ON mr.IdReject = it.IdReject
         WHERE it.IdItem = @Id
       `);
@@ -988,6 +1001,9 @@ exports.generateLabel = async (noRetur, idItem, body, ctx) => {
   if (item.KodeKategori === "furniturewip") {
     return generateFurnitureWipLabel(no, idItemNum, ctx);
   }
+  if (item.KodeKategori === "barangdagang") {
+    return generateBarangDagangLabel(no, idItemNum, ctx);
+  }
   throw badReq(`KodeKategori ${item.KodeKategori} tidak didukung`);
 };
 
@@ -1009,22 +1025,23 @@ exports.getOutputs = async (noRetur) => {
     .input("No", sql.VarChar(50), no).query(`
       SELECT
         it.GeneratedLabelCode AS LabelCode,
-        COALESCE(bj.DateCreate, fw.DateCreate, r.DateCreate) AS DateCreate,
-        COALESCE(mbj.NamaBJ, mcw.Nama, mr.NamaReject) AS NamaJenis,
+        COALESCE(bj.DateCreate, fw.DateCreate, CAST(bd.CreatedAt AS date), r.DateCreate) AS DateCreate,
+        COALESCE(mbj.NamaBJ, mcw.Nama, mbd.NamaBarangDagang, mr.NamaReject) AS NamaJenis,
         CASE WHEN it.KategoriInput = 'REJECT' THEN N'reject' ELSE it.KodeKategori END AS KodeKategori,
         CASE
           WHEN it.KategoriInput = 'REJECT' THEN N'Reject'
           WHEN it.KodeKategori = 'barangjadi' THEN N'Barang Jadi'
+          WHEN it.KodeKategori = 'barangdagang' THEN N'Barang Dagang'
           ELSE N'Furniture WIP'
         END AS Kategori,
         CASE WHEN it.KategoriInput = 'REJECT' THEN N'kg' ELSE N'pcs' END AS Uom,
-        COALESCE(bj.Blok, fw.Blok, r.Blok) AS Blok,
-        COALESCE(bj.IdLokasi, fw.IdLokasi, r.IdLokasi) AS IdLokasi,
+        COALESCE(bj.Blok, fw.Blok, bd.Blok, r.Blok) AS Blok,
+        COALESCE(bj.IdLokasi, fw.IdLokasi, bd.IdLokasi, r.IdLokasi) AS IdLokasi,
         CASE
           WHEN it.KategoriInput = 'REJECT' THEN ISNULL(r.Berat, 0)
-          ELSE ISNULL(COALESCE(bj.Pcs, fw.Pcs), 0)
+          ELSE ISNULL(COALESCE(bj.Pcs, fw.Pcs, bd.Qty), 0)
         END AS Qty,
-        ISNULL(CAST(COALESCE(bj.HasBeenPrinted, fw.HasBeenPrinted, r.HasBeenPrinted) AS int), 0) AS HasBeenPrinted
+        ISNULL(CAST(COALESCE(bj.HasBeenPrinted, fw.HasBeenPrinted, bd.HasBeenPrinted, r.HasBeenPrinted) AS int), 0) AS HasBeenPrinted
       FROM dbo.BJReturV3Item_d it
       LEFT JOIN dbo.BarangJadi bj
         ON bj.NoBJ = it.GeneratedLabelCode AND it.KodeKategori = 'barangjadi' AND it.KategoriInput = 'BAGUS'
@@ -1032,6 +1049,9 @@ exports.getOutputs = async (noRetur) => {
       LEFT JOIN dbo.FurnitureWIP fw
         ON fw.NoFurnitureWIP = it.GeneratedLabelCode AND it.KodeKategori = 'furniturewip' AND it.KategoriInput = 'BAGUS'
       LEFT JOIN dbo.MstCabinetWIP mcw ON mcw.IdCabinetWIP = fw.IDFurnitureWIP
+      LEFT JOIN dbo.BarangDagang bd
+        ON bd.NoBarangDagang = it.GeneratedLabelCode AND it.KodeKategori = 'barangdagang' AND it.KategoriInput = 'BAGUS'
+      LEFT JOIN dbo.MstBarangDagang mbd ON mbd.IdBarangDagang = bd.IdBarangDagang
       LEFT JOIN dbo.RejectV2 r
         ON r.NoReject = it.GeneratedLabelCode AND it.KategoriInput = 'REJECT'
       LEFT JOIN dbo.MstReject mr ON mr.IdReject = r.IdReject
@@ -1048,8 +1068,8 @@ exports.getOutputs = async (noRetur) => {
 // target pcs = it.Pcs. Tidak ada tabel target pengganti terpisah.
 // ---------------------------------------------------------------------------
 
-// Auto-detect: deteksi kategori+jenis label yang discan (cek BarangJadi lalu
-// FurnitureWIP), lalu cari item retur yang KodeKategori+IdJenis-nya cocok dan
+// Auto-detect: deteksi kategori+jenis label yang discan (cek BarangJadi,
+// FurnitureWIP, lalu BarangDagang), lalu cari item retur yang KodeKategori+IdJenis-nya cocok dan
 // masih punya sisa (Pcs - ScannedPcs > 0). Kalau ada beberapa item yang
 // cocok, pilih IdItem paling kecil (ditambahkan paling awal) supaya
 // deterministik.
@@ -1102,6 +1122,17 @@ exports.scanTurnoverAuto = async (noRetur, labelCode, ctx, options = {}) => {
       if (fwRes.recordset.length > 0) {
         kodeKategori = "furniturewip";
         label = fwRes.recordset[0];
+      } else {
+        const bdRes = await new sql.Request(tx).input("Code", sql.VarChar(50), code)
+          .query(`
+            SELECT NoBarangDagang AS Code, IdBarangDagang AS IdJenis, ISNULL(Qty, 0) AS Pcs, DateUsage
+            FROM dbo.BarangDagang WITH (UPDLOCK, HOLDLOCK)
+            WHERE NoBarangDagang = @Code
+          `);
+        if (bdRes.recordset.length > 0) {
+          kodeKategori = "barangdagang";
+          label = bdRes.recordset[0];
+        }
       }
     }
 
@@ -1337,10 +1368,12 @@ exports.getTurnover = async (noRetur) => {
         CASE
           WHEN it.KodeKategori = 'barangjadi' THEN mbj.NamaBJ
           WHEN it.KodeKategori = 'furniturewip' THEN mcw.Nama
+          WHEN it.KodeKategori = 'barangdagang' THEN mbd.NamaBarangDagang
         END AS NamaJenis
       FROM dbo.BJReturV3Item_d it
       LEFT JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = it.IdJenis AND it.KodeKategori = 'barangjadi'
       LEFT JOIN dbo.MstCabinetWIP mcw ON mcw.IdCabinetWIP = it.IdJenis AND it.KodeKategori = 'furniturewip'
+      LEFT JOIN dbo.MstBarangDagang mbd ON mbd.IdBarangDagang = it.IdJenis AND it.KodeKategori = 'barangdagang'
       WHERE it.NoRetur=@No
       ORDER BY it.IdItem ASC
     `);

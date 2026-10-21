@@ -7,9 +7,9 @@ const pdfMake = require("pdfmake/build/pdfmake");
 const pdfFonts = require("pdfmake/build/vfs_fonts");
 pdfMake.vfs = pdfFonts;
 
-// Barang Jadi: Rekap per Jenis diurutkan berdasarkan nama Jenis (ASC).
+// Barang Jadi & Barang Dagang: Rekap per Jenis diurutkan berdasarkan nama Jenis (ASC).
 function sortJenisBarangJadi(rows, categoryName) {
-  if (!/barang\s*jadi/i.test(categoryName || "")) return rows;
+  if (!/barang\s*(jadi|dagang)/i.test(categoryName || "")) return rows;
   return [...rows].sort((a, b) =>
     String(a.typeName ?? "").localeCompare(String(b.typeName ?? ""), "id", {
       numeric: true,
@@ -231,6 +231,9 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
   }
 
   // === REKAP PER JENIS ===
+  // Rekap per Jenis: Barang Jadi → Pcs, Barang Dagang → Qty (bukan berat).
+  const jenisPcsMetric = isPcsMetric || summary.categoryCode === "barangjadi";
+  const jenisUnitH = summary.categoryCode === "barangdagang" ? "Qty" : jenisPcsMetric ? "Pcs" : "Berat";
   const perJenis = sortJenisBarangJadi(summary.perJenis || [], summary.categoryName);
   if (perJenis.length > 0) {
     content.push({ text: "Rekap per Jenis", style: "h2" });
@@ -244,14 +247,14 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
             { text: "Label", style: "hdrCellC" },
             { text: "Ditemukan", style: "hdrCellC" },
             { text: "Selisih", style: "hdrCellC" },
-            { text: unitH, style: "hdrCellR" },
+            { text: jenisUnitH, style: "hdrCellR" },
           ],
           ...perJenis.map((r) => [
             { text: r.typeName || `Jenis #${r.typeId ?? "-"}`, style: "cell" },
             { text: fmtNum(r.labelCount), style: "cellC" },
             { text: fmtNum(r.scannedCount), style: "cellC" },
             { text: fmtNum(r.unscannedCount), style: r.unscannedCount > 0 ? "cellRedR" : "cellC" },
-            { text: qtyText(r, isPcsMetric, dig, unitLabel), style: "cellR" },
+            { text: qtyText(r, jenisPcsMetric, jenisPcsMetric ? 0 : dig, summary.categoryCode === "barangdagang" ? "" : jenisPcsMetric ? "pcs" : unitLabel), style: "cellR" },
           ]),
         ],
       },

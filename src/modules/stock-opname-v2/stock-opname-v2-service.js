@@ -2376,6 +2376,10 @@ async function getLaporanStockOpnameData({
   const showWeight = !isPcsMetric(categoryCode);
   const pcsCol = pcsMetricColumn(categoryCode);
   const metricColumn = showWeight ? "Berat" : pcsCol;
+  // Rekap per Jenis Barang Jadi (Pcs) & Barang Dagang (Qty) tidak memakai berat.
+  const jenisUsePcs =
+    categoryCode === "barangjadi" || categoryCode === "barangdagang";
+  const jenisPcsCol = categoryCode === "barangjadi" ? "Pcs" : pcsCol;
   const scannedMatchSql = [
     "h.NoSO = src.NoSO",
     ...cfg.labelColumns.map((col) => `h.${col} = src.${col}`),
@@ -2425,6 +2429,7 @@ async function getLaporanStockOpnameData({
         src.${cfg.jenisColumn} AS typeId,
         COUNT(*) AS labelCount,
         ${showWeight ? "ROUND(SUM(ISNULL(src.Berat, 0)), 2) AS totalWeight," : `ROUND(SUM(ISNULL(src.${pcsCol}, 0)), 0) AS totalPcs,`}
+        ${jenisUsePcs ? `ROUND(SUM(ISNULL(src.${jenisPcsCol}, 0)), 0) AS jenisPcs,` : ""}
         SUM(CASE WHEN h.${cfg.labelColumns[0]} IS NOT NULL THEN 1 ELSE 0 END) AS scannedCount
       FROM dbo.${cfg.snapshotTable} AS src
       LEFT JOIN dbo.${cfg.hasilTable} AS h ON ${scannedMatchSql}
@@ -2546,9 +2551,11 @@ async function getLaporanStockOpnameData({
       labelCount: row.labelCount,
       scannedCount: row.scannedCount,
       unscannedCount: row.labelCount - row.scannedCount,
-      ...(showWeight
-        ? { totalWeight: row.totalWeight }
-        : { totalPcs: row.totalPcs }),
+      ...(jenisUsePcs
+        ? { totalPcs: row.jenisPcs ?? 0 }
+        : showWeight
+          ? { totalWeight: row.totalWeight }
+          : { totalPcs: row.totalPcs }),
     })),
     perBlok: (blokRows || [])
       .map((row) => ({
