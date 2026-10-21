@@ -74,3 +74,28 @@ describe("stock opname v2 pdfmake report", () => {
     expect(table.body[2].map((c) => c.text)).toEqual(["", "TOTAL", "2", "15"]);
   });
 });
+
+describe("versi accounting: scan di lokasi berbeda", () => {
+  it("merangkum salah lokasi per jenis", () => {
+    const doc = buildReportDoc({
+      versi: "accounting",
+      summary: baseSummary("washing", "Washing"),
+      scanSummary: { data: [] },
+      unscannedLabels: { totalRecords: 0, data: [] },
+      locationMatch: {
+        mismatchCount: 3,
+        mismatches: [
+          { labelNo: "W.1", typeName: "B", weight: 2 },
+          { labelNo: "W.2", typeName: "A", weight: 3 },
+          { labelNo: "W.3", typeName: "B", weight: 4.5 },
+        ],
+      },
+    });
+    const i = doc.content.findIndex((c) => c.text === "Scan di Lokasi Berbeda");
+    const table = doc.content.slice(i + 1).find((c) => c.table).table;
+    expect(table.body[0].map((c) => c.text)).toEqual(["No", "Jenis", "Jumlah Label", "Sum(Berat)"]);
+    expect(table.body[1].map((c) => c.text)).toEqual(["1", "A", "1", "3,00"]);
+    expect(table.body[2].map((c) => c.text)).toEqual(["2", "B", "2", "6,50"]);
+    expect(table.body[3].map((c) => c.text)).toEqual(["", "TOTAL", "3", "9,50"]);
+  });
+});

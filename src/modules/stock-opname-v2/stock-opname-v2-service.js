@@ -2686,7 +2686,8 @@ async function getLaporanStockOpnamePdf({ stockOpnameNo, versi = "stock" }) {
       stockOpnameNo,
       includeLabelDate: true,
       unscannedDetailLimit: PDF_UNSCANNED_DETAIL_LIMIT,
-      mismatchDetailLimit: PDF_MISMATCH_DETAIL_LIMIT,
+      // Versi accounting merangkum per Jenis, jadi semua baris salah lokasi dibutuhkan.
+      mismatchDetailLimit: versi === "accounting" ? null : PDF_MISMATCH_DETAIL_LIMIT,
     });
 
   return generatePdfPdfmake({ summary, scanSummary, unscannedLabels, locationMatch, versi });
