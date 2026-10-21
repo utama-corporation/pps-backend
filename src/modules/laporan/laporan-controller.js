@@ -151,6 +151,28 @@ async function rekapProduksiPdf(req, res) {
   }
 }
 
+async function mutasiPdf(req, res) {
+  const jenis = String(req.params.jenis || '').trim();
+  const { tglAwal, tglAkhir } = req.query;
+  try {
+    const buffer = await service.getMutasiPdf({
+      jenis,
+      tglAwal,
+      tglAkhir,
+      username: req.username,
+    });
+    const safeJenis = jenis.replace(/[^A-Za-z0-9_-]+/g, '-') || 'mutasi';
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="Laporan-Mutasi-${safeJenis}-${tglAwal}_${tglAkhir}.pdf"`,
+    );
+    return res.send(Buffer.from(buffer));
+  } catch (error) {
+    return fail(res, error, `mutasi ${jenis} pdf`);
+  }
+}
+
 async function semuaLabel(req, res) {
   try {
     const data = await service.semuaLabel();
@@ -234,6 +256,7 @@ module.exports = {
   stokUmum,
   stokReject,
   mutasiUmum,
+  mutasiPdf,
   umurKategori,
   produksiKategori,
   rekapProduksi,

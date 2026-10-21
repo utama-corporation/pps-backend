@@ -19,6 +19,8 @@ router.get('/bahan-baku/umur', verifyToken, ctrl.umurBahanBaku);
 router.get('/stok/:jenis', verifyToken, ctrl.stokUmum);
 router.get('/reject/stok', verifyToken, ctrl.stokReject);
 router.get('/mutasi/:jenis', verifyToken, ctrl.mutasiUmum);
+// PDF laporan mutasi (sumber data sama dengan /mutasi/:jenis, format PDF).
+router.get('/mutasi/:jenis/pdf', verifyToken, ctrl.mutasiPdf);
 router.get('/umur/:jenis', verifyToken, ctrl.umurKategori);
 router.get('/produksi/:jenis', verifyToken, ctrl.produksiKategori);
 router.get('/rekap/:jenis', verifyToken, ctrl.rekapProduksi);
