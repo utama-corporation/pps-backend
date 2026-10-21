@@ -3,6 +3,7 @@ const puppeteer = require('puppeteer');
 const { poolPromise } = require('../../core/config/db');
 const { badReq, notFound } = require('../../core/utils/http-error');
 const { buildRekapHtml, renderRekapPdf } = require('./rekap/rekap-pdf');
+const { buildMutasiHtml, renderMutasiPdf } = require('./mutasi/mutasi-pdf');
 
 function parseDate(value, label) {
   const raw = String(value ?? '').trim();
@@ -138,6 +139,7 @@ async function stokReject({ tglAkhir, warehouse }) {
 const MUTASI_SP = {
   washing: 'SP_PPSLapMutasiWashing',
   broker: 'SP_PPSLapMutasiBroker',
+  bonggolan: 'SP_PPSLapMutasiBonggolan',
   crusher: 'SP_PPSLapMutasiCrusher',
   gilingan: 'SP_PPSLapMutasiGilingan',
   mixer: 'SP_PPSLapMutasiMixer',
@@ -155,6 +157,49 @@ async function mutasiUmum(jenis, { tglAwal, tglAkhir }) {
     { name: 'StartDate', type: sql.Date, value: start },
     { name: 'EndDate', type: sql.Date, value: end },
   ]);
+}
+
+/**
+ * Data mutasi + daftar kolom (dibutuhkan PDF supaya header tetap tampil
+ * walau tidak ada baris data).
+ */
+async function getMutasiResult(jenis, { tglAwal, tglAkhir }) {
+  const sp = MUTASI_SP[jenis];
+  if (!sp) throw notFound(`Laporan mutasi '${jenis}' tidak dikenal`);
+  const start = parseDate(tglAwal, 'Tanggal awal');
+  const end = parseDate(tglAkhir, 'Tanggal akhir');
+
+  const pool = await poolPromise;
+  const result = await pool
+    .request()
+    .input('StartDate', sql.Date, start)
+    .input('EndDate', sql.Date, end)
+    .execute(sp);
+
+  const keys =
+    result.recordset && result.recordset.length
+      ? Object.keys(result.recordset[0])
+      : [];
+  const rows = (result.recordset || []).map((row) => {
+    const out = {};
+    for (const key of keys) out[key] = normalizeValue(row[key]);
+    return out;
+  });
+
+  return { keys, rows, tglAwal: start, tglAkhir: end };
+}
+
+async function getMutasiPdf({ jenis, tglAwal, tglAkhir, username }) {
+  const key = String(jenis ?? '').trim();
+  const data = await getMutasiResult(key, { tglAwal, tglAkhir });
+  const html = buildMutasiHtml({
+    jenis: key,
+    tglAwal: data.tglAwal,
+    tglAkhir: data.tglAkhir,
+    keys: data.keys,
+    rows: data.rows,
+  });
+  return renderMutasiPdf({ html, username });
 }
 
 const PENERIMAAN_QUERY = `
@@ -773,6 +818,8 @@ module.exports = {
   produksiKategori,
   rekapProduksi,
   getRekapProduksiPdf,
+  getMutasiPdf,
+  getMutasiResult,
   semuaLabel,
   dashboardProduktifitas,
   hasilProduksi,
