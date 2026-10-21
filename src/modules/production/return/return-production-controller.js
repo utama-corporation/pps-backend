@@ -1,5 +1,6 @@
 // controllers/return-production-controller.js
 const returnService = require('./return-production-service');
+const outputService = require('./return-production-output-service');
 
 
 
@@ -109,6 +110,7 @@ async function createReturn(req, res) {
       invoice: (b.invoice ?? '').toString().trim() || null, // optional
       idPembeli: toInt(b.idPembeli), // required
       noBJSortir: (b.noBJSortir ?? '').toString().trim() || null, // optional
+      idWarehouse: toInt(b.idWarehouse), // optional
       idUsername: toInt(b.idUsername) ?? idUsername, // optional, only used if you store it
       _actor: username,
     };
@@ -341,6 +343,7 @@ async function getAllOutputsByNoRetur(req, res) {
       totalData: result.total,
       totalFurnitureWip: result.totalFurnitureWip,
       totalBarangJadi: result.totalBarangJadi,
+      totalBarangDagang: result.totalBarangDagang,
 
       data: result.data,
     });
@@ -354,7 +357,72 @@ async function getAllOutputsByNoRetur(req, res) {
   }
 }
 
+function sendError(res, tag, error) {
+  console.error(tag, error);
+  const status = error.statusCode || error.status || 500;
+  return res.status(status).json({
+    success: false,
+    message: status === 500 ? 'Internal Server Error' : error.message,
+    ...(status === 500 && { error: error.message }),
+  });
+}
+
+async function getReturnDetail(req, res) {
+  try {
+    const data = await outputService.getReturnDetail(req.params.noRetur);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    return sendError(res, '[return.getReturnDetail]', error);
+  }
+}
+
+async function getOutputsBarangDagangByNoRetur(req, res) {
+  try {
+    const data = await returnService.fetchOutputsBarangDagang(
+      String(req.params.noRetur || '').trim(),
+    );
+    return res.status(200).json({ success: true, totalData: data.length, data });
+  } catch (error) {
+    return sendError(res, '[return.getOutputsBarangDagang]', error);
+  }
+}
+
+async function addOutputs(req, res) {
+  try {
+    const username = req.username || req.user?.username || 'system';
+    const result = await outputService.addOutputs(
+      req.params.noRetur,
+      req.body?.items,
+      username,
+    );
+    return res.status(201).json({
+      success: true,
+      message: `${result.created.length} label berhasil dibuat`,
+      data: result,
+    });
+  } catch (error) {
+    return sendError(res, '[return.addOutputs]', error);
+  }
+}
+
+async function deleteOutput(req, res) {
+  try {
+    await outputService.deleteOutput(
+      req.params.noRetur,
+      req.params.kodeKategori,
+      req.params.labelCode,
+    );
+    return res.status(200).json({ success: true, message: 'Label dihapus' });
+  } catch (error) {
+    return sendError(res, '[return.deleteOutput]', error);
+  }
+}
+
 module.exports = {
+  getReturnDetail,
+  getOutputsBarangDagangByNoRetur,
+  addOutputs,
+  deleteOutput,
   getAllReturns,
   getReturnsByDate,
   createReturn,

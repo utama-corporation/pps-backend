@@ -198,7 +198,8 @@ async function createReturn(payload) {
       .input("Invoice", sql.VarChar(50), payload.invoice) // adjust length if needed
       .input("Tanggal", sql.Date, effectiveDate)
       .input("IdPembeli", sql.Int, payload.idPembeli)
-      .input("NoBJSortir", sql.VarChar(50), payload.noBJSortir);
+      .input("NoBJSortir", sql.VarChar(50), payload.noBJSortir)
+      .input("IdWarehouse", sql.Int, payload.idWarehouse ?? null);
 
     // If your table has IdUsername, uncomment:
     // rqIns.input('IdUsername', sql.Int, payload.idUsername);
@@ -209,7 +210,8 @@ async function createReturn(payload) {
         Invoice,
         Tanggal,
         IdPembeli,
-        NoBJSortir
+        NoBJSortir,
+        idWarehouse
         -- ,IdUsername
       )
       OUTPUT INSERTED.*
@@ -218,7 +220,8 @@ async function createReturn(payload) {
         @Invoice,
         @Tanggal,
         @IdPembeli,
-        @NoBJSortir
+        @NoBJSortir,
+        @IdWarehouse
         -- ,@IdUsername
       );
     `;
@@ -412,17 +415,19 @@ async function deleteReturn(noRetur) {
     const chkRes = await rqChk.query(`
       SELECT
         (SELECT COUNT(1) FROM dbo.BJReturBarangJadi_d WITH (NOLOCK) WHERE NoRetur = @NoRetur) AS CntBJ,
-        (SELECT COUNT(1) FROM dbo.BJReturFurnitureWIP_d WITH (NOLOCK) WHERE NoRetur = @NoRetur) AS CntFWIP;
+        (SELECT COUNT(1) FROM dbo.BJReturFurnitureWIP_d WITH (NOLOCK) WHERE NoRetur = @NoRetur) AS CntFWIP,
+        (SELECT COUNT(1) FROM dbo.BJReturBarangDagang_d WITH (NOLOCK) WHERE NoRetur = @NoRetur) AS CntBD;
     `);
 
-    const row = chkRes.recordset?.[0] || { CntBJ: 0, CntFWIP: 0 };
+    const row = chkRes.recordset?.[0] || { CntBJ: 0, CntFWIP: 0, CntBD: 0 };
     const cntBJ = Number(row.CntBJ || 0);
     const cntFWIP = Number(row.CntFWIP || 0);
+    const cntBD = Number(row.CntBD || 0);
 
-    if (cntBJ > 0 || cntFWIP > 0) {
+    if (cntBJ > 0 || cntFWIP > 0 || cntBD > 0) {
       throw badReq(
         `Tidak dapat menghapus NoRetur ini karena masih memiliki detail input: ` +
-          `Barang Jadi=${cntBJ}, FurnitureWIP=${cntFWIP}. ` +
+          `Barang Jadi=${cntBJ}, FurnitureWIP=${cntFWIP}, Barang Dagang=${cntBD}. ` +
           `Hapus detailnya terlebih dahulu.`,
       );
     }
@@ -886,10 +891,41 @@ async function fetchOutputsBarangJadi(noRetur) {
   }));
 }
 
+async function fetchOutputsBarangDagang(noRetur) {
+  const pool = await poolPromise;
+  const rs = await pool.request().input("noRetur", sql.VarChar(50), noRetur).query(`
+    SELECT
+      d.NoRetur,
+      d.NoBarangDagang,
+      bd.NoBarangDagang AS LabelCode,
+      bd.CreatedAt AS DateCreate,
+      mbd.NamaBarangDagang AS NamaJenis,
+      N'barangdagang' AS KodeKategori,
+      N'Barang Dagang' AS Kategori,
+      N'pcs' AS Uom,
+      bd.Blok,
+      bd.IdLokasi,
+      ISNULL(bd.Qty, 0) AS Qty,
+      ISNULL(bd.HasBeenPrinted, 0) AS HasBeenPrinted
+    FROM dbo.BJReturBarangDagang_d d WITH (NOLOCK)
+    LEFT JOIN dbo.BarangDagang bd WITH (NOLOCK)
+      ON bd.NoBarangDagang = d.NoBarangDagang
+    LEFT JOIN dbo.MstBarangDagang mbd WITH (NOLOCK)
+      ON mbd.IdBarangDagang = bd.IdBarangDagang
+    WHERE d.NoRetur = @noRetur
+    ORDER BY bd.NoBarangDagang DESC;
+  `);
+  return (rs.recordset || []).map((r) => ({
+    ...r,
+    ...(r.DateCreate && { DateCreate: formatDate(r.DateCreate) }),
+  }));
+}
+
 async function fetchAllOutputs(noRetur) {
-  const [furnitureWip, barangJadi] = await Promise.all([
+  const [furnitureWip, barangJadi, barangDagang] = await Promise.all([
     fetchOutputsFurnitureWip(noRetur),
     fetchOutputsBarangJadi(noRetur),
+    fetchOutputsBarangDagang(noRetur),
   ]);
 
   const data = [
@@ -903,12 +939,18 @@ async function fetchAllOutputs(noRetur) {
       kategori: "barang-jadi",
       noOutput: r.NoBJ,
     })),
+    ...barangDagang.map((r) => ({
+      ...r,
+      kategori: "barang-dagang",
+      noOutput: r.NoBarangDagang,
+    })),
   ];
 
   return {
     data,
     totalFurnitureWip: furnitureWip.length,
     totalBarangJadi: barangJadi.length,
+    totalBarangDagang: barangDagang.length,
     total: data.length,
   };
 }
@@ -922,6 +964,7 @@ module.exports = {
   deleteReturn,
   fetchOutputsFurnitureWip,
   fetchOutputsBarangJadi,
+  fetchOutputsBarangDagang,
   fetchImportAsGsuByDate,
   fetchImportAsGsuAfterDate,
   executeImportAsGsu,

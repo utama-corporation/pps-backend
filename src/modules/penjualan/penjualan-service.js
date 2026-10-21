@@ -342,8 +342,8 @@ async function getHeaders(
   const rqCount = pool.request();
   const rqData = pool.request();
 
-  rqCount.input("search", sql.VarChar(50), s);
-  rqData.input("search", sql.VarChar(50), s);
+  rqCount.input("search", sql.VarChar(200), s);
+  rqData.input("search", sql.VarChar(200), s);
 
   rqCount.input("dateFrom", sql.Date, dateFrom);
   rqCount.input("dateTo", sql.Date, dateTo);
@@ -363,7 +363,7 @@ async function getHeaders(
   const qWhere = `
     WHERE 1 = 1
       ${statusFilter}
-      AND (@search = '' OR h.NoBJJual LIKE '%' + @search + '%')
+      AND (@search = '' OR h.NoBJJual LIKE '%' + @search + '%' OR h.Remark LIKE '%' + @search + '%')
       AND (@dateFrom IS NULL OR CONVERT(date, h.Tanggal) >= @dateFrom)
       AND (@dateTo   IS NULL OR CONVERT(date, h.Tanggal) <= @dateTo)
   `;
