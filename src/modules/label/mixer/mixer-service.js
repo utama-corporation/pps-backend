@@ -12,6 +12,7 @@ const {
   generateNextCode,
 } = require("../../../core/utils/sequence-code-helper");
 const { badReq, conflict } = require("../../../core/utils/http-error");
+const { normalizeDecimalField } = require("../../../core/utils/number-utils");
 const readRepo = require("./repositories/mixer-read.repository");
 const writeRepo = require("./repositories/mixer-write.repository");
 
@@ -545,39 +546,48 @@ exports.updateMixerCascade = async (payload) => {
     }
 
     setIf("IdStatus", "IdStatus", sql.Int, header.IdStatus);
-    setIf("Moisture", "Moisture", sql.Decimal(10, 3), header.Moisture ?? null);
+    // Field QC/lokasi HANYA di-update kalau benar-benar dikirim di payload.
+    // Dulu dipakai `header.X ?? null` yang membuat `undefined` (tidak dikirim)
+    // menjadi NULL sehingga kolom ikut ter-overwrite NULL. Akibatnya penginputan
+    // QC (yang tidak mengirim Blok) mengosongkan kolom Blok, sehingga:
+    //   1) label hilang dari screen Mapping-Layout (filter `Blok = @blok`),
+    //   2) riwayat perpindahan lokasi di dbo.AuditTrail mencatat "blok dihapus".
+    // Sekarang: tidak dikirim = kolom tidak disentuh (nilai lama tetap).
+    // Kirim eksplisit null tetap mengosongkan kolom (bila memang itu mau).
+
+    setIf(
+      "Moisture",
+      "Moisture",
+      sql.Decimal(10, 3),
+      normalizeDecimalField(header.Moisture, "Moisture"),
+    );
     setIf(
       "MaxMeltTemp",
       "MaxMeltTemp",
       sql.Decimal(10, 3),
-      header.MaxMeltTemp ?? null,
+      normalizeDecimalField(header.MaxMeltTemp, "MaxMeltTemp"),
     );
     setIf(
       "MinMeltTemp",
       "MinMeltTemp",
       sql.Decimal(10, 3),
-      header.MinMeltTemp ?? null,
+      normalizeDecimalField(header.MinMeltTemp, "MinMeltTemp"),
     );
-    setIf("MFI", "MFI", sql.Decimal(10, 3), header.MFI ?? null);
+    setIf("MFI", "MFI", sql.Decimal(10, 3), normalizeDecimalField(header.MFI, "MFI"));
     setIf(
       "Moisture2",
       "Moisture2",
       sql.Decimal(10, 3),
-      header.Moisture2 ?? null,
+      normalizeDecimalField(header.Moisture2, "Moisture2"),
     );
     setIf(
       "Moisture3",
       "Moisture3",
       sql.Decimal(10, 3),
-      header.Moisture3 ?? null,
+      normalizeDecimalField(header.Moisture3, "Moisture3"),
     );
-    setIf(
-      "VisualNote",
-      "VisualNote",
-      sql.VarChar(150),
-      header.VisualNote ?? null,
-    );
-    setIf("Blok", "Blok", sql.VarChar(50), header.Blok ?? null);
+    setIf("VisualNote", "VisualNote", sql.VarChar(150), header.VisualNote);
+    setIf("Blok", "Blok", sql.VarChar(50), header.Blok);
 
     if (header.IdLokasi !== undefined) {
       setParts.push("IdLokasi = @IdLokasi");

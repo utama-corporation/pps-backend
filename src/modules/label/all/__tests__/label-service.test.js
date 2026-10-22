@@ -37,7 +37,8 @@ const { updateLabelLocation } = require("../label-service");
 //   3. isLabelInTransit -> dbo.GoodsTransferItemScan_d (IsReceived = 0)
 //   4. dbo.MstBlok  -> IdWarehouse tujuan (targetIdWarehouse)
 //   5. [BARU] dbo.MstWarehouse -> IdWarehouseGroup utk kedua warehouse
-//   6. UPDATE lokasi
+//   6. [BARU] sp_set_session_context (audit actor + requestId)
+//   7. UPDATE lokasi
 function seedCrossWarehouse({ beforeGroup, targetGroup }) {
   mQuery
     .mockResolvedValueOnce({ recordset: [{ Blok: "A1", IdLokasi: 5, Available: 1 }] })
@@ -50,6 +51,7 @@ function seedCrossWarehouse({ beforeGroup, targetGroup }) {
         { IdWarehouse: 2, IdWarehouseGroup: targetGroup },
       ],
     })
+    .mockResolvedValueOnce({ recordset: [] }) // sp_set_session_context
     .mockResolvedValueOnce({ rowsAffected: [1] });
 }
 
@@ -68,7 +70,7 @@ describe("updateLabelLocation — pengecualian lintas warehouse untuk warehouse 
 
     expect(res.success).toBe(true);
     expect(res.code).toBeUndefined();
-    expect(mQuery).toHaveBeenCalledTimes(6); // termasuk lookup grup + UPDATE
+    expect(mQuery).toHaveBeenCalledTimes(7); // termasuk lookup grup + audit context + UPDATE
   });
 
   test("tolak (CROSS_WAREHOUSE_NOT_ALLOWED) bila grup berbeda", async () => {
@@ -78,7 +80,7 @@ describe("updateLabelLocation — pengecualian lintas warehouse untuk warehouse 
 
     expect(res.success).toBe(false);
     expect(res.code).toBe("CROSS_WAREHOUSE_NOT_ALLOWED");
-    expect(mQuery).toHaveBeenCalledTimes(5); // berhenti sebelum UPDATE
+    expect(mQuery).toHaveBeenCalledTimes(5); // berhenti sebelum audit context + UPDATE
   });
 
   test("tolak bila salah satu warehouse ungrouped (IdWarehouseGroup NULL)", async () => {
@@ -105,11 +107,31 @@ describe("updateLabelLocation — pengecualian lintas warehouse untuk warehouse 
       .mockResolvedValueOnce({ recordset: [{ IdWarehouse: 1 }] })
       .mockResolvedValueOnce({ recordset: [] })
       .mockResolvedValueOnce({ recordset: [{ IdWarehouse: 1 }] }) // tujuan = warehouse yang sama
+      .mockResolvedValueOnce({ recordset: [] }) // sp_set_session_context
       .mockResolvedValueOnce({ rowsAffected: [1] }); // langsung UPDATE
 
     const res = await updateLabelLocation(...ARGS);
 
     expect(res.success).toBe(true);
-    expect(mQuery).toHaveBeenCalledTimes(5); // tidak ada query ke-6 (MstWarehouse)
+    expect(mQuery).toHaveBeenCalledTimes(6); // tidak ada query ke-6 (MstWarehouse)
+  });
+
+  test("audit context (actor + requestId) di-set sebelum UPDATE agar Actor di AuditTrail benar", async () => {
+    mQuery
+      .mockResolvedValueOnce({ recordset: [{ Blok: "A1", IdLokasi: 5, Available: 1 }] })
+      .mockResolvedValueOnce({ recordset: [{ IdWarehouse: 1 }] })
+      .mockResolvedValueOnce({ recordset: [] })
+      .mockResolvedValueOnce({ recordset: [{ IdWarehouse: 1 }] })
+      .mockResolvedValueOnce({ recordset: [] }) // sp_set_session_context
+      .mockResolvedValueOnce({ rowsAffected: [1] });
+
+    await updateLabelLocation("B.0000000001", 7, "B2", 99, "user99", "req-abc");
+
+    const sqlCalls = mQuery.mock.calls.map((c) => String(c[0]));
+    const auditIdx = sqlCalls.findIndex((s) => s.includes("sp_set_session_context"));
+    const updateIdx = sqlCalls.findIndex((s) => s.includes("UPDATE"));
+
+    expect(auditIdx).toBeGreaterThanOrEqual(0);
+    expect(updateIdx).toBeGreaterThan(auditIdx);
   });
 });

@@ -55,7 +55,7 @@ BEGIN
         CAST(i.Moisture3   AS decimal(18,3)) AS Moisture3,
         i.Blok,
         i.IdLokasi
-      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES
     )
   FROM inserted i
   LEFT JOIN deleted d ON d.NoBroker = i.NoBroker
@@ -92,7 +92,7 @@ BEGIN
         CAST(d.Moisture3   AS decimal(18,3)) AS Moisture3,
         d.Blok,
         d.IdLokasi
-      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES
     ),
     (
       SELECT
@@ -115,7 +115,7 @@ BEGIN
         CAST(i.Moisture3   AS decimal(18,3)) AS Moisture3,
         i.Blok,
         i.IdLokasi
-      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES
     )
   FROM inserted i
   JOIN deleted d ON d.NoBroker = i.NoBroker;
@@ -151,7 +151,7 @@ BEGIN
         CAST(d.Moisture3   AS decimal(18,3)) AS Moisture3,
         d.Blok,
         d.IdLokasi
-      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES
     ),
     NULL
   FROM deleted d

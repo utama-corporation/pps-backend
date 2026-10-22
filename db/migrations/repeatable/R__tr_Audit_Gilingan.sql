@@ -47,7 +47,7 @@ BEGIN
         i.DateTimeCreate,
         i.Blok,
         i.IdLokasi
-      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES
     )
   FROM inserted i
   LEFT JOIN deleted d ON d.NoGilingan = i.NoGilingan
@@ -77,7 +77,7 @@ BEGIN
         d.DateTimeCreate,
         d.Blok,
         d.IdLokasi
-      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES
     ),
     (
       SELECT
@@ -93,7 +93,7 @@ BEGIN
         i.DateTimeCreate,
         i.Blok,
         i.IdLokasi
-      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES
     )
   FROM inserted i
   JOIN deleted d ON d.NoGilingan = i.NoGilingan;
@@ -122,7 +122,7 @@ BEGIN
         d.DateTimeCreate,
         d.Blok,
         d.IdLokasi
-      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES
     ),
     NULL
   FROM deleted d

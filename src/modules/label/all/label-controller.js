@@ -1,4 +1,5 @@
 const labelService = require('./label-service');
+const { makeRequestId } = require('../../../core/utils/http-context');
 
 async function getAllLabelsHandler(req, res) {
   try {
@@ -64,8 +65,7 @@ const UPDATE_LOKASI_ERROR_STATUS = {
 async function updateLabelLocationHandler(req, res) {
   try {
     const { labelCode, idLokasi, blok } = req.body;
-    const { idUsername } = req;
-
+    const { idUsername, username } = req;
 
     // Validasi input wajib
     if (!labelCode || !idLokasi || !blok) {
@@ -75,7 +75,14 @@ async function updateLabelLocationHandler(req, res) {
       });
     }
 
-    const result = await labelService.updateLabelLocation(labelCode, idLokasi, blok, idUsername);
+    const result = await labelService.updateLabelLocation(
+      labelCode,
+      idLokasi,
+      blok,
+      idUsername,
+      username,
+      makeRequestId(req),
+    );
 
     if (!result.success) {
       const status = UPDATE_LOKASI_ERROR_STATUS[result.code] || 400;

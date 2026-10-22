@@ -48,7 +48,7 @@ BEGIN
         i.IsPartial,
         i.Blok,
         i.IdLokasi
-      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES
     )
   FROM inserted i
   LEFT JOIN deleted d ON d.NoReject = i.NoReject
@@ -78,7 +78,7 @@ BEGIN
         d.IsPartial,
         d.Blok,
         d.IdLokasi
-      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES
     ),
     (
       SELECT
@@ -94,7 +94,7 @@ BEGIN
         i.IsPartial,
         i.Blok,
         i.IdLokasi
-      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES
     )
   FROM inserted i
   JOIN deleted d ON d.NoReject = i.NoReject;
@@ -123,7 +123,7 @@ BEGIN
         d.IsPartial,
         d.Blok,
         d.IdLokasi
-      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+      FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES
     ),
     NULL
   FROM deleted d

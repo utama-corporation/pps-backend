@@ -1,5 +1,8 @@
 const { sql, poolPromise } = require("../../../core/config/db");
 const { formatDate } = require("../../../core/utils/date-helper");
+const {
+  applyAuditContext,
+} = require("../../../core/utils/db-audit-context");
 
 const KATEGORI_LABELS = {
   bahanbaku: "Bahan Baku",
@@ -774,7 +777,14 @@ function resolveLabelTable(prefix) {
   }
 }
 
-async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
+async function updateLabelLocation(
+  labelCode,
+  idLokasi,
+  blok,
+  idUsername,
+  actorUsername = null,
+  requestId = null,
+) {
   const pool = await poolPromise;
 
   // helper
@@ -1013,12 +1023,33 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
     WHERE ${labelCol} = @LabelCode
   `;
 
-  const updateRes = await pool
+  // Set audit context (actor + requestId) pada connection yang sama supaya
+  // trigger dbo.AuditTrail mencatat siapa yang memindahkan label.
+  // Tanpa ini, trigger jatuh ke SESSION_CONTEXT sisa connection pool atau
+  // SUSER_SNAME() sehingga Actor pada riwayat perpindahan lokasi bisa 'sa'
+  // atau user lain.
+  const updateReq = pool
     .request()
     .input("LabelCode", sql.NVarChar(50), labelCode)
     .input("IdLokasi", sql.Int, idLokasiInt)
-    .input("Blok", sql.NVarChar(10), blokNorm) // naikkan ke 10 jika blok >3 char
-    .query(updateQuery);
+    .input("Blok", sql.VarChar(10), blokNorm); // naikkan ke 10 jika blok >3 char
+
+  const actorIdNum = Number(idUsername);
+  if (Number.isFinite(actorIdNum) && actorIdNum > 0) {
+    try {
+      await applyAuditContext(updateReq, {
+        actorId: Math.trunc(actorIdNum),
+        actorUsername: actorUsername || null,
+        requestId: requestId || undefined,
+      });
+    } catch (err) {
+      // Audit context bersifat best-effort: jangan menggagalkan update lokasi.
+      console.error("Gagal set audit context update lokasi:", err.message);
+    }
+  }
+
+  const updateRes = await updateReq.query(updateQuery);
+
 
   if ((updateRes.rowsAffected?.[0] || 0) === 0) {
     return {
@@ -1084,7 +1115,12 @@ async function getLabelLocationHistory(labelCode) {
         JSON_VALUE(a.OldData, '$.Blok') AS BeforeBlok,
         TRY_CONVERT(int, JSON_VALUE(a.OldData, '$.IdLokasi')) AS BeforeIdLokasi,
         JSON_VALUE(a.NewData, '$.Blok') AS AfterBlok,
-        TRY_CONVERT(int, JSON_VALUE(a.NewData, '$.IdLokasi')) AS AfterIdLokasi
+        TRY_CONVERT(int, JSON_VALUE(a.NewData, '$.IdLokasi')) AS AfterIdLokasi,
+        --_key Blok tidak ada_ = nilai Blok TIDAK dilaporkan pada event tsb.
+        -- (SQL Server: FOR JSON PATH tanpa INCLUDE_NULL_VALUES menghapus key null)
+        -- Ini yang membuat entry QC lama tampak "blok dihapus" padahal tidak.
+        CASE WHEN JSON_PATH_EXISTS(a.OldData, '$.Blok') = 1 THEN 1 ELSE 0 END AS BeforeHasBlok,
+        CASE WHEN JSON_PATH_EXISTS(a.NewData, '$.Blok') = 1 THEN 1 ELSE 0 END AS AfterHasBlok
       FROM dbo.AuditTrail a
       LEFT JOIN dbo.MstUsername u ON u.IdUsername = TRY_CONVERT(int, a.Actor)
       WHERE a.TableName = @TableName
@@ -1093,22 +1129,38 @@ async function getLabelLocationHistory(labelCode) {
       ORDER BY a.EventTime ASC, a.AuditId ASC
     `);
 
-  const history = (result.recordset || [])
-    .filter(
-      (r) =>
-        (r.BeforeBlok ?? null) !== (r.AfterBlok ?? null) ||
-        (r.BeforeIdLokasi ?? null) !== (r.AfterIdLokasi ?? null),
-    )
-    .map((r) => ({
+  // Carry-forward: kalau key "Blok" tidak ada di JSON (Blok = NULL saat event
+  // itu tercatat), nilai Blok dianggap "tidak dilaporkan" → memakai nilai
+  // Blok terakhir yang diketahui, bukan dianggap blok dihapus.
+  // Efeknya: entry hasil bug update-QC (yang mengosongkan Blok) tidak lagi
+  // muncul sebagai perpindahan lokasi palsu.
+  let lastBlok = null;
+  const history = [];
+  for (const r of result.recordset || []) {
+    const beforeBlok = r.BeforeHasBlok ? (r.BeforeBlok ?? null) : lastBlok;
+    // key tidak ada → Blok tidak berubah pada event ini
+    const afterBlok = r.AfterHasBlok ? (r.AfterBlok ?? null) : beforeBlok;
+    lastBlok = afterBlok;
+
+    const beforeIdLokasi = r.BeforeIdLokasi ?? null;
+    const afterIdLokasi = r.AfterIdLokasi ?? null;
+
+    // Skip event yang tidak benar-benar memindahkan label.
+    if (beforeBlok === afterBlok && beforeIdLokasi === afterIdLokasi) {
+      continue;
+    }
+
+    history.push({
       eventTime: r.EventTime,
       actorId: r.Actor,
       actorUsername: r.ActorUsername || null,
       requestId: r.RequestId,
-      beforeBlok: r.BeforeBlok,
-      beforeIdLokasi: r.BeforeIdLokasi,
-      afterBlok: r.AfterBlok,
-      afterIdLokasi: r.AfterIdLokasi,
-    }));
+      beforeBlok,
+      beforeIdLokasi,
+      afterBlok,
+      afterIdLokasi,
+    });
+  }
 
   return {
     success: true,

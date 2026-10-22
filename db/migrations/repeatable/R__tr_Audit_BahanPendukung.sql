@@ -34,7 +34,7 @@ BEGIN
             CAST(i.QtyAwal AS decimal(18,3)) AS QtyAwal, i.Keterangan,
             i.IsPartial, i.DateUsage, i.CreateBy, i.CreatedAt,
             i.Blok, i.IdLokasi, i.HasBeenPrinted
-     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES)
   FROM inserted i
   LEFT JOIN deleted d ON d.NoBahanPendukung = i.NoBahanPendukung
   WHERE d.NoBahanPendukung IS NULL;
@@ -49,13 +49,13 @@ BEGIN
             CAST(d.QtyAwal AS decimal(18,3)) AS QtyAwal, d.Keterangan,
             d.IsPartial, d.DateUsage, d.CreateBy, d.CreatedAt,
             d.Blok, d.IdLokasi, d.HasBeenPrinted
-     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES),
     (SELECT i.NoBahanPendukung, i.IdSupplier, i.IdCabinetMaterial,
             CAST(i.Qty AS decimal(18,3)) AS Qty,
             CAST(i.QtyAwal AS decimal(18,3)) AS QtyAwal, i.Keterangan,
             i.IsPartial, i.DateUsage, i.CreateBy, i.CreatedAt,
             i.Blok, i.IdLokasi, i.HasBeenPrinted
-     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES)
   FROM inserted i
   JOIN deleted d ON d.NoBahanPendukung = i.NoBahanPendukung;
 
@@ -69,7 +69,7 @@ BEGIN
             CAST(d.QtyAwal AS decimal(18,3)) AS QtyAwal, d.Keterangan,
             d.IsPartial, d.DateUsage, d.CreateBy, d.CreatedAt,
             d.Blok, d.IdLokasi, d.HasBeenPrinted
-     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES),
     NULL
   FROM deleted d
   LEFT JOIN inserted i ON i.NoBahanPendukung = d.NoBahanPendukung
