@@ -1,115 +1,101 @@
 const { buildReportDoc } = require("../report-pdfmake");
 
+const baseSummary = (categoryCode, categoryName) => ({
+  stockOpnameNo: "SO.0000000010",
+  categoryCode,
+  categoryName,
+  date: new Date("2026-09-01T00:00:00.000Z"),
+  total: { labelCount: 10, scannedCount: 7, unscannedCount: 3, totalWeight: 100, totalPcs: 100 },
+  perJenis: [],
+  perBlok: [],
+});
+
+function unscannedTable(doc) {
+  const titleIndex = doc.content.findIndex((item) => item.text === "Label Belum Ditemukan");
+  return doc.content.slice(titleIndex + 1).find((item) => item.table)?.table;
+}
+
 describe("stock opname v2 pdfmake report", () => {
-  it("lists unscanned labels per label with the same columns as the location mismatch table", () => {
+  it("versi stock tetap mencetak daftar per label", () => {
     const doc = buildReportDoc({
-      summary: {
-        stockOpnameNo: "SO.0000000010",
-        categoryCode: "washing",
-        categoryName: "Washing",
-        date: new Date("2026-09-01T00:00:00.000Z"),
-        total: {
-          labelCount: 10,
-          scannedCount: 7,
-          unscannedCount: 3,
-          totalWeight: 100,
-        },
-        perJenis: [],
-        perBlok: [],
-      },
+      summary: baseSummary("washing", "Washing"),
+      scanSummary: { data: [] },
+      unscannedLabels: { totalRecords: 1, totalUnscannedWeight: 5, data: [{ labelNo: "W.1", blok: "A", locationId: "L01", typeName: "A", weight: 5 }] },
+      locationMatch: { mismatches: [], mismatchCount: 0 },
+    });
+    const table = unscannedTable(doc);
+    expect(table.body[0].map((c) => c.text)).toEqual(["No. Label / Tgl", "Jenis", "Tercatat", "Berat"]);
+    expect(table.body[2][0].text).toBe("TOTAL (1 label)");
+  });
+
+  it("summarizes unscanned labels per jenis (weight categories)", () => {
+    const doc = buildReportDoc({
+      versi: "accounting",
+      summary: baseSummary("washing", "Washing"),
       scanSummary: { data: [] },
       unscannedLabels: {
         totalRecords: 3,
         totalUnscannedWeight: 30,
-        data: [
-          {
-            labelNo: "W.1",
-            labelDate: new Date("2026-08-01T00:00:00.000Z"),
-            blok: "A",
-            locationId: "L01",
-            typeId: 1,
-            typeName: "A",
-            weight: 10,
-          },
-          {
-            labelNo: "W.2",
-            labelDate: null,
-            blok: "B",
-            locationId: "L02",
-            typeId: 2,
-            typeName: "B",
-            weight: 5,
-          },
+        data: [],
+        groups: [
+          { typeId: 2, typeName: "B", labelCount: 1, totalWeight: 5 },
+          { typeId: 1, typeName: "A", labelCount: 2, totalWeight: 25 },
         ],
       },
       locationMatch: { mismatches: [], mismatchCount: 0 },
     });
 
-    const titleIndex = doc.content.findIndex(
-      (item) => item.text === "Label Belum Ditemukan",
-    );
-    const table = doc.content
-      .slice(titleIndex + 1)
-      .find((item) => item.table)?.table;
-
-    expect(table.body[0]).toEqual([
-      { text: "No. Label / Tgl", style: "hdrCell" },
-      { text: "Jenis", style: "hdrCell" },
-      { text: "Tercatat", style: "hdrCellC" },
-      { text: "Berat", style: "hdrCellR" },
-    ]);
-    expect(table.body).toHaveLength(4);
-    expect(table.body[2]).toEqual([
-      { text: "W.2", style: "cell" },
-      { text: "B", style: "cell" },
-      { text: "BL02", style: "cellC" },
-      { text: "5,00", style: "cellR" },
-    ]);
-    expect(table.body[3]).toEqual([
-      { text: "TOTAL (3 label)", style: "cell" },
-      { text: "", style: "cell" },
-      { text: "", style: "cellC" },
-      { text: "30,00", style: "cellR" },
-    ]);
+    const table = unscannedTable(doc);
+    expect(table.body[0].map((c) => c.text)).toEqual(["No", "Jenis", "Jumlah Label", "Sum(Berat)"]);
+    expect(table.body[1].map((c) => c.text)).toEqual(["1", "A", "2", "25,00"]);
+    expect(table.body[2].map((c) => c.text)).toEqual(["2", "B", "1", "5,00"]);
+    expect(table.body[3].map((c) => c.text)).toEqual(["", "TOTAL", "3", "30,00"]);
   });
 
-  it("notes how many unscanned labels were omitted when detail rows are limited", () => {
-    const data = Array.from({ length: 3 }, (_, i) => ({
-      labelNo: `W.${i}`,
-      labelDate: null,
-      blok: "A",
-      locationId: `L0${i}`,
-      typeName: "A",
-      weight: 1,
-    }));
-
+  it("uses Sum(Pcs) for pcs categories and falls back to detail rows", () => {
     const doc = buildReportDoc({
-      summary: {
-        stockOpnameNo: "SO.0000000010",
-        categoryCode: "washing",
-        categoryName: "Washing",
-        date: new Date("2026-09-01T00:00:00.000Z"),
-        total: {
-          labelCount: 10,
-          scannedCount: 7,
-          unscannedCount: 3,
-          totalWeight: 100,
-        },
-        perJenis: [],
-        perBlok: [],
-      },
+      versi: "accounting",
+      summary: baseSummary("barangjadi", "Barang Jadi"),
       scanSummary: { data: [] },
       unscannedLabels: {
-        totalRecords: 10,
-        totalUnscannedWeight: 40,
-        data,
+        totalRecords: 2,
+        totalUnscannedPcs: 15,
+        data: [
+          { labelNo: "BJ.1", typeName: "X", pcs: 10 },
+          { labelNo: "BJ.2", typeName: "X", pcs: 5 },
+        ],
       },
       locationMatch: { mismatches: [], mismatchCount: 0 },
     });
 
-    const note = doc.content.find((item) =>
-      String(item.text || "").startsWith("Menampilkan"),
-    );
-    expect(note.text).toBe("Menampilkan 3 dari 10 label belum ditemukan.");
+    const table = unscannedTable(doc);
+    expect(table.body[0][3].text).toBe("Sum(Pcs)");
+    expect(table.body[1].map((c) => c.text)).toEqual(["1", "X", "2", "15"]);
+    expect(table.body[2].map((c) => c.text)).toEqual(["", "TOTAL", "2", "15"]);
+  });
+});
+
+describe("versi accounting: scan di lokasi berbeda", () => {
+  it("merangkum salah lokasi per jenis", () => {
+    const doc = buildReportDoc({
+      versi: "accounting",
+      summary: baseSummary("washing", "Washing"),
+      scanSummary: { data: [] },
+      unscannedLabels: { totalRecords: 0, data: [] },
+      locationMatch: {
+        mismatchCount: 3,
+        mismatches: [
+          { labelNo: "W.1", typeName: "B", weight: 2 },
+          { labelNo: "W.2", typeName: "A", weight: 3 },
+          { labelNo: "W.3", typeName: "B", weight: 4.5 },
+        ],
+      },
+    });
+    const i = doc.content.findIndex((c) => c.text === "Scan di Lokasi Berbeda");
+    const table = doc.content.slice(i + 1).find((c) => c.table).table;
+    expect(table.body[0].map((c) => c.text)).toEqual(["No", "Jenis", "Jumlah Label", "Sum(Berat)"]);
+    expect(table.body[1].map((c) => c.text)).toEqual(["1", "A", "1", "3,00"]);
+    expect(table.body[2].map((c) => c.text)).toEqual(["2", "B", "2", "6,50"]);
+    expect(table.body[3].map((c) => c.text)).toEqual(["", "TOTAL", "3", "9,50"]);
   });
 });

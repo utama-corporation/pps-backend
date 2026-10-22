@@ -2680,16 +2680,17 @@ async function getLaporanStockOpnameHtml({ stockOpnameNo }) {
   });
 }
 
-async function getLaporanStockOpnamePdf({ stockOpnameNo }) {
+async function getLaporanStockOpnamePdf({ stockOpnameNo, versi = "stock" }) {
   const { summary, scanSummary, unscannedLabels, locationMatch } =
     await getLaporanStockOpnameData({
       stockOpnameNo,
       includeLabelDate: true,
       unscannedDetailLimit: PDF_UNSCANNED_DETAIL_LIMIT,
-      mismatchDetailLimit: PDF_MISMATCH_DETAIL_LIMIT,
+      // Versi accounting merangkum per Jenis, jadi semua baris salah lokasi dibutuhkan.
+      mismatchDetailLimit: versi === "accounting" ? null : PDF_MISMATCH_DETAIL_LIMIT,
     });
 
-  return generatePdfPdfmake({ summary, scanSummary, unscannedLabels, locationMatch });
+  return generatePdfPdfmake({ summary, scanSummary, unscannedLabels, locationMatch, versi });
 }
 
 async function deleteStockOpname({ stockOpnameNo, ctx }) {

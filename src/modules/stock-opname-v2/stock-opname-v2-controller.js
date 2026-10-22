@@ -624,6 +624,7 @@ async function getLaporanPdfHandler(req, res) {
   try {
     const pdfBuffer = await stockOpnameV2Service.getLaporanStockOpnamePdf({
       stockOpnameNo,
+      versi: req.query.versi === "accounting" ? "accounting" : "stock",
     });
 
     res.setHeader("Content-Type", "application/pdf");

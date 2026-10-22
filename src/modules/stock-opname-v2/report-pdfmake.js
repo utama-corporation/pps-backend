@@ -92,7 +92,50 @@ function tblLayout(hideHeaderLine) {
   };
 }
 
-function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }) {
+// Label belum ditemukan dirangkum per Jenis (No, Jenis, Jumlah Label, Sum Pcs/Berat).
+// Memakai hasil GROUP BY dari service; kalau tidak ada, dihitung dari baris detail.
+function unscannedGroupRows(unscannedLabels, isPcsMetric) {
+  const metricOf = (r) =>
+    Number((isPcsMetric ? (r.totalPcs ?? r.pcs) : (r.totalWeight ?? r.weight)) ?? 0);
+  let rows;
+  if (Array.isArray(unscannedLabels?.groups) && unscannedLabels.groups.length > 0) {
+    rows = unscannedLabels.groups.map((g) => ({
+      typeName: g.typeName || `Jenis #${g.typeId ?? "-"}`,
+      labelCount: Number(g.labelCount) || 0,
+      metric: metricOf(g),
+    }));
+  } else {
+    const byType = new Map();
+    for (const r of unscannedLabels?.data || []) {
+      const key = r.typeName || `Jenis #${r.typeId ?? "-"}`;
+      const cur = byType.get(key) || { typeName: key, labelCount: 0, metric: 0 };
+      cur.labelCount += 1;
+      cur.metric += metricOf(r);
+      byType.set(key, cur);
+    }
+    rows = [...byType.values()];
+  }
+  return rows.sort((a, b) =>
+    a.typeName.localeCompare(b.typeName, "id", { numeric: true, sensitivity: "base" }),
+  );
+}
+
+// Salah lokasi dirangkum per Jenis dari baris detail (versi accounting).
+function mismatchGroupRows(mismatches, isPcsMetric) {
+  const byType = new Map();
+  for (const r of mismatches) {
+    const key = r.typeName || "-";
+    const cur = byType.get(key) || { typeName: key, labelCount: 0, metric: 0 };
+    cur.labelCount += 1;
+    cur.metric += Number((isPcsMetric ? r.pcs : r.weight) ?? 0);
+    byType.set(key, cur);
+  }
+  return [...byType.values()].sort((a, b) =>
+    a.typeName.localeCompare(b.typeName, "id", { numeric: true, sensitivity: "base" }),
+  );
+}
+
+function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch, versi = "stock" }) {
   const no = summary.stockOpnameNo;
   const cat = summary.categoryName;
   const tgl = summary.date;
@@ -142,28 +185,66 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
       style: "callout",
     });
 
-    const printedUnscanned = unscannedData.slice(0, MAX_UNSCANNED_ROWS_PRINTED);
+    if (versi !== "accounting") {
+      const printedUnscanned = unscannedData.slice(0, MAX_UNSCANNED_ROWS_PRINTED);
+      content.push({
+        table: {
+          headerRows: 1,
+          widths: ["auto", "*", "auto", "auto"],
+          body: [
+            [
+              { text: "No. Label / Tgl", style: "hdrCell" },
+              { text: "Jenis", style: "hdrCell" },
+              { text: "Tercatat", style: "hdrCellC" },
+              { text: unitH, style: "hdrCellR" },
+            ],
+            ...printedUnscanned.map((r) => [
+              labelCell(r),
+              { text: r.typeName || "-", style: "cell" },
+              { text: locLabel(r.blok, r.locationId), style: "cellC" },
+              { text: fmtNum(isPcsMetric ? (r.pcs ?? 0) : (r.weight ?? 0), dig), style: "cellR" },
+            ]),
+            [
+              { text: `TOTAL (${fmtNum(unscannedTotalRecords)} label)`, style: "cell" },
+              { text: "", style: "cell" },
+              { text: "", style: "cellC" },
+              { text: fmtNum(unscanned, dig), style: "cellR" },
+            ],
+          ],
+        },
+        layout: tblLayout(true),
+        style: "summaryTbl",
+      });
+
+      if (unscannedTotalRecords > printedUnscanned.length) {
+        content.push({
+          text: `Menampilkan ${fmtNum(printedUnscanned.length)} dari ${fmtNum(unscannedTotalRecords)} label belum ditemukan.`,
+          style: "note",
+        });
+      }
+    } else {
+    const groups = unscannedGroupRows(unscannedLabels, isPcsMetric);
     content.push({
       table: {
         headerRows: 1,
         widths: ["auto", "*", "auto", "auto"],
         body: [
           [
-            { text: "No. Label / Tgl", style: "hdrCell" },
+            { text: "No", style: "hdrCellC" },
             { text: "Jenis", style: "hdrCell" },
-            { text: "Tercatat", style: "hdrCellC" },
-            { text: unitH, style: "hdrCellR" },
+            { text: "Jumlah Label", style: "hdrCellC" },
+            { text: isPcsMetric ? "Sum(Pcs)" : "Sum(Berat)", style: "hdrCellR" },
           ],
-          ...printedUnscanned.map((r) => [
-            labelCell(r),
-            { text: r.typeName || "-", style: "cell" },
-            { text: locLabel(r.blok, r.locationId), style: "cellC" },
-            { text: fmtNum(isPcsMetric ? (r.pcs ?? 0) : (r.weight ?? 0), dig), style: "cellR" },
+          ...groups.map((g, i) => [
+            { text: String(i + 1), style: "cellC" },
+            { text: g.typeName, style: "cell" },
+            { text: fmtNum(g.labelCount), style: "cellC" },
+            { text: fmtNum(g.metric, dig), style: "cellR" },
           ]),
           [
-            { text: `TOTAL (${fmtNum(unscannedTotalRecords)} label)`, style: "cell" },
             { text: "", style: "cell" },
-            { text: "", style: "cellC" },
+            { text: "TOTAL", style: "cell" },
+            { text: fmtNum(unscannedTotalRecords), style: "cellC" },
             { text: fmtNum(unscanned, dig), style: "cellR" },
           ],
         ],
@@ -171,12 +252,6 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
       layout: tblLayout(true),
       style: "summaryTbl",
     });
-
-    if (unscannedTotalRecords > printedUnscanned.length) {
-      content.push({
-        text: `Menampilkan ${fmtNum(printedUnscanned.length)} dari ${fmtNum(unscannedTotalRecords)} label belum ditemukan.`,
-        style: "note",
-      });
     }
   } else {
     content.push({ text: "Label Belum Ditemukan", style: "h2" });
@@ -192,6 +267,38 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
       text: `${fmtNum(mismatchTotal)} label discan di lokasi berbeda dari catatan sistem.`,
       style: "callout",
     });
+    if (versi === "accounting") {
+      const groups = mismatchGroupRows(mismatches, isPcsMetric);
+      const groupMetric = groups.reduce((sum, g) => sum + g.metric, 0);
+      content.push({
+        table: {
+          headerRows: 1,
+          widths: ["auto", "*", "auto", "auto"],
+          body: [
+            [
+              { text: "No", style: "hdrCellC" },
+              { text: "Jenis", style: "hdrCell" },
+              { text: "Jumlah Label", style: "hdrCellC" },
+              { text: isPcsMetric ? "Sum(Pcs)" : "Sum(Berat)", style: "hdrCellR" },
+            ],
+            ...groups.map((g, i) => [
+              { text: String(i + 1), style: "cellC" },
+              { text: g.typeName, style: "cell" },
+              { text: fmtNum(g.labelCount), style: "cellC" },
+              { text: fmtNum(g.metric, dig), style: "cellR" },
+            ]),
+            [
+              { text: "", style: "cell" },
+              { text: "TOTAL", style: "cell" },
+              { text: fmtNum(mismatches.length), style: "cellC" },
+              { text: fmtNum(groupMetric, dig), style: "cellR" },
+            ],
+          ],
+        },
+        layout: tblLayout(true),
+        style: "summaryTbl",
+      });
+    } else {
     const rows = mismatches;
     content.push({
       table: {
@@ -226,6 +333,7 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
         text: `Menampilkan ${fmtNum(mismatches.length)} dari ${fmtNum(mismatchTotal)} label salah lokasi.`,
         style: "note",
       });
+    }
     }
   } else {
     content.push({ text: "Seluruh label discan sesuai lokasi tercatat.", style: "callout" });
@@ -344,8 +452,8 @@ function buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch }
   };
 }
 
-async function generatePdf({ summary, scanSummary, unscannedLabels, locationMatch }) {
-  const docDef = buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch });
+async function generatePdf({ summary, scanSummary, unscannedLabels, locationMatch, versi }) {
+  const docDef = buildReportDoc({ summary, scanSummary, unscannedLabels, locationMatch, versi });
   const pdfDoc = pdfMake.createPdf(docDef);
   const buffer = await pdfDoc.getBuffer();
   return Buffer.from(buffer);

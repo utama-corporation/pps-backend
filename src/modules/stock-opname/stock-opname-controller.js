@@ -20,7 +20,7 @@ async function noStockOpnameHandler(req, res) {
   );
 
   try {
-    const { page = 1, limit = 10, isAscend, search = "" } = req.query;
+    const { page = 1, limit = 10, isAscend, search = "", prefix = "" } = req.query;
     const pageNum = parseInt(page, 10);
     const limitNum = parseInt(limit, 10);
     const isAscendFilter =
@@ -31,6 +31,7 @@ async function noStockOpnameHandler(req, res) {
       limitNum,
       isAscendFilter,
       search,
+      prefix,
     );
     res.json(data);
   } catch (error) {
@@ -380,3 +381,70 @@ module.exports = {
   fetchQtyUsageHandler,
   deleteStockOpnameHasilAscendHandler,
 };
+
+// ===== Stock Opname Ascend: buat header & laporan =====
+const {
+  getAscendOptions,
+  createAscendHeader,
+  getAscendReportData,
+} = require("./stock-opname-ascend-service");
+const {
+  generateLaporanStockOpnameAscendPdf,
+} = require("./laporan-stock-opname-ascend-pdf");
+const {
+  getActorId,
+  getActorUsername,
+  makeRequestId,
+} = require("../../core/utils/http-context");
+
+function ascendFail(res, error, ctx) {
+  const statusCode = error.statusCode || 500;
+  console.error(`Error ${ctx} SO Ascend:`, error);
+  return res.status(statusCode).json({
+    success: false,
+    message: statusCode === 500 ? "Internal Server Error" : error.message,
+  });
+}
+
+async function ascendOptionsHandler(req, res) {
+  try {
+    const data = await getAscendOptions();
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    return ascendFail(res, error, "options");
+  }
+}
+
+async function createAscendHandler(req, res) {
+  try {
+    const data = await createAscendHeader(req.body, {
+      actorId: getActorId(req),
+      actorUsername: getActorUsername(req),
+      requestId: makeRequestId(req),
+    });
+    return res
+      .status(201)
+      .json({ success: true, message: "Stock Opname Ascend berhasil dibuat", data });
+  } catch (error) {
+    return ascendFail(res, error, "create");
+  }
+}
+
+async function ascendReportPdfHandler(req, res) {
+  try {
+    const data = await getAscendReportData(req.params.noso);
+    const pdf = await generateLaporanStockOpnameAscendPdf(data, { user: req.username });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="Laporan SO Ascend ${data.noSO}.pdf"`,
+    );
+    return res.status(200).send(pdf);
+  } catch (error) {
+    return ascendFail(res, error, "report");
+  }
+}
+
+module.exports.ascendOptionsHandler = ascendOptionsHandler;
+module.exports.createAscendHandler = createAscendHandler;
+module.exports.ascendReportPdfHandler = ascendReportPdfHandler;
