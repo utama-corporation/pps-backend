@@ -646,7 +646,8 @@ async function stokBarangDagang({ tglAkhir, warehouse }) {
   ]);
 
   // SP tidak mengurangi pemakaian partial: Qty parent tidak berkurang saat
-  // dipartial, sisa = Qty − SUM(BarangDagangPartial.Qty).
+  // dipartial, sisa = Qty − SUM(BarangDagangPartial.Qty). 
+  //untuktestpush
   const partial = await runQuery(`
     SELECT NoBarangDagang, SUM(ISNULL(Qty, 0)) AS TotalPartialQty
     FROM [dbo].[BarangDagangPartial]
