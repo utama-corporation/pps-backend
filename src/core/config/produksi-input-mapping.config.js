@@ -237,6 +237,12 @@ const INPUT_CONFIGS = {
       mappingTable: "CrusherProduksiInputBonggolan",
       dateUsageColumn: "DateUsage",
     },
+    mixer: {
+      sourceTable: "Mixer_d",
+      keys: ["NoMixer", "NoSak"],
+      mappingTable: "CrusherProduksiInputMixer",
+      dateUsageColumn: "DateUsage",
+    },
     reject: {
       sourceTable: "RejectV2",
       keys: ["NoReject"],

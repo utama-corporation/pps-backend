@@ -569,6 +569,8 @@ const MODULE_CONFIG = {
       "CrusherProduksiInputBB",
       "CrusherProduksiInputBBPartial",
       "CrusherProduksiInputBonggolan",
+      "CrusherProduksiInputMixer",
+      "CrusherProduksiInputMixerPartial",
       "CrusherProduksiInputReject",
       "CrusherProduksiInputRejectPartial",
     ],

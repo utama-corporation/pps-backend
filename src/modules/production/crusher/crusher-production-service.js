@@ -1027,6 +1027,52 @@ async function deleteCrusherProduksi(noCrusherProduksi, ctx) {
       JOIN @RejectKeys k ON k.NoReject = r.NoReject;
 
       ---------------------------------------------------------
+      -- 2c. MIXER (FULL + PARTIAL)
+      ---------------------------------------------------------
+      DECLARE @MixerKeys TABLE (
+        NoMixer varchar(50),
+        NoSak   int
+      );
+
+      INSERT INTO @MixerKeys (NoMixer, NoSak)
+      SELECT DISTINCT im.NoMixer, im.NoSak
+      FROM dbo.CrusherProduksiInputMixer im
+      WHERE im.NoCrusherProduksi = @NoCrusherProduksi;
+
+      INSERT INTO @MixerKeys (NoMixer, NoSak)
+      SELECT DISTINCT mdet.NoMixer, mdet.NoSak
+      FROM dbo.CrusherProduksiInputMixerPartial mp
+      JOIN dbo.MixerPartial mdet ON mdet.NoMixerPartial = mp.NoMixerPartial
+      WHERE mp.NoCrusherProduksi = @NoCrusherProduksi
+        AND NOT EXISTS (
+          SELECT 1 FROM @MixerKeys k
+          WHERE k.NoMixer = mdet.NoMixer AND k.NoSak = mdet.NoSak
+        );
+
+      -- delete partial rows
+      DELETE bp
+      FROM dbo.MixerPartial bp
+      JOIN dbo.CrusherProduksiInputMixerPartial mp
+        ON mp.NoMixerPartial = bp.NoMixerPartial
+      WHERE mp.NoCrusherProduksi = @NoCrusherProduksi;
+
+      DELETE FROM dbo.CrusherProduksiInputMixerPartial
+      WHERE NoCrusherProduksi = @NoCrusherProduksi;
+
+      DELETE FROM dbo.CrusherProduksiInputMixer
+      WHERE NoCrusherProduksi = @NoCrusherProduksi;
+
+      -- reset source Mixer_d
+      UPDATE m
+      SET m.DateUsage = NULL,
+          m.IsPartial = CASE
+            WHEN EXISTS (SELECT 1 FROM dbo.MixerPartial mp2 WHERE mp2.NoMixer = m.NoMixer AND mp2.NoSak = m.NoSak)
+            THEN 1 ELSE 0 END
+      FROM dbo.Mixer_d m
+      JOIN @MixerKeys k
+        ON k.NoMixer = m.NoMixer AND k.NoSak = m.NoSak;
+
+      ---------------------------------------------------------
       -- 3. DELETE HEADER (TRIGGER AUDIT AKAN JALAN)
       ---------------------------------------------------------
       DELETE FROM dbo.CrusherProduksi_h
@@ -1232,6 +1278,29 @@ async function fetchInputs(noCrusherProduksi) {
 
     UNION ALL
 
+    /* Mixer (sak-based) - jenis dari MstMixer */
+    SELECT
+      'mixer' AS Src,
+      im.NoCrusherProduksi,
+      im.NoMixer AS Ref1,
+      im.NoSak AS Ref2,
+      CAST(NULL AS varchar(50)) AS Ref3,
+      md.Berat AS Berat,
+      CAST(NULL AS decimal(18,3)) AS BeratAct,
+      CAST(NULL AS bit) AS IsPartial,
+      mh.IdMixer AS IdJenis,
+      mm.Jenis AS NamaJenis
+    FROM dbo.CrusherProduksiInputMixer im WITH (NOLOCK)
+    LEFT JOIN dbo.Mixer_d md WITH (NOLOCK)
+      ON md.NoMixer = im.NoMixer AND md.NoSak = im.NoSak
+    LEFT JOIN dbo.Mixer_h mh WITH (NOLOCK)
+      ON mh.NoMixer = im.NoMixer
+    LEFT JOIN dbo.MstMixer mm WITH (NOLOCK)
+      ON mm.IdMixer = mh.IdMixer
+    WHERE im.NoCrusherProduksi = @no
+
+    UNION ALL
+
     /* Reject (full only) — jenis dari MstReject */
     SELECT
       'reject' AS Src,
@@ -1275,6 +1344,24 @@ async function fetchInputs(noCrusherProduksi) {
     WHERE pmap.NoCrusherProduksi = @no
     ORDER BY pmap.NoBBPartial DESC;
 
+    /* Mixer partial - jenis mixer */
+    SELECT
+      mmap.NoMixerPartial,
+      mdet.NoMixer,
+      mdet.NoSak,
+      mdet.Berat,
+      mh.IdMixer AS IdJenis,
+      mm.Jenis AS NamaJenis
+    FROM dbo.CrusherProduksiInputMixerPartial mmap WITH (NOLOCK)
+    LEFT JOIN dbo.MixerPartial mdet WITH (NOLOCK)
+      ON mdet.NoMixerPartial = mmap.NoMixerPartial
+    LEFT JOIN dbo.Mixer_h mh WITH (NOLOCK)
+      ON mh.NoMixer = mdet.NoMixer
+    LEFT JOIN dbo.MstMixer mm WITH (NOLOCK)
+      ON mm.IdMixer = mh.IdMixer
+    WHERE mmap.NoCrusherProduksi = @no
+    ORDER BY mmap.NoMixerPartial DESC;
+
     /* Reject partial → jenis reject */
     SELECT
       rmap.NoRejectPartial,
@@ -1297,15 +1384,18 @@ async function fetchInputs(noCrusherProduksi) {
 
   const mainRows = rs.recordsets?.[0] || [];
   const bbPart = rs.recordsets?.[1] || [];
-  const rejPart = rs.recordsets?.[2] || [];
+  const mixPart = rs.recordsets?.[2] || [];
+  const rejPart = rs.recordsets?.[3] || [];
 
   const out = {
     bb: [],
     bonggolan: [],
+    mixer: [],
     reject: [],
     summary: {
       bb: 0,
       bonggolan: 0,
+      mixer: 0,
       reject: 0,
     },
   };
@@ -1335,6 +1425,13 @@ async function fetchInputs(noCrusherProduksi) {
           ...base,
         });
         break;
+      case "mixer":
+        out.mixer.push({
+          noMixer: r.Ref1,
+          noSak: r.Ref2,
+          ...base,
+        });
+        break;
       case "reject":
         out.reject.push({
           noReject: r.Ref1,
@@ -1357,6 +1454,17 @@ async function fetchInputs(noCrusherProduksi) {
     });
   }
 
+  for (const p of mixPart) {
+    out.mixer.push({
+      noMixerPartial: p.NoMixerPartial,
+      noMixer: p.NoMixer ?? null,
+      noSak: p.NoSak ?? null,
+      berat: p.Berat ?? null,
+      idJenis: p.IdJenis ?? null,
+      namaJenis: p.NamaJenis ?? null,
+    });
+  }
+
   for (const p of rejPart) {
     out.reject.push({
       noRejectPartial: p.NoRejectPartial,
@@ -1370,6 +1478,7 @@ async function fetchInputs(noCrusherProduksi) {
   // Summary
   out.summary.bb = out.bb.length;
   out.summary.bonggolan = out.bonggolan.length;
+  out.summary.mixer = out.mixer.length;
   out.summary.reject = out.reject.length;
 
   return out;
@@ -1645,9 +1754,48 @@ async function validateLabel(labelCode) {
       `;
       return await run(raw);
 
+    // =========================
+    // H. Mixer_d
+    // =========================
+    case "H.": {
+      tableName = "Mixer_d";
+      query = `
+      ;WITH PartialSum AS (
+        SELECT
+            mp.NoMixer,
+            mp.NoSak,
+            SUM(ISNULL(mp.Berat, 0)) AS BeratPartial
+        FROM dbo.MixerPartial AS mp WITH (NOLOCK)
+        GROUP BY mp.NoMixer, mp.NoSak
+      )
+      SELECT
+          d.NoMixer                       AS noMixer,
+          d.NoSak                         AS noSak,
+          CAST(d.Berat - ISNULL(ps.BeratPartial, 0) AS DECIMAL(18,2)) AS berat,
+          d.DateUsage                     AS dateUsage,
+          CASE WHEN ISNULL(ps.BeratPartial, 0) > 0 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS isPartial,
+          d.IdLokasi                      AS idLokasi,
+          h.IdMixer                       AS idJenis,
+          mm.Jenis                        AS namaJenis
+      FROM dbo.Mixer_d AS d WITH (NOLOCK)
+      LEFT JOIN PartialSum AS ps
+        ON ps.NoMixer = d.NoMixer
+      AND ps.NoSak   = d.NoSak
+      LEFT JOIN dbo.Mixer_h AS h WITH (NOLOCK)
+        ON h.NoMixer = d.NoMixer
+      LEFT JOIN dbo.MstMixer AS mm WITH (NOLOCK)
+        ON mm.IdMixer = h.IdMixer
+      WHERE d.NoMixer = @labelCode
+        AND d.DateUsage IS NULL
+        AND (d.Berat - ISNULL(ps.BeratPartial, 0)) > 0
+      ORDER BY d.NoMixer, d.NoSak;
+      `;
+      return await run(raw);
+    }
+
     default:
       throw new Error(
-        `Invalid prefix: ${prefix}. Crusher production only supports A. (Bahan Baku), M. (Bonggolan) and BF. (Reject)`,
+        `Invalid prefix: ${prefix}. Crusher production only supports A. (Bahan Baku), M. (Bonggolan), H. (Mixer) and BF. (Reject)`,
       );
   }
 }
