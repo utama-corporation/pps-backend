@@ -18,6 +18,10 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
       b.IdBarangDagang,
       md.NamaBarangDagang,
       b.Qty,
+      CASE WHEN b.IsPartial = 1
+           THEN CASE WHEN ISNULL(b.Qty, 0) - ISNULL(pt.TotalPartialQty, 0) < 0 THEN 0
+                     ELSE ISNULL(b.Qty, 0) - ISNULL(pt.TotalPartialQty, 0) END
+           ELSE b.Qty END AS QtySisa,
       b.Keterangan,
       b.IsPartial,
       CASE WHEN b.DateUsage IS NULL THEN CAST(0 AS bit) ELSE CAST(1 AS bit) END AS Used,
@@ -29,6 +33,11 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
     LEFT JOIN [dbo].[MstSupplier] sup ON sup.IdSupplier = b.IdSupplier
     LEFT JOIN [dbo].[MstBarangDagang] md ON md.IdBarangDagang = b.IdBarangDagang
     LEFT JOIN [dbo].[PenerimaanBarangDagang_d] d ON d.NoBarangDagang = b.NoBarangDagang
+    OUTER APPLY (
+      SELECT SUM(ISNULL(p.Qty, 0)) AS TotalPartialQty
+      FROM dbo.BarangDagangPartial p
+      WHERE p.NoBarangDagang = b.NoBarangDagang
+    ) pt
     WHERE 1=1
       ${dateUsageFilter}
       ${

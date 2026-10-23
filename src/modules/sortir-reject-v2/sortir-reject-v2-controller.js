@@ -157,6 +157,27 @@ function getLaporanQuery(req) {
   };
 }
 
+const LAPORAN_COLUMN_LABELS = {
+  Tanggal: "Tanggal",
+  GroupInput: "Group Input",
+  GroupOutput: "Group Output",
+  JenisInput: "Jenis Input",
+  JenisOutput: "Jenis Output",
+  JlhInput: "Qty Input",
+  JumlahInput: "Qty Input",
+  JumlahOutput: "Qty Output",
+  KategoriInput: "Kategori Input",
+  KategoriOutput: "Kategori Output",
+};
+
+function toLaporanColumns(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  return Object.keys(rows[0]).map((key) => ({
+    key,
+    label: LAPORAN_COLUMN_LABELS[key] || key,
+  }));
+}
+
 async function getLaporan(req, res) {
   try {
     const params = getLaporanQuery(req);
@@ -171,6 +192,9 @@ async function getLaporan(req, res) {
       },
       total: rows.length,
       data: rows,
+      columns: toLaporanColumns(rows),
+      rows,
+      totalRows: rows.length,
     });
   } catch (e) {
     return res

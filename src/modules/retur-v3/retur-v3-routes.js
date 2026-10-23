@@ -26,7 +26,7 @@ router.delete("/:noRetur/items/:idItem", ctrl.deleteItem);
 // Keputusan diganti/tidak-diganti adalah wewenang Sales (retur:decide),
 // terpisah dari retur:update yang dipegang Admin — lihat doc comment
 // ReturV3DetailScreen di frontend untuk pembagian peran lengkap.
-router.patch("/:noRetur/decision", ctrl.decide);
+router.patch("/:noRetur/decision", requirePermission("retur:decide"), ctrl.decide);
 router.post("/:noRetur/export-gsu", ctrl.exportGsu);
 
 router.post("/:noRetur/items/:idItem/generate-label", ctrl.generateLabel);

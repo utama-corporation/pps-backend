@@ -9,6 +9,9 @@ const ctrl = require("./broker-controller");
 router.use(verifyToken, attachPermissions, requirePermission("laporan:read"));
 
 
+// GET /api/laporan/broker/stok-qc?tglAkhir=YYYY-MM-DD
+router.get("/stok-qc", ctrl.stokBrokerQcDataHandler);
+
 // GET /api/laporan/broker/stok-qc/pdf?tglAkhir=YYYY-MM-DD
 router.get(
   "/stok-qc/pdf",

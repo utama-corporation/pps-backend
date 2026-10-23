@@ -91,10 +91,40 @@ describe("decide transition guard", () => {
     mockQuery
       .mockResolvedValueOnce({ recordset: [] }) // audit context
       .mockResolvedValueOnce({ recordset: [{ StatusRetur: "PENDING" }] }) // header select
-      .mockResolvedValueOnce({ recordset: [{ cnt: 0 }] }); // item count
+      .mockResolvedValueOnce({ recordset: [] }); // item ids
 
     await expect(
       service.decide("RV.0000000001", "DIGANTI", {}, ctx),
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("rejects per-item decision with invalid value or duplicate idItem", async () => {
+    await expect(
+      service.decide("RV.0000000001", undefined, { items: [{ idItem: 1, decision: "MAYBE" }] }, ctx),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    await expect(
+      service.decide(
+        "RV.0000000001",
+        undefined,
+        { items: [{ idItem: 1, decision: "DIGANTI" }, { idItem: 1, decision: "TIDAK_DIGANTI" }] },
+        ctx,
+      ),
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("rejects per-item decision when some items are not decided", async () => {
+    mockQuery
+      .mockResolvedValueOnce({ recordset: [] }) // audit context
+      .mockResolvedValueOnce({ recordset: [{ StatusRetur: "PENDING" }] }) // header select
+      .mockResolvedValueOnce({ recordset: [{ IdItem: 1 }, { IdItem: 2 }] }); // item ids
+
+    await expect(
+      service.decide(
+        "RV.0000000001",
+        undefined,
+        { items: [{ idItem: 1, decision: "DIGANTI" }] },
+        ctx,
+      ),
     ).rejects.toMatchObject({ statusCode: 400 });
   });
 });

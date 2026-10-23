@@ -8,6 +8,9 @@ const ctrl = require("./barangjadi-controller");
 
 router.use(verifyToken, attachPermissions, requirePermission("laporan:read"));
 
+// GET /api/laporan/barang-jadi/stok-v2?tglAkhir=YYYY-MM-DD
+router.get("/stok-v2", ctrl.stokBarangJadiV2DataHandler);
+
 // GET /api/laporan/barang-jadi/stok-v2/pdf?tglAkhir=YYYY-MM-DD
 router.get("/stok-v2/pdf", verifyToken, ctrl.stokBarangJadiV2PdfHandler);
 
