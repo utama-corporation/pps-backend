@@ -49,7 +49,8 @@ BEGIN
                 i.KategoriInput,
                 i.Berat,
                 i.IdReject,
-                i.GeneratedLabelCode
+                i.GeneratedLabelCode,
+                i.Decision
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         )
     FROM inserted i
@@ -76,7 +77,8 @@ BEGIN
                 d.KategoriInput,
                 d.Berat,
                 d.IdReject,
-                d.GeneratedLabelCode
+                d.GeneratedLabelCode,
+                d.Decision
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         ),
         (
@@ -89,7 +91,8 @@ BEGIN
                 i.KategoriInput,
                 i.Berat,
                 i.IdReject,
-                i.GeneratedLabelCode
+                i.GeneratedLabelCode,
+                i.Decision
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         )
     FROM inserted i
@@ -115,7 +118,8 @@ BEGIN
                 d.KategoriInput,
                 d.Berat,
                 d.IdReject,
-                d.GeneratedLabelCode
+                d.GeneratedLabelCode,
+                d.Decision
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         ),
         NULL

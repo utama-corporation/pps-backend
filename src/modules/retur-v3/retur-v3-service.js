@@ -127,7 +127,7 @@ exports.getAllRetur = async ({
       -- Target turnover = pcs item retur itu sendiri (like-for-like); hanya
       -- relevan saat DIGANTI supaya kartu non-DIGANTI tetap '-' (target = 0).
       CASE WHEN h.StatusRetur = 'DIGANTI'
-        THEN (SELECT ISNULL(SUM(it.Pcs), 0) FROM dbo.BJReturV3Item_d it WHERE it.NoRetur = h.NoRetur)
+        THEN (SELECT ISNULL(SUM(it.Pcs), 0) FROM dbo.BJReturV3Item_d it WHERE it.NoRetur = h.NoRetur AND it.Decision = 'DIGANTI')
         ELSE 0 END AS TurnoverTargetPcs,
       (SELECT ISNULL(SUM(tv.Pcs), 0) FROM dbo.BJReturV3Turnover_d tv WHERE tv.NoRetur = h.NoRetur) AS TurnoverScannedPcs,
       CASE
@@ -172,7 +172,7 @@ exports.getDetail = async (noRetur) => {
     .input("No", sql.VarChar(50), no).query(`
       SELECT
         it.IdItem, it.NoRetur, it.KodeKategori, it.IdJenis, it.Pcs,
-        it.KategoriInput, it.Berat, it.IdReject, it.GeneratedLabelCode,
+        it.KategoriInput, it.Berat, it.IdReject, it.GeneratedLabelCode, it.Decision,
         CASE
           WHEN it.KodeKategori = 'barangjadi' THEN mbj.NamaBJ
           WHEN it.KodeKategori = 'furniturewip' THEN mcw.Nama
@@ -214,7 +214,8 @@ exports.getDetail = async (noRetur) => {
       ]),
     );
     itemsWithExtra = items.map((it) => {
-      const agg = aggByItem.get(it.IdItem);
+      // Item TIDAK_DIGANTI tidak punya turnover (target 0).
+      const agg = it.Decision === "DIGANTI" ? aggByItem.get(it.IdItem) : undefined;
       return {
         ...it,
         TurnoverTargetPcs: agg?.targetPcs || 0,
@@ -782,9 +783,10 @@ async function exportToGsuInTx(tx, noRetur, actorUsername) {
       INNER JOIN dbo.BJReturV3Item_d B ON B.NoRetur = A.NoRetur
       LEFT JOIN dbo.MstBarangJadi BJ ON BJ.IdBJ = B.IdJenis AND B.KodeKategori = 'barangjadi'
       LEFT JOIN dbo.MstCabinetWIP D ON D.IdCabinetWIP = B.IdJenis AND B.KodeKategori = 'furniturewip'
+      LEFT JOIN dbo.MstBarangDagang BD ON BD.IdBarangDagang = B.IdJenis AND B.KodeKategori = 'barangdagang'
       LEFT JOIN dbo.MstPembeli E ON E.IdPembeli = A.IdPembeli
       LEFT JOIN ${GSU_TRANSIT_DB}.AR_Customers F ON F.CustomerCode = E.CustomerCode
-      INNER JOIN ${GSU_TRANSIT_DB}.IC_Items G ON G.ItemCode = COALESCE(BJ.ItemCode, D.ItemCode)
+      INNER JOIN ${GSU_TRANSIT_DB}.IC_Items G ON G.ItemCode = COALESCE(BJ.ItemCode, D.ItemCode, BD.ItemCode)
       WHERE A.NoRetur = @No
     `);
   const rows = dataRes.recordset || [];
@@ -907,10 +909,28 @@ exports.exportToGsu = async (noRetur, body = {}, ctx) => {
 // DECISION
 // ---------------------------------------------------------------------------
 
+const VALID_DECISIONS = ["DIGANTI", "TIDAK_DIGANTI"];
+
+// Keputusan per item: body.items = [{ idItem, decision }]. Body lama
+// { decision } tetap diterima dan berlaku untuk semua item retur.
 exports.decide = async (noRetur, decision, body = {}, ctx) => {
   const no = String(noRetur || "").trim();
   if (!no) throw badReq("noRetur wajib diisi");
-  if (!["DIGANTI", "TIDAK_DIGANTI"].includes(decision)) {
+
+  const perItem = Array.isArray(body.items);
+  if (perItem) {
+    if (body.items.length === 0) throw badReq("items keputusan tidak boleh kosong");
+    const seen = new Set();
+    for (const it of body.items) {
+      const id = Number(it?.idItem);
+      if (!Number.isInteger(id) || id <= 0) throw badReq("idItem tidak valid");
+      if (!VALID_DECISIONS.includes(it?.decision)) {
+        throw badReq("decision item wajib DIGANTI atau TIDAK_DIGANTI");
+      }
+      if (seen.has(id)) throw badReq(`idItem ${id} duplikat`);
+      seen.add(id);
+    }
+  } else if (!VALID_DECISIONS.includes(decision)) {
     throw badReq("decision wajib DIGANTI atau TIDAK_DIGANTI");
   }
 
@@ -933,16 +953,49 @@ exports.decide = async (noRetur, decision, body = {}, ctx) => {
       throw conflict("Header sudah diputuskan sebelumnya");
     }
 
-    const itemCountRes = await new sql.Request(tx)
+    const itemRows = await new sql.Request(tx)
       .input("No", sql.VarChar(50), no)
-      .query(`SELECT COUNT(1) AS cnt FROM dbo.BJReturV3Item_d WHERE NoRetur=@No`);
-    if (!(Number(itemCountRes.recordset[0].cnt) > 0)) {
+      .query(`SELECT IdItem FROM dbo.BJReturV3Item_d WITH (UPDLOCK,HOLDLOCK) WHERE NoRetur=@No`);
+    const dbIds = itemRows.recordset.map((r) => Number(r.IdItem));
+    if (dbIds.length === 0) {
       throw badReq("Header belum memiliki item, tidak bisa diputuskan");
     }
 
+    // Normalisasi ke satu keputusan per item; semua item retur wajib terpilih.
+    const decisionById = new Map();
+    if (perItem) {
+      for (const it of body.items) decisionById.set(Number(it.idItem), it.decision);
+      const unknown = [...decisionById.keys()].filter((id) => !dbIds.includes(id));
+      if (unknown.length > 0) {
+        throw badReq(`Item ${unknown.join(", ")} bukan bagian dari retur ${no}`);
+      }
+      const missing = dbIds.filter((id) => !decisionById.has(id));
+      if (missing.length > 0) {
+        throw badReq(`Masih ada ${missing.length} item yang belum diputuskan`);
+      }
+    } else {
+      for (const id of dbIds) decisionById.set(id, decision);
+    }
+
+    for (const [idItem, d] of decisionById) {
+      await new sql.Request(tx)
+        .input("Id", sql.Int, idItem)
+        .input("Decision", sql.VarChar(20), d)
+        .query(`
+          UPDATE dbo.BJReturV3Item_d
+          SET Decision=@Decision, DecisionAt=SYSUTCDATETIME()
+          WHERE IdItem=@Id
+        `);
+    }
+
+    // Status header diturunkan dari item: semua TIDAK_DIGANTI -> TIDAK_DIGANTI,
+    // selain itu DIGANTI (masih ada item yang harus di-turnover).
+    const allTidak = [...decisionById.values()].every((d) => d === "TIDAK_DIGANTI");
+    const headerStatus = allTidak ? "TIDAK_DIGANTI" : "DIGANTI";
+
     await new sql.Request(tx)
       .input("No", sql.VarChar(50), no)
-      .input("Status", sql.VarChar(20), decision)
+      .input("Status", sql.VarChar(20), headerStatus)
       .input("DecisionBy", sql.Int, actorId)
       .input("DecisionByUsername", sql.VarChar(100), actorUsername).query(`
         UPDATE dbo.BJReturV3_h
@@ -961,7 +1014,8 @@ exports.decide = async (noRetur, decision, body = {}, ctx) => {
     await tx.commit();
     return {
       noRetur: no,
-      statusRetur: decision,
+      statusRetur: headerStatus,
+      items: [...decisionById].map(([idItem, d]) => ({ idItem, decision: d })),
       export: exportResult,
       audit: { actorId, requestId },
     };
@@ -1157,6 +1211,7 @@ exports.scanTurnoverAuto = async (noRetur, labelCode, ctx, options = {}) => {
           ISNULL((SELECT SUM(tv.Pcs) FROM dbo.BJReturV3Turnover_d tv WHERE tv.IdItem = it.IdItem), 0) AS ScannedPcs
         FROM dbo.BJReturV3Item_d it WITH (UPDLOCK, HOLDLOCK)
         WHERE it.NoRetur = @No AND it.KodeKategori = @KodeKategori AND it.IdJenis = @IdJenis
+          AND it.Decision = 'DIGANTI'
         ORDER BY it.IdItem ASC
       `);
 
@@ -1374,7 +1429,7 @@ exports.getTurnover = async (noRetur) => {
       LEFT JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = it.IdJenis AND it.KodeKategori = 'barangjadi'
       LEFT JOIN dbo.MstCabinetWIP mcw ON mcw.IdCabinetWIP = it.IdJenis AND it.KodeKategori = 'furniturewip'
       LEFT JOIN dbo.MstBarangDagang mbd ON mbd.IdBarangDagang = it.IdJenis AND it.KodeKategori = 'barangdagang'
-      WHERE it.NoRetur=@No
+      WHERE it.NoRetur=@No AND it.Decision = 'DIGANTI'
       ORDER BY it.IdItem ASC
     `);
   const items = itemsRes.recordset || [];
@@ -1454,6 +1509,7 @@ exports.markComplete = async (noRetur, ctx) => {
           GROUP BY IdItem
         ) s ON s.IdItem = it.IdItem
         WHERE it.NoRetur = @No
+          AND it.Decision = 'DIGANTI'
           AND ISNULL(s.ScannedPcs, 0) <> it.Pcs
       `);
     if (unfulfilledRes.recordset.length > 0) {

@@ -640,10 +640,35 @@ function formatNumber(value, digits = 0) {
 async function stokBarangDagang({ tglAkhir, warehouse }) {
   const tanggal = parseDate(tglAkhir, 'Tanggal akhir');
   const wh = String(warehouse ?? 'ALL').trim() || 'ALL';
-  return runSp('dbo.SP_LapStokBarangDagang', [
+  const result = await runSp('dbo.SP_LapStokBarangDagang', [
     { name: 'TglAkhir', type: sql.Date, value: tanggal },
     { name: 'Warehouse', type: sql.VarChar(100), value: wh },
   ]);
+
+  // SP tidak mengurangi pemakaian partial: Qty parent tidak berkurang saat
+  // dipartial, sisa = Qty − SUM(BarangDagangPartial.Qty). 
+  //untuktestpush
+  const partial = await runQuery(`
+    SELECT NoBarangDagang, SUM(ISNULL(Qty, 0)) AS TotalPartialQty
+    FROM [dbo].[BarangDagangPartial]
+    GROUP BY NoBarangDagang;
+  `);
+  const partialByLabel = new Map(
+    partial.rows.map((r) => [
+      String(r.NoBarangDagang ?? '').trim(),
+      Number(r.TotalPartialQty) || 0,
+    ]),
+  );
+
+  const rows = result.rows
+    .map((row) => {
+      const used = partialByLabel.get(String(row.NoBarangDagang ?? '').trim());
+      if (!used) return row;
+      return { ...row, Qty: Math.max(0, (Number(row.Qty) || 0) ) };
+    })
+    .filter((row) => Number(row.Qty) > 0);
+
+  return { columns: result.columns, rows, totalRows: rows.length };
 }
 
 function buildStokBarangDagangHtml({ tglAkhir, warehouse, rows }) {

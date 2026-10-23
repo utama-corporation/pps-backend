@@ -42,6 +42,33 @@ async function stokBarangDagangV2PdfHandler(req, res) {
   }
 }
 
+async function stokBarangDagangV2DataHandler(req, res) {
+  const tglAkhir = String(req.query.tglAkhir || "").trim();
+  const warehouse = String(req.query.warehouse || "ALL").trim() || "ALL";
+
+  try {
+    const data = await service.getStokBarangDagangV2Crosstab({
+      tglAkhir,
+      warehouse,
+    });
+
+    return res.status(200).json({
+      success: true,
+      periode: { tglAkhir, warehouse },
+      ...data,
+    });
+  } catch (error) {
+    console.error("Error generating Stock Barang Dagang V2 JSON:", error);
+    const statusCode = error.statusCode || 500;
+    return res.status(statusCode).json({
+      success: false,
+      message: statusCode === 500 ? "Internal Server Error" : error.message,
+      ...(statusCode === 500 ? { error: error.message } : {}),
+    });
+  }
+}
+
 module.exports = {
   stokBarangDagangV2PdfHandler,
+  stokBarangDagangV2DataHandler,
 };

@@ -1171,6 +1171,7 @@ async function getLaporanPenerimaan(noPenerimaan) {
         sup.NmSupplier AS NamaSupplier,
         COALESCE(mbb.Nama, jp.Jenis) AS Jenis,
         p.NoPallet,
+        p.Tenggelam,
         CASE WHEN ISNULL(d.IsLembab, 0) = 1 THEN 'LEMBAB' ELSE 'KERING' END AS Kondisi,
         COUNT(d.NoSak) AS JumlahSak,
         SUM(ISNULL(d.BeratAct, d.Berat)) AS BeratTimbangan,
@@ -1186,7 +1187,7 @@ async function getLaporanPenerimaan(noPenerimaan) {
       LEFT JOIN dbo.MstJenisPlastik jp ON jp.IdJenisPlastik = p.IdJenisPlastik
       WHERE o.NoPenerimaan = @NoPenerimaan
       GROUP BY h.NoBahanBaku, h.DateCreate, h.NoPlat, sup.NmSupplier,
-               COALESCE(mbb.Nama, jp.Jenis), p.NoPallet, ISNULL(d.IsLembab, 0)
+               COALESCE(mbb.Nama, jp.Jenis), p.NoPallet, p.Tenggelam, ISNULL(d.IsLembab, 0)
       ORDER BY h.NoBahanBaku, p.NoPallet
     `);
   return { perPallet: rows.recordset || [] };
