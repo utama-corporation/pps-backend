@@ -95,6 +95,158 @@ async function stokBahanBaku({ tglAkhir, warehouse }) {
   ]);
 }
 
+const STOK_BAHAN_BAKU_LABELS = {
+  DateCreate: 'Tanggal',
+  NoBahanBaku: 'No. Bahan Baku',
+  NoPallet: 'No. Pallet',
+  NoSak: 'No. Sak',
+  Jenis: 'Jenis',
+  NmSupplier: 'Supplier',
+  NamaWarehouse: 'Warehouse',
+  Warehouse: 'Warehouse',
+  Blok: 'Blok',
+  IdLokasi: 'Lokasi',
+  JmlhPallet: 'Jumlah Pallet',
+  JmlhSak: 'Jumlah Sak',
+  Berat: 'Berat (Kg)',
+  Qty: 'Qty',
+  Sisa: 'Sisa',
+};
+
+function reportColumnLabel(key) {
+  if (STOK_BAHAN_BAKU_LABELS[key]) return STOK_BAHAN_BAKU_LABELS[key];
+  return String(key)
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/^./, (char) => char.toUpperCase());
+}
+
+function isReportNumber(value, key) {
+  if (value === null || value === undefined || value === '') return false;
+  if (/^(id|no)/i.test(key)) return false;
+  return typeof value === 'number' || /qty|jumlah|jml|berat|sisa|stok|sak|pallet/i.test(key);
+}
+
+function formatReportValue(value, key) {
+  if (value === null || value === undefined || value === '') return '-';
+  if (value instanceof Date || (/date|tanggal/i.test(key) && /^\d{4}-\d{2}-\d{2}/.test(String(value)))) {
+    return formatDateId(value);
+  }
+  if (isReportNumber(value, key)) return formatNumber(value, 2);
+  return String(value);
+}
+
+function getFieldKey(row, names) {
+  const keys = Object.keys(row || {});
+  return keys.find((key) => names.some((name) => key.toLowerCase() === name.toLowerCase()));
+}
+
+function buildStokBahanBakuCrosstab(data) {
+  const sourceRows = data.rows || [];
+  const groups = new Map();
+  const warehouses = new Set();
+  let jenisKey;
+  let warehouseKey;
+  let sakKey;
+  let beratKey;
+
+  for (const source of sourceRows) {
+    jenisKey ||= getFieldKey(source, [
+      'Jenis',
+      'NamaJenis',
+      'NamaJenisPlastik',
+      'JenisPlastik',
+      'NmJenis',
+      'NamaBahanBaku',
+    ]);
+    warehouseKey ||= getFieldKey(source, ['NamaWarehouse', 'Warehouse', 'NamaGudang']);
+    sakKey ||= getFieldKey(source, ['JmlhSak', 'JumlahSak', 'Sak', 'QtySak']);
+    beratKey ||= getFieldKey(source, ['Berat', 'TotalBerat', 'BeratKg']);
+    const jenis = String((jenisKey && source[jenisKey]) ?? '-').trim() || '-';
+    const gudang = String((warehouseKey && source[warehouseKey]) ?? '(Tanpa Warehouse)').trim() || '(Tanpa Warehouse)';
+    warehouses.add(gudang);
+    if (!groups.has(jenis)) groups.set(jenis, new Map());
+    const byWarehouse = groups.get(jenis);
+    const current = byWarehouse.get(gudang) || { sak: 0, berat: 0 };
+    current.sak += Number((sakKey && source[sakKey]) ?? 0) || 0;
+    current.berat += Number((beratKey && source[beratKey]) ?? 0) || 0;
+    byWarehouse.set(gudang, current);
+  }
+
+  const warehouseList = [...warehouses].sort((a, b) => {
+    if (a === '(Tanpa Warehouse)') return 1;
+    if (b === '(Tanpa Warehouse)') return -1;
+    return a.localeCompare(b, 'id');
+  });
+  const rows = [...groups.keys()].sort((a, b) => a.localeCompare(b, 'id')).map((jenis) => {
+    const byWarehouse = groups.get(jenis);
+    const row = { jenis, cells: {}, total: { sak: 0, berat: 0 } };
+    for (const gudang of warehouseList) {
+      const cell = byWarehouse.get(gudang) || { sak: 0, berat: 0 };
+      row.cells[gudang] = cell;
+      row.total.sak += cell.sak;
+      row.total.berat += cell.berat;
+    }
+    return row;
+  });
+  const grand = { sak: 0, berat: 0 };
+  for (const row of rows) {
+    grand.sak += row.total.sak;
+    grand.berat += row.total.berat;
+  }
+  return { rows, warehouseList, grand };
+}
+
+function buildStokBahanBakuHtml({ tglAkhir, warehouse, data }) {
+  const cross = buildStokBahanBakuCrosstab(data);
+  const { rows, warehouseList, grand } = cross;
+  const fmt = (value, digits = 0) => formatNumber(value, digits);
+  const warehouseHeaders = warehouseList
+    .map((gudang) => `<th colspan="2">${escapeHtml(gudang)}</th>`)
+    .join('');
+  const metricHeaders = warehouseList.map(() => '<th>Jmlh Sak</th><th>Berat</th>').join('');
+  const body = rows.map((row, index) => `
+    <tr><td class="center">${index + 1}</td><td>${escapeHtml(row.jenis)}</td>
+      ${warehouseList.map((gudang) => `<td class="right">${fmt(row.cells[gudang].sak)}</td><td class="right">${fmt(row.cells[gudang].berat, 2)}</td>`).join('')}
+      <td class="right strong">${fmt(row.total.sak)}</td><td class="right strong">${fmt(row.total.berat, 2)}</td>
+    </tr>`).join('');
+  const colCount = 2 + (warehouseList.length * 2) + 2;
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8" /><style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Segoe UI',Arial,sans-serif;font-size:8px;color:#1e293b}
+.report-header{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #1e40af;padding-bottom:8px;margin-bottom:10px}.report-title{font-size:16px;font-weight:700;color:#1e40af}.report-subtitle{font-size:9px;color:#64748b;margin-top:3px}.report-meta{text-align:right;font-size:8px;color:#475569}
+.summary{display:flex;gap:8px;margin-bottom:9px}.summary-title,.summary-card{border:1px solid #cbd5e1;padding:6px 9px}.summary-title{background:#1e40af;color:#fff;font-weight:700;min-width:130px}.summary-card{min-width:110px}.summary-label{font-size:7px;color:#64748b;text-transform:uppercase}.summary-value{font-size:12px;font-weight:700;color:#1e40af}
+table.data{width:100%;border-collapse:collapse;table-layout:fixed}table.data th{background:#1e40af;color:#fff;font-size:7px;text-transform:uppercase;padding:4px;border:1px solid #1e3a8a;white-space:nowrap}table.data td{padding:3px 4px;border:1px solid #e2e8f0;white-space:nowrap}table.data tr:nth-child(even) td{background:#f8fafc}.right{text-align:right}.center{text-align:center}.strong{font-weight:700;background:#eef2ff!important}.grand-total{display:table;width:100%;margin-top:8px;page-break-inside:avoid;background:#1e40af;color:#fff;font-weight:700;border:1px solid #1e3a8a}.grand-total > div{display:table-cell;padding:5px 6px}.grand-total .label{text-align:center}.grand-total .value{text-align:right;width:70px}
+</style></head><body><div class="report-header"><div><div class="report-title">LAPORAN STOK BAHAN BAKU</div><div class="report-subtitle">Posisi stok per tanggal: ${escapeHtml(formatDateId(tglAkhir))} &middot; Warehouse: ${escapeHtml(warehouse)}</div></div><div class="report-meta">Dicetak: ${escapeHtml(new Date().toLocaleString('id-ID'))}</div></div>
+<div class="summary"><div class="summary-title">WAREHOUSE SUMMARY</div><div class="summary-card"><div class="summary-label">Jmlh Sak</div><div class="summary-value">${fmt(grand.sak)}</div></div><div class="summary-card"><div class="summary-label">Berat</div><div class="summary-value">${fmt(grand.berat, 2)} Kg</div></div></div>
+<table class="data"><colgroup><col style="width:34px"/><col style="width:150px"/>${warehouseList.map(() => '<col style="width:62px"/><col style="width:70px"/>').join('')}<col style="width:62px"/><col style="width:70px"/></colgroup><thead><tr><th rowspan="2">No</th><th rowspan="2">Jenis Bahan Baku</th>${warehouseHeaders}<th colspan="2">TOTAL</th></tr><tr>${metricHeaders}<th>Jmlh Sak</th><th>Berat</th></tr></thead><tbody>${body || `<tr><td colspan="${colCount}" class="center">Tidak ada data.</td></tr>`}</tbody></table><div class="grand-total"><div class="label">TOTAL KESELURUHAN</div>${warehouseList.map((gudang) => `<div class="value">${fmt(rows.reduce((sum, row) => sum + row.cells[gudang].sak, 0))}</div><div class="value">${fmt(rows.reduce((sum, row) => sum + row.cells[gudang].berat, 0), 2)}</div>`).join('')}<div class="value">${fmt(grand.sak)}</div><div class="value">${fmt(grand.berat, 2)}</div></div></body></html>`;
+}
+
+async function getStokBahanBakuPdf({ tglAkhir, warehouse, username }) {
+  const tanggal = parseDate(tglAkhir, 'Tanggal akhir');
+  const wh = String(warehouse ?? 'ALL').trim() || 'ALL';
+  const who = String(username ?? '-').trim() || '-';
+  const printedAt = new Date().toLocaleString('id-ID', {
+    weekday: 'long', day: '2-digit', month: 'long', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+  const data = await stokBahanBaku({ tglAkhir: tanggal, warehouse: wh });
+  const html = buildStokBahanBakuHtml({ tglAkhir: tanggal, warehouse: wh, data });
+  const browser = await getPdfBrowser();
+  const page = await browser.newPage();
+  try {
+    await page.goto('about:blank', { waitUntil: 'domcontentloaded' });
+    await page.evaluate((content) => { document.open(); document.write(content); document.close(); }, html);
+    return await page.pdf({
+      format: 'A4', landscape: true, printBackground: true, displayHeaderFooter: true,
+      headerTemplate: '<span></span>',
+      footerTemplate: `<div style="width:100%;font-size:8px;color:#94a3b8;font-family:'Segoe UI',Arial,sans-serif;display:flex;justify-content:space-between;padding:0 8mm"><span>Print by ${escapeHtml(who)} on ${escapeHtml(printedAt)}</span><span>Halaman <span class="pageNumber"></span> dari <span class="totalPages"></span></span></div>`,
+      margin: { top: '8mm', right: '8mm', bottom: '14mm', left: '8mm' },
+    });
+  } finally {
+    await page.close();
+  }
+}
+
 async function mutasiBahanBaku({ tglAwal, tglAkhir }) {
   const start = parseDate(tglAwal, 'Tanggal awal');
   const end = parseDate(tglAkhir, 'Tanggal akhir');
@@ -852,6 +1004,7 @@ module.exports = {
   rekapHarian,
   stokBarangDagang,
   getStokBarangDagangPdf,
+  getStokBahanBakuPdf,
   getPdfBrowser,
   escapeHtml,
 };

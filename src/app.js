@@ -86,6 +86,7 @@ const mstTimPenerimaanBahanPendukungRoutes = require("./modules/master/tim-pener
 const mstTimPenerimaanBarangDagangRoutes = require("./modules/master/tim-penerimaan-barang-dagang/master-tim-penerimaan-barang-dagang-route");
 const mstBarangDagangRoutes = require("./modules/master-barang-dagang/master-barang-dagang-route");
 const mstSupplierRoutes = require("./modules/master/supplier/master-supplier-route");
+const mstSupplierManageRoutes = require("./modules/master/supplier/master-supplier-manage-route");
 const auditRoutes = require("./modules/audit/audit-route");
 const updateRoutes = require("./modules/update/update-routes");
 const printLockRoutes = require("./modules/label/print-lock/print-lock-routes");
@@ -155,6 +156,7 @@ app.use("/api/mst-barang", mstBarangRoutes);
 app.use("/api", mstBahanBakuRoutes);
 app.use("/api/mst-operator", mstOperatorRoutes);
 app.use("/api/mst-blok-lokasi", masterBlokLokasiRoutes);
+app.use("/api/mst-supplier", mstSupplierManageRoutes);
 app.use("/api/production", checkOverlapRoutes);
 app.use("/api/mst-cetakan", mstCetakanRoutes);
 app.use("/api/mst-formula", mstFormulaRoutes);
