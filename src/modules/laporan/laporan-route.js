@@ -12,6 +12,7 @@ router.use(verifyToken, attachPermissions, requirePermission('laporan:read'));
 
 router.get('/warehouse-options', verifyToken, ctrl.getWarehouseOptions);
 router.get('/bahan-baku/stok', verifyToken, ctrl.stokBahanBaku);
+router.get('/bahan-baku/stok/pdf', verifyToken, ctrl.stokBahanBakuPdf);
 router.get('/bahan-baku/mutasi', verifyToken, ctrl.mutasiBahanBaku);
 router.get('/bahan-baku/penerimaan', verifyToken, ctrl.penerimaanBahanBaku);
 router.get('/bahan-baku/kartu-stok', verifyToken, ctrl.kartuStokBahanBaku);

@@ -40,6 +40,25 @@ async function stokBahanBaku(req, res) {
   }
 }
 
+async function stokBahanBakuPdf(req, res) {
+  try {
+    const { tglAkhir, warehouse } = req.query;
+    const buffer = await service.getStokBahanBakuPdf({
+      tglAkhir,
+      warehouse,
+      username: req.username,
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="Laporan-Stok-Bahan-Baku-${tglAkhir}.pdf"`,
+    );
+    return res.send(Buffer.from(buffer));
+  } catch (error) {
+    return fail(res, error, 'stok bahan baku pdf');
+  }
+}
+
 async function mutasiBahanBaku(req, res) {
   try {
     const data = await service.mutasiBahanBaku(req.query);
@@ -249,6 +268,7 @@ async function stokBarangDagangPdf(req, res) {
 module.exports = {
   getWarehouseOptions,
   stokBahanBaku,
+  stokBahanBakuPdf,
   mutasiBahanBaku,
   penerimaanBahanBaku,
   kartuStokBahanBaku,
