@@ -18,6 +18,8 @@ router.get('/bahan-baku/penerimaan', verifyToken, ctrl.penerimaanBahanBaku);
 router.get('/bahan-baku/kartu-stok', verifyToken, ctrl.kartuStokBahanBaku);
 router.get('/bahan-baku/umur', verifyToken, ctrl.umurBahanBaku);
 router.get('/stok/:jenis', verifyToken, ctrl.stokUmum);
+// PDF stok washing/broker (crosstab Jenis x Warehouse, sama dengan bahan baku).
+router.get('/stok/:jenis/pdf', verifyToken, ctrl.stokUmumPdf);
 router.get('/reject/stok', verifyToken, ctrl.stokReject);
 router.get('/mutasi/:jenis', verifyToken, ctrl.mutasiUmum);
 // PDF laporan mutasi (sumber data sama dengan /mutasi/:jenis, format PDF).

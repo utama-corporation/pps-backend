@@ -196,7 +196,7 @@ function buildStokBahanBakuCrosstab(data) {
   return { rows, warehouseList, grand };
 }
 
-function buildStokBahanBakuHtml({ tglAkhir, warehouse, data }) {
+function buildStokBahanBakuHtml({ tglAkhir, warehouse, data, title = 'LAPORAN STOK BAHAN BAKU', jenisLabel = 'Jenis Bahan Baku' }) {
   const cross = buildStokBahanBakuCrosstab(data);
   const { rows, warehouseList, grand } = cross;
   const fmt = (value, digits = 0) => formatNumber(value, digits);
@@ -216,21 +216,17 @@ function buildStokBahanBakuHtml({ tglAkhir, warehouse, data }) {
 .report-header{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #1e40af;padding-bottom:8px;margin-bottom:10px}.report-title{font-size:16px;font-weight:700;color:#1e40af}.report-subtitle{font-size:9px;color:#64748b;margin-top:3px}.report-meta{text-align:right;font-size:8px;color:#475569}
 .summary{display:flex;gap:8px;margin-bottom:9px}.summary-title,.summary-card{border:1px solid #cbd5e1;padding:6px 9px}.summary-title{background:#1e40af;color:#fff;font-weight:700;min-width:130px}.summary-card{min-width:110px}.summary-label{font-size:7px;color:#64748b;text-transform:uppercase}.summary-value{font-size:12px;font-weight:700;color:#1e40af}
 table.data{width:100%;border-collapse:collapse;table-layout:fixed}table.data th{background:#1e40af;color:#fff;font-size:7px;text-transform:uppercase;padding:4px;border:1px solid #1e3a8a;white-space:nowrap}table.data td{padding:3px 4px;border:1px solid #e2e8f0;white-space:nowrap}table.data tr:nth-child(even) td{background:#f8fafc}.right{text-align:right}.center{text-align:center}.strong{font-weight:700;background:#eef2ff!important}.grand-total{display:table;width:100%;margin-top:8px;page-break-inside:avoid;background:#1e40af;color:#fff;font-weight:700;border:1px solid #1e3a8a}.grand-total > div{display:table-cell;padding:5px 6px}.grand-total .label{text-align:center}.grand-total .value{text-align:right;width:70px}
-</style></head><body><div class="report-header"><div><div class="report-title">LAPORAN STOK BAHAN BAKU</div><div class="report-subtitle">Posisi stok per tanggal: ${escapeHtml(formatDateId(tglAkhir))} &middot; Warehouse: ${escapeHtml(warehouse)}</div></div><div class="report-meta">Dicetak: ${escapeHtml(new Date().toLocaleString('id-ID'))}</div></div>
+</style></head><body><div class="report-header"><div><div class="report-title">${escapeHtml(title)}</div><div class="report-subtitle">Posisi stok per tanggal: ${escapeHtml(formatDateId(tglAkhir))} &middot; Warehouse: ${escapeHtml(warehouse)}</div></div><div class="report-meta">Dicetak: ${escapeHtml(new Date().toLocaleString('id-ID'))}</div></div>
 <div class="summary"><div class="summary-title">WAREHOUSE SUMMARY</div><div class="summary-card"><div class="summary-label">Jmlh Sak</div><div class="summary-value">${fmt(grand.sak)}</div></div><div class="summary-card"><div class="summary-label">Berat</div><div class="summary-value">${fmt(grand.berat, 2)} Kg</div></div></div>
-<table class="data"><colgroup><col style="width:34px"/><col style="width:150px"/>${warehouseList.map(() => '<col style="width:62px"/><col style="width:70px"/>').join('')}<col style="width:62px"/><col style="width:70px"/></colgroup><thead><tr><th rowspan="2">No</th><th rowspan="2">Jenis Bahan Baku</th>${warehouseHeaders}<th colspan="2">TOTAL</th></tr><tr>${metricHeaders}<th>Jmlh Sak</th><th>Berat</th></tr></thead><tbody>${body || `<tr><td colspan="${colCount}" class="center">Tidak ada data.</td></tr>`}</tbody></table><div class="grand-total"><div class="label">TOTAL KESELURUHAN</div>${warehouseList.map((gudang) => `<div class="value">${fmt(rows.reduce((sum, row) => sum + row.cells[gudang].sak, 0))}</div><div class="value">${fmt(rows.reduce((sum, row) => sum + row.cells[gudang].berat, 0), 2)}</div>`).join('')}<div class="value">${fmt(grand.sak)}</div><div class="value">${fmt(grand.berat, 2)}</div></div></body></html>`;
+<table class="data"><colgroup><col style="width:34px"/><col style="width:150px"/>${warehouseList.map(() => '<col style="width:62px"/><col style="width:70px"/>').join('')}<col style="width:62px"/><col style="width:70px"/></colgroup><thead><tr><th rowspan="2">No</th><th rowspan="2">${escapeHtml(jenisLabel)}</th>${warehouseHeaders}<th colspan="2">TOTAL</th></tr><tr>${metricHeaders}<th>Jmlh Sak</th><th>Berat</th></tr></thead><tbody>${body || `<tr><td colspan="${colCount}" class="center">Tidak ada data.</td></tr>`}</tbody></table><div class="grand-total"><div class="label">TOTAL KESELURUHAN</div>${warehouseList.map((gudang) => `<div class="value">${fmt(rows.reduce((sum, row) => sum + row.cells[gudang].sak, 0))}</div><div class="value">${fmt(rows.reduce((sum, row) => sum + row.cells[gudang].berat, 0), 2)}</div>`).join('')}<div class="value">${fmt(grand.sak)}</div><div class="value">${fmt(grand.berat, 2)}</div></div></body></html>`;
 }
 
-async function getStokBahanBakuPdf({ tglAkhir, warehouse, username }) {
-  const tanggal = parseDate(tglAkhir, 'Tanggal akhir');
-  const wh = String(warehouse ?? 'ALL').trim() || 'ALL';
+async function renderStokCrosstabPdf({ html, username }) {
   const who = String(username ?? '-').trim() || '-';
   const printedAt = new Date().toLocaleString('id-ID', {
     weekday: 'long', day: '2-digit', month: 'long', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
   });
-  const data = await stokBahanBaku({ tglAkhir: tanggal, warehouse: wh });
-  const html = buildStokBahanBakuHtml({ tglAkhir: tanggal, warehouse: wh, data });
   const browser = await getPdfBrowser();
   const page = await browser.newPage();
   try {
@@ -245,6 +241,30 @@ async function getStokBahanBakuPdf({ tglAkhir, warehouse, username }) {
   } finally {
     await page.close();
   }
+}
+
+async function getStokBahanBakuPdf({ tglAkhir, warehouse, username }) {
+  const tanggal = parseDate(tglAkhir, 'Tanggal akhir');
+  const wh = String(warehouse ?? 'ALL').trim() || 'ALL';
+  const data = await stokBahanBaku({ tglAkhir: tanggal, warehouse: wh });
+  const html = buildStokBahanBakuHtml({ tglAkhir: tanggal, warehouse: wh, data });
+  return renderStokCrosstabPdf({ html, username });
+}
+
+// Kategori stok yang punya PDF crosstab (Jenis x Warehouse) seperti bahan baku.
+const STOK_PDF_META = {
+  washing: { title: 'LAPORAN STOK WASHING', jenisLabel: 'Jenis Washing' },
+  broker: { title: 'LAPORAN STOK BROKER', jenisLabel: 'Jenis Broker' },
+};
+
+async function getStokUmumPdf(jenis, { tglAkhir, warehouse, username }) {
+  const meta = STOK_PDF_META[jenis];
+  if (!meta) throw notFound(`PDF laporan stok '${jenis}' tidak tersedia`);
+  const tanggal = parseDate(tglAkhir, 'Tanggal akhir');
+  const wh = String(warehouse ?? 'ALL').trim() || 'ALL';
+  const data = await stokUmum(jenis, { tglAkhir: tanggal, warehouse: wh });
+  const html = buildStokBahanBakuHtml({ tglAkhir: tanggal, warehouse: wh, data, ...meta });
+  return renderStokCrosstabPdf({ html, username });
 }
 
 async function mutasiBahanBaku({ tglAwal, tglAkhir }) {
@@ -1005,6 +1025,7 @@ module.exports = {
   stokBarangDagang,
   getStokBarangDagangPdf,
   getStokBahanBakuPdf,
+  getStokUmumPdf,
   getPdfBrowser,
   escapeHtml,
 };

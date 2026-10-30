@@ -104,6 +104,26 @@ async function stokUmum(req, res) {
   }
 }
 
+async function stokUmumPdf(req, res) {
+  try {
+    const { jenis } = req.params;
+    const { tglAkhir, warehouse } = req.query;
+    const buffer = await service.getStokUmumPdf(jenis, {
+      tglAkhir,
+      warehouse,
+      username: req.username,
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="Laporan-Stok-${jenis}-${tglAkhir}.pdf"`,
+    );
+    return res.send(Buffer.from(buffer));
+  } catch (error) {
+    return fail(res, error, `stok ${req.params.jenis} pdf`);
+  }
+}
+
 async function stokReject(req, res) {
   try {
     const data = await service.stokReject(req.query);
@@ -274,6 +294,7 @@ module.exports = {
   kartuStokBahanBaku,
   umurBahanBaku,
   stokUmum,
+  stokUmumPdf,
   stokReject,
   mutasiUmum,
   mutasiPdf,
