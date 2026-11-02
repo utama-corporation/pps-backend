@@ -50,7 +50,8 @@ BEGIN
                 i.Berat,
                 i.IdReject,
                 i.GeneratedLabelCode,
-                i.Decision
+                i.Decision,
+                i.Remark
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         )
     FROM inserted i
@@ -78,7 +79,8 @@ BEGIN
                 d.Berat,
                 d.IdReject,
                 d.GeneratedLabelCode,
-                d.Decision
+                d.Decision,
+                d.Remark
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         ),
         (
@@ -92,7 +94,8 @@ BEGIN
                 i.Berat,
                 i.IdReject,
                 i.GeneratedLabelCode,
-                i.Decision
+                i.Decision,
+                i.Remark
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         )
     FROM inserted i
@@ -119,7 +122,8 @@ BEGIN
                 d.Berat,
                 d.IdReject,
                 d.GeneratedLabelCode,
-                d.Decision
+                d.Decision,
+                d.Remark
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         ),
         NULL

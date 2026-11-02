@@ -12,8 +12,9 @@ const barangDagangWriteRepo = require("../../label/barang-dagang/repositories/ba
 // NOT NULL — label hasil retur selalu memakai supplier tetap ini.
 const RETUR_ID_SUPPLIER = 38;
 
-// KategoriInput=BAGUS, KodeKategori=barangdagang => generate label
-// BarangDagang baru sesuai IdJenis/Pcs item (Qty = Pcs).
+// KodeKategori=barangdagang (KategoriInput BAGUS maupun REJECT/Rusak) =>
+// generate label BarangDagang baru sesuai IdJenis/Pcs item (Qty = Pcs).
+// Barang dagang rusak tidak memakai label reject.
 exports.generateBarangDagangLabel = async (noRetur, idItem, ctx) => {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -53,9 +54,6 @@ exports.generateBarangDagangLabel = async (noRetur, idItem, ctx) => {
     }
     if (item.KodeKategori !== "barangdagang") {
       throw badReq("Item bukan kategori barangdagang");
-    }
-    if (item.KategoriInput !== "BAGUS") {
-      throw badReq("Item bukan KategoriInput BAGUS");
     }
 
     const genCode = () =>
