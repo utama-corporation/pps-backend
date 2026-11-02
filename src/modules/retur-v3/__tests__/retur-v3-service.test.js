@@ -185,6 +185,51 @@ describe("generateLabel idempotency", () => {
   });
 });
 
+describe("generateLabel barang dagang rusak", () => {
+  it("routes REJECT barangdagang to the barang dagang handler (not reject)", async () => {
+    const item = {
+      IdItem: 1,
+      NoRetur: "RV.0000000001",
+      KodeKategori: "barangdagang",
+      KategoriInput: "REJECT",
+      IdJenis: 10,
+      Pcs: 5,
+      GeneratedLabelCode: "BD.0000000099",
+    };
+    mockQuery
+      .mockResolvedValueOnce({ recordset: [item] }) // generateLabel item lookup
+      .mockResolvedValueOnce({ recordset: [] }) // audit context inside handler
+      .mockResolvedValueOnce({ recordset: [{ StatusRetur: "DIGANTI" }] }) // header select
+      .mockResolvedValueOnce({ recordset: [item] }); // item re-select inside handler
+
+    // Barang dagang handler => 409 (sudah punya label). Handler reject tanpa
+    // berat/idReject akan menghasilkan 400, jadi 409 membuktikan routing-nya.
+    await expect(
+      service.generateLabel("RV.0000000001", 1, {}, ctx),
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+});
+
+describe("item remark validation", () => {
+  it("rejects remark longer than 255 chars on addItems", async () => {
+    await expect(
+      service.addItems(
+        "RV.0000000001",
+        [
+          {
+            kodeKategori: "barangjadi",
+            idJenis: 1,
+            pcs: 5,
+            kategoriInput: "BAGUS",
+            remark: "x".repeat(256),
+          },
+        ],
+        ctx,
+      ),
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+});
+
 describe("turnover scan auto-detect (single-button scan)", () => {
   it("rejects when no returned item matches the scanned label's kategori+jenis", async () => {
     mockQuery

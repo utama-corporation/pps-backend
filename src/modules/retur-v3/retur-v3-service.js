@@ -44,6 +44,20 @@ function assertKategoriInput(value, field = "kategoriInput") {
   }
 }
 
+const MAX_REMARK_LENGTH = 255;
+
+// Remark item opsional: trim, kosong -> null, maksimal 255 karakter
+// (selaras AR_SalesReturnTransitDetails.Remarks varchar(255)).
+function normalizeRemark(value, field = "remark") {
+  if (value === undefined || value === null) return null;
+  const s = String(value).trim();
+  if (s === "") return null;
+  if (s.length > MAX_REMARK_LENGTH) {
+    throw badReq(`${field} maksimal ${MAX_REMARK_LENGTH} karakter`);
+  }
+  return s;
+}
+
 async function jenisExists(tx, kodeKategori, idJenis) {
   const rq = new sql.Request(tx).input("Id", sql.Int, idJenis);
   if (kodeKategori === "barangjadi") {
@@ -172,7 +186,7 @@ exports.getDetail = async (noRetur) => {
     .input("No", sql.VarChar(50), no).query(`
       SELECT
         it.IdItem, it.NoRetur, it.KodeKategori, it.IdJenis, it.Pcs,
-        it.KategoriInput, it.Berat, it.IdReject, it.GeneratedLabelCode, it.Decision,
+        it.KategoriInput, it.Remark, it.Berat, it.IdReject, it.GeneratedLabelCode, it.Decision,
         CASE
           WHEN it.KodeKategori = 'barangjadi' THEN mbj.NamaBJ
           WHEN it.KodeKategori = 'furniturewip' THEN mcw.Nama
@@ -525,6 +539,7 @@ exports.addItems = async (noRetur, items, ctx) => {
     if (!Number.isFinite(idJenisNum) || idJenisNum <= 0) {
       throw badReq(`items[${i}].idJenis wajib diisi`);
     }
+    normalizeRemark(it.remark, `items[${i}].remark`);
   }
 
   const pool = await poolPromise;
@@ -561,10 +576,11 @@ exports.addItems = async (noRetur, items, ctx) => {
         .input("IdJenis", sql.Int, Number(it.idJenis))
         .input("Pcs", sql.Int, Math.trunc(Number(it.pcs)))
         .input("KategoriInput", sql.VarChar(10), it.kategoriInput)
+        .input("Remark", sql.NVarChar(MAX_REMARK_LENGTH), normalizeRemark(it.remark))
         .input("CreateBy", sql.VarChar(50), actorUsername).query(`
-          INSERT INTO dbo.BJReturV3Item_d (NoRetur, KodeKategori, IdJenis, Pcs, KategoriInput, CreateBy)
+          INSERT INTO dbo.BJReturV3Item_d (NoRetur, KodeKategori, IdJenis, Pcs, KategoriInput, Remark, CreateBy)
           OUTPUT INSERTED.IdItem
-          VALUES (@NoRetur, @KodeKategori, @IdJenis, @Pcs, @KategoriInput, @CreateBy)
+          VALUES (@NoRetur, @KodeKategori, @IdJenis, @Pcs, @KategoriInput, @Remark, @CreateBy)
         `);
       createdIds.push(ins.recordset[0].IdItem);
     }
@@ -579,7 +595,7 @@ exports.addItems = async (noRetur, items, ctx) => {
     ).query(`
       SELECT
         it.IdItem, it.NoRetur, it.KodeKategori, it.IdJenis, it.Pcs,
-        it.KategoriInput, it.Berat, it.IdReject, it.GeneratedLabelCode,
+        it.KategoriInput, it.Remark, it.Berat, it.IdReject, it.GeneratedLabelCode,
         CASE
           WHEN it.KodeKategori = 'barangjadi' THEN mbj.NamaBJ
           WHEN it.KodeKategori = 'furniturewip' THEN mcw.Nama
@@ -649,6 +665,7 @@ exports.updateItem = async (noRetur, idItem, payload, ctx) => {
     const idJenis = payload?.idJenis !== undefined ? Number(payload.idJenis) : item.IdJenis;
     const pcs = payload?.pcs !== undefined ? Number(payload.pcs) : item.Pcs;
     const kategoriInput = payload?.kategoriInput !== undefined ? payload.kategoriInput : item.KategoriInput;
+    const remark = payload?.remark !== undefined ? normalizeRemark(payload.remark) : item.Remark;
 
     assertKodeKategori(kodeKategori);
     assertKategoriInput(kategoriInput);
@@ -667,9 +684,10 @@ exports.updateItem = async (noRetur, idItem, payload, ctx) => {
       .input("KodeKategori", sql.VarChar(20), kodeKategori)
       .input("IdJenis", sql.Int, idJenis)
       .input("Pcs", sql.Int, Math.trunc(pcs))
-      .input("KategoriInput", sql.VarChar(10), kategoriInput).query(`
+      .input("KategoriInput", sql.VarChar(10), kategoriInput)
+      .input("Remark", sql.NVarChar(MAX_REMARK_LENGTH), remark).query(`
         UPDATE dbo.BJReturV3Item_d
-        SET KodeKategori=@KodeKategori, IdJenis=@IdJenis, Pcs=@Pcs, KategoriInput=@KategoriInput
+        SET KodeKategori=@KodeKategori, IdJenis=@IdJenis, Pcs=@Pcs, KategoriInput=@KategoriInput, Remark=@Remark
         WHERE IdItem=@Id
       `);
 
@@ -679,7 +697,7 @@ exports.updateItem = async (noRetur, idItem, payload, ctx) => {
       .query(`
         SELECT
           it.IdItem, it.NoRetur, it.KodeKategori, it.IdJenis, it.Pcs,
-          it.KategoriInput, it.Berat, it.IdReject, it.GeneratedLabelCode,
+          it.KategoriInput, it.Remark, it.Berat, it.IdReject, it.GeneratedLabelCode,
           CASE
             WHEN it.KodeKategori = 'barangjadi' THEN mbj.NamaBJ
             WHEN it.KodeKategori = 'furniturewip' THEN mcw.Nama
@@ -761,7 +779,8 @@ async function exportToGsuInTx(tx, noRetur, actorUsername) {
     .input("No", sql.VarChar(50), noRetur).query(`
       SELECT 1
       FROM ${GSU_TRANSIT_DB}.AR_SalesReturnTransit WITH (UPDLOCK, HOLDLOCK)
-      WHERE CAST(Remarks AS nvarchar(50)) = @No
+      WHERE CAST(Remarks AS nvarchar(max)) = @No
+         OR CAST(Remarks AS nvarchar(max)) LIKE N'%' + CHAR(10) + @No
     `);
   if (dup.recordset.length > 0) {
     throw conflict(`Retur ${noRetur} sudah pernah diekspor ke AS_GSU. Tidak boleh diproses lagi.`);
@@ -773,10 +792,12 @@ async function exportToGsuInTx(tx, noRetur, actorUsername) {
       SELECT
         A.NoRetur,
         A.Tanggal,
+        A.Keterangan,
         F.CustomerID,
         B.IdItem,
         B.Pcs,
         B.KategoriInput,
+        B.Remark,
         G.ItemID,
         G.UOMID1, G.UOMID2, G.UOMID3, G.UOMID4
       FROM dbo.BJReturV3_h A
@@ -799,6 +820,11 @@ async function exportToGsuInTx(tx, noRetur, actorUsername) {
     throw badReq(`Pembeli retur ${noRetur} tidak ditemukan di AR_Customers AS_GSU.`);
   }
   const tanggal = rows[0].Tanggal;
+
+  // Remarks header = Keterangan + enter + NoRetur (NoRetur selalu di baris
+  // terakhir — dipakai guard duplikat di atas). Keterangan kosong -> NoRetur saja.
+  const keterangan = String(rows[0].Keterangan || "").trim();
+  const headerRemarks = keterangan ? `${keterangan}\r\n${noRetur}` : noRetur;
 
   // 2) Nomor urut TransitCounter per bulan (reset dari 1 tiap bulan)
   //    Prefix TransitNumber = SRT/MM/YY/ -> MAX per bulan retur tsb.
@@ -825,7 +851,7 @@ async function exportToGsuInTx(tx, noRetur, actorUsername) {
     .input("TransitNumber", sql.VarChar(50), transitNumber)
     .input("TransitDate", sql.Date, tanggal)
     .input("CustomerID", sql.Int, customerId)
-    .input("Remarks", sql.VarChar(50), noRetur)
+    .input("Remarks", sql.NVarChar(sql.MAX), headerRemarks)
     .input("CreatedBy", sql.VarChar(50), "PPS")
     .input("ModifiedBy", sql.VarChar(50), "PPS")
     .input("TransitType", sql.VarChar(20), "SR")
@@ -845,7 +871,8 @@ async function exportToGsuInTx(tx, noRetur, actorUsername) {
 
   // 5) Insert detail (TransitID = header; TransitDetailID identity auto)
   for (const row of rows) {
-    const remark = String(row.KategoriInput || "");
+    // Remark item (diketik user); kosong -> fallback KategoriInput (BAGUS/REJECT).
+    const remark = String(row.Remark || "").trim() || String(row.KategoriInput || "");
     // Qty retur dalam Pcs (satuan terkecil, mis. BH) -> UOMLevel = level UOM
     // terkecil yang terisi pada master item, bukan selalu 1.
     let uomLevel = 1;
@@ -1046,6 +1073,11 @@ exports.generateLabel = async (noRetur, idItem, body, ctx) => {
   const item = itemRes.recordset[0];
   if (!item) throw notFound(`Item ${idItemNum} tidak ditemukan pada retur ${no}`);
 
+  // Barang dagang selalu dibuat label barang dagang baru, termasuk yang
+  // berstatus Rusak (REJECT) — tidak ada label reject untuk kategori ini.
+  if (item.KodeKategori === "barangdagang") {
+    return generateBarangDagangLabel(no, idItemNum, ctx);
+  }
   if (item.KategoriInput === "REJECT") {
     return generateRejectLabel(no, idItemNum, body, ctx);
   }
@@ -1054,9 +1086,6 @@ exports.generateLabel = async (noRetur, idItem, body, ctx) => {
   }
   if (item.KodeKategori === "furniturewip") {
     return generateFurnitureWipLabel(no, idItemNum, ctx);
-  }
-  if (item.KodeKategori === "barangdagang") {
-    return generateBarangDagangLabel(no, idItemNum, ctx);
   }
   throw badReq(`KodeKategori ${item.KodeKategori} tidak didukung`);
 };
@@ -1081,18 +1110,19 @@ exports.getOutputs = async (noRetur) => {
         it.GeneratedLabelCode AS LabelCode,
         COALESCE(bj.DateCreate, fw.DateCreate, CAST(bd.CreatedAt AS date), r.DateCreate) AS DateCreate,
         COALESCE(mbj.NamaBJ, mcw.Nama, mbd.NamaBarangDagang, mr.NamaReject) AS NamaJenis,
-        CASE WHEN it.KategoriInput = 'REJECT' THEN N'reject' ELSE it.KodeKategori END AS KodeKategori,
+        -- Barang dagang rusak tetap label barang dagang (bukan label reject).
+        CASE WHEN it.KategoriInput = 'REJECT' AND it.KodeKategori <> 'barangdagang' THEN N'reject' ELSE it.KodeKategori END AS KodeKategori,
         CASE
-          WHEN it.KategoriInput = 'REJECT' THEN N'Reject'
+          WHEN it.KategoriInput = 'REJECT' AND it.KodeKategori <> 'barangdagang' THEN N'Reject'
           WHEN it.KodeKategori = 'barangjadi' THEN N'Barang Jadi'
           WHEN it.KodeKategori = 'barangdagang' THEN N'Barang Dagang'
           ELSE N'Furniture WIP'
         END AS Kategori,
-        CASE WHEN it.KategoriInput = 'REJECT' THEN N'kg' ELSE N'pcs' END AS Uom,
+        CASE WHEN it.KategoriInput = 'REJECT' AND it.KodeKategori <> 'barangdagang' THEN N'kg' ELSE N'pcs' END AS Uom,
         COALESCE(bj.Blok, fw.Blok, bd.Blok, r.Blok) AS Blok,
         COALESCE(bj.IdLokasi, fw.IdLokasi, bd.IdLokasi, r.IdLokasi) AS IdLokasi,
         CASE
-          WHEN it.KategoriInput = 'REJECT' THEN ISNULL(r.Berat, 0)
+          WHEN it.KategoriInput = 'REJECT' AND it.KodeKategori <> 'barangdagang' THEN ISNULL(r.Berat, 0)
           ELSE ISNULL(COALESCE(bj.Pcs, fw.Pcs, bd.Qty), 0)
         END AS Qty,
         ISNULL(CAST(COALESCE(bj.HasBeenPrinted, fw.HasBeenPrinted, bd.HasBeenPrinted, r.HasBeenPrinted) AS int), 0) AS HasBeenPrinted
@@ -1104,10 +1134,10 @@ exports.getOutputs = async (noRetur) => {
         ON fw.NoFurnitureWIP = it.GeneratedLabelCode AND it.KodeKategori = 'furniturewip' AND it.KategoriInput = 'BAGUS'
       LEFT JOIN dbo.MstCabinetWIP mcw ON mcw.IdCabinetWIP = fw.IDFurnitureWIP
       LEFT JOIN dbo.BarangDagang bd
-        ON bd.NoBarangDagang = it.GeneratedLabelCode AND it.KodeKategori = 'barangdagang' AND it.KategoriInput = 'BAGUS'
+        ON bd.NoBarangDagang = it.GeneratedLabelCode AND it.KodeKategori = 'barangdagang'
       LEFT JOIN dbo.MstBarangDagang mbd ON mbd.IdBarangDagang = bd.IdBarangDagang
       LEFT JOIN dbo.RejectV2 r
-        ON r.NoReject = it.GeneratedLabelCode AND it.KategoriInput = 'REJECT'
+        ON r.NoReject = it.GeneratedLabelCode AND it.KategoriInput = 'REJECT' AND it.KodeKategori <> 'barangdagang'
       LEFT JOIN dbo.MstReject mr ON mr.IdReject = r.IdReject
       WHERE it.NoRetur = @No AND it.GeneratedLabelCode IS NOT NULL
       ORDER BY it.GeneratedLabelCode ASC
