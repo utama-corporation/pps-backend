@@ -24,6 +24,7 @@ const {
   assertNotLocked,
 } = require("../shared/tutup-transaksi-guard");
 const { badReq } = require("../utils/http-error");
+const { validateBrokerPartialWeights } = require("../utils/broker-partial-validation");
 const {
   PARTIAL_CONFIGS,
   INPUT_LABELS,
@@ -110,6 +111,8 @@ async function upsertInputsAndPartials(produksiType, noProduksi, payload, ctx) {
     if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
       throw badReq("ctx.actorId wajib (controller harus inject dari token)");
     }
+
+    validateBrokerPartialWeights(payload);
 
     const pool = await poolPromise;
     tx = new sql.Transaction(pool);
