@@ -196,7 +196,11 @@ function validateAddPalletsPayload(payload) {
 
   const pallets = normalizePallets(payload?.pallets);
 
-  return { idSupplier, noPlat, kodeKategori, pallets };
+  // Opsional: bila diisi, pallet ditambahkan ke NoBahanBaku yang sudah ada
+  // (bukan membuat NoBahanBaku baru).
+  const noBahanBaku = payload?.noBahanBaku ? String(payload.noBahanBaku).trim() || null : null;
+
+  return { idSupplier, noPlat, kodeKategori, pallets, noBahanBaku };
 }
 
 async function generateUniqueCode(tx, opts) {
@@ -368,31 +372,71 @@ async function addPalletsPenerimaanBahanBaku(noPenerimaan, payload, ctx) {
       });
     }
 
-    const noBahanBaku = await generateUniqueCode(tx, {
-      tableName: "dbo.BahanBaku_h",
-      columnName: "NoBahanBaku",
-      prefix,
-      width: 10,
-    });
-
     const nowDate = new Date();
+    const isAppend = !!v.noBahanBaku;
+    let noBahanBaku;
+    let noPallet = 1;
 
-    await new sql.Request(tx)
-      .input("NoBahanBaku", sql.VarChar(50), noBahanBaku)
-      .input("IdSupplier", sql.Int, v.idSupplier)
-      .input("NoPlat", sql.VarChar(20), v.noPlat)
-      .input("DateCreate", sql.Date, header.TglPenerimaan)
-      .input("CreateBy", sql.VarChar(100), actorUsername || null)
-      .input("DateTimeCreate", sql.DateTime, nowDate)
-      .query(`
-        INSERT INTO dbo.BahanBaku_h
-          (NoBahanBaku, IdSupplier, NoPlat, DateCreate, CreateBy, DateTimeCreate)
-        VALUES
-          (@NoBahanBaku, @IdSupplier, @NoPlat, @DateCreate, @CreateBy, @DateTimeCreate)
-      `);
+    if (isAppend) {
+      // Mode tambah pallet ke NoBahanBaku yang sudah ada.
+      noBahanBaku = v.noBahanBaku;
+
+      const batchRows = await new sql.Request(tx)
+        .input("NoPenerimaan", sql.VarChar(20), String(noPenerimaan))
+        .input("NoBahanBaku", sql.VarChar(50), noBahanBaku)
+        .query(`
+          SELECT b.IdSupplier, b.NoPlat
+          FROM dbo.BahanBaku_h b WITH (UPDLOCK, HOLDLOCK)
+          WHERE b.NoBahanBaku = @NoBahanBaku
+            AND EXISTS (
+              SELECT 1 FROM dbo.PenerimaanBahanBakuOutput o
+              WHERE o.NoPenerimaan = @NoPenerimaan AND o.NoBahanBaku = b.NoBahanBaku
+            )
+        `);
+      const batch = batchRows.recordset[0];
+      if (!batch) {
+        throw notFound(`NoBahanBaku ${noBahanBaku} tidak ditemukan pada penerimaan ${noPenerimaan}`);
+      }
+      if (Number(batch.IdSupplier) !== v.idSupplier) {
+        throw badReq("Supplier tidak sesuai dengan NoBahanBaku yang dipilih");
+      }
+      if (!noBahanBaku.startsWith(prefix)) {
+        throw badReq("Kategori tidak sesuai dengan NoBahanBaku yang dipilih");
+      }
+
+      // MAX+1 (bukan hitung jumlah) karena delete pallet bisa meninggalkan nomor bolong.
+      const maxRows = await new sql.Request(tx)
+        .input("NoBahanBaku", sql.VarChar(50), noBahanBaku)
+        .query(`
+          SELECT ISNULL(MAX(NoPallet), 0) AS MaxPallet
+          FROM dbo.BahanBakuPallet_h WITH (UPDLOCK, HOLDLOCK)
+          WHERE NoBahanBaku = @NoBahanBaku
+        `);
+      noPallet = Number(maxRows.recordset[0].MaxPallet) + 1;
+    } else {
+      noBahanBaku = await generateUniqueCode(tx, {
+        tableName: "dbo.BahanBaku_h",
+        columnName: "NoBahanBaku",
+        prefix,
+        width: 10,
+      });
+
+      await new sql.Request(tx)
+        .input("NoBahanBaku", sql.VarChar(50), noBahanBaku)
+        .input("IdSupplier", sql.Int, v.idSupplier)
+        .input("NoPlat", sql.VarChar(20), v.noPlat)
+        .input("DateCreate", sql.Date, header.TglPenerimaan)
+        .input("CreateBy", sql.VarChar(100), actorUsername || null)
+        .input("DateTimeCreate", sql.DateTime, nowDate)
+        .query(`
+          INSERT INTO dbo.BahanBaku_h
+            (NoBahanBaku, IdSupplier, NoPlat, DateCreate, CreateBy, DateTimeCreate)
+          VALUES
+            (@NoBahanBaku, @IdSupplier, @NoPlat, @DateCreate, @CreateBy, @DateTimeCreate)
+        `);
+    }
 
     const createdOutputs = [];
-    let noPallet = 1;
 
     for (const pallet of v.pallets) {
       const saksJson = JSON.stringify(pallet.saks);
@@ -1041,9 +1085,8 @@ async function addSaksPenerimaan(noPenerimaan, noBahanBaku, noPallet, payload, c
       input.map((s) => ({ ...s, noSak: nextNo++ })),
       0,
     );
-    if (saks.some((s) => s.BeratAct == null)) {
-      throw badReq("beratAct wajib diisi untuk setiap sak");
-    }
+    // Sak tanpa beratAct = input manual: berat disimpan apa adanya (tanpa
+    // potongan), jadi assertBeratSesuaiPotongan melewatinya.
 
     const disableIds = await getDisableMinMaxIdSet(tx);
     if (!disableIds.has(c.idJenisPlastik)) {
