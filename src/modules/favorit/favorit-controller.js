@@ -11,7 +11,13 @@ const isValid = (tipe, kode) =>
 
 const fail = (res, err, label) => {
   console.error(`Error favorit ${label}:`, err);
-  res.status(500).json({ success: false, message: "Terjadi kesalahan di server" });
+  // err.message disertakan supaya tablet (dan QA) paham penyebab pastinya —
+  // mis. permission denied / trigger gagal di database production.
+  res.status(500).json({
+    success: false,
+    message: err && err.message ? String(err.message) : 'Terjadi kesalahan di server',
+    error: err && err.message ? String(err.message) : undefined,
+  });
 };
 
 exports.list = async (req, res) => {
