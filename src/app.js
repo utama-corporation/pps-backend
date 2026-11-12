@@ -35,6 +35,7 @@ const mstOperatorRoutes = require("./modules/master-operator/master-operator-rou
 const masterBlokLokasiRoutes = require("./modules/master-blok-lokasi/master-blok-lokasi-routes");
 const mstCetakanRoutes = require("./modules/master-cetakan/master-cetakan-route");
 const mstFormulaRoutes = require("./modules/master-formula/master-formula-route");
+const favoritRoutes = require("./modules/favorit/favorit-routes");
 const mstWarnaRoutes = require("./modules/master-warna/master-warna-route");
 const mstWashingRoutes = require("./modules/master/washing/master-washing-route");
 const mstGilinganRoutes = require("./modules/master/gilingan/master-gilingan-route");
@@ -118,6 +119,8 @@ app.get("/health", (req, res) => {
     uptime: Math.floor(process.uptime()) + "s",
   });
 });
+app.use("/api/favorit", favoritRoutes);
+
 app.use("/api/update", updateRoutes);
 
 // 📌 API Routes

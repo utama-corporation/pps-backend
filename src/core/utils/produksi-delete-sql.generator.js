@@ -9,12 +9,25 @@ const {
   INPUT_CONFIGS,
   PARTIAL_CONFIGS,
   PRODUKSI_CONFIGS,
+  WEIGHT_TOLERANCE,
 } = require("../config/produksi-input-mapping.config");
 
 /** convert "NoSak" -> "noSak", "NoBahanBaku" -> "noBahanBaku" */
 function toCamelField(dbKey) {
   if (!dbKey) return dbKey;
   return dbKey.charAt(0).toLowerCase() + dbKey.slice(1);
+}
+
+// Ekspresi: "sisa partial label ini sudah menutup berat sumber (terpakai penuh)".
+// Dipakai supaya reset DateUsage tidak mem-NULL-kan label yang sebenarnya masih
+// terpakai penuh lewat partial yang tersisa. Ekspresi selalu mengacu ke alias d.
+function _partialCoverageExpr(partialCfg, keys) {
+  if (!partialCfg || !partialCfg.tableName || !Array.isArray(keys) || keys.length === 0) {
+    return null;
+  }
+  const keyJoin = keys.map((k) => `p.${k} = d.${k}`).join(" AND ");
+  const sum = `SELECT SUM(p.${partialCfg.weightColumn}) FROM dbo.${partialCfg.tableName} p WHERE ${keyJoin}`;
+  return `(ISNULL((${sum}), 0) >= (${partialCfg.weightSourceColumn}) - ${WEIGHT_TOLERANCE})`;
 }
 
 /** json path for OPENJSON: NoSak -> $.noSak */
@@ -97,6 +110,17 @@ function _generateSingleInputDeleteSection(type, config, produksiConfig) {
 
   const dateUsageColumn = config.dateUsageColumn || "DateUsage";
 
+  // Coverage check: label masih terpakai penuh kalau (a) sisa partial-nya
+  // menutup berat sumber, atau (b) ada mapping produksi LAIN di tabel ini
+  // untuk key yang sama. DateUsage tidak boleh di-NULL kalau salah satu
+  // terpenuhi — kalau tidak, label yang masih penuh akan muncul "tersedia"
+  // sekalipun sudah dipakai (bug DateUsage ter-reset pada edit/delete produksi).
+  const coverageExpr = _partialCoverageExpr(PARTIAL_CONFIGS[type], keys);
+  const otherMappingExpr = `EXISTS (SELECT 1 FROM dbo.${config.mappingTable} x WHERE ${keys
+    .map((k) => `x.${mapCol(k)} = d.${k}`)
+    .join(" AND ")} AND x.${produksiConfig.codeColumn} <> @no)`;
+  const keepExpr = coverageExpr ? `(${coverageExpr} OR ${otherMappingExpr})` : otherMappingExpr;
+
   return `
 -- ${varPrefix}
 DECLARE @${type}Deleted int = 0, @${type}NotFound int = 0;
@@ -108,11 +132,14 @@ WITH (${withClause}) j
 ON ${joinConditions}
 WHERE map.${produksiConfig.codeColumn} = @no;
 
--- Reset ${dateUsageColumn} sebelum DELETE
+-- Reset ${dateUsageColumn} sebelum DELETE (hanya bila label memang tidak
+-- lagi terpakai penuh)
 IF @${type}Deleted > 0 AND '${dateUsageColumn}' <> ''
 BEGIN
   UPDATE d
-  SET d.${dateUsageColumn} = NULL
+  SET d.${dateUsageColumn} = CASE
+    WHEN ${keepExpr} THEN d.${dateUsageColumn}
+    ELSE NULL END
   FROM dbo.${config.sourceTable} d
   INNER JOIN dbo.${config.mappingTable} map
     ON ${sourceJoinConditions}
@@ -214,6 +241,15 @@ function _generateSinglePartialDeleteSection(type, config, produksiType) {
     .map((k) => `bp.${k} = d.${k}`)
     .join(" AND ");
 
+  // Coverage check: partial yang tersisa masih menutup berat sumber?
+  // Dipakai supaya DateUsage tidak di-NULL bila labelnya memang masih
+  // terpakai penuh (mis. dimensi ini pernah jadi korban bug: DateUsage
+  // ter-reset saat edit produksi, padahal SUM partial masih 100%).
+  const remainingSum = `SELECT SUM(p.${config.weightColumn}) FROM dbo.${config.tableName} p WHERE ${keys
+    .map((k) => `p.${k} = d.${k}`)
+    .join(" AND ")}`;
+  const stillFull = `(ISNULL((${remainingSum}), 0) >= (${config.weightSourceColumn}) - ${WEIGHT_TOLERANCE})`;
+
   return `
 -- ${type.toUpperCase()} PARTIAL
 DECLARE @${type}Deleted int = 0, @${type}NotFound int = 0;
@@ -252,36 +288,24 @@ INNER JOIN OPENJSON(@jsPartials, '$.${type}Partial')
 WITH (${partialWithClause}) j
 ON bp.${config.partialColumn} = j.${toCamelField(config.partialColumn)};
 
--- Update source table IsPartial & DateUsage
+-- Update source table IsPartial & DateUsage (recompute dari partial tersisa)
 IF @${type}Deleted > 0
 BEGIN
-  -- Masih ada partial lainnya
   UPDATE d
-  SET 
-    d.DateUsage = NULL,
-    d.IsPartial = 1
+  SET
+    d.DateUsage = CASE
+      WHEN ${stillFull} THEN d.DateUsage
+      ELSE NULL END,
+    d.IsPartial = CASE
+      WHEN EXISTS (
+        SELECT 1
+        FROM dbo.${config.tableName} bp
+        WHERE ${partialExistsConditions}
+      ) THEN 1
+      ELSE 0 END
   FROM dbo.${config.sourceTable} d
   INNER JOIN @deleted${varName}Partials del
-    ON ${sourceUpdateConditions}
-  WHERE EXISTS (
-    SELECT 1
-    FROM dbo.${config.tableName} bp
-    WHERE ${partialExistsConditions}
-  );
-  
-  -- Tidak ada partial lagi
-  UPDATE d
-  SET 
-    d.DateUsage = NULL,
-    d.IsPartial = 0
-  FROM dbo.${config.sourceTable} d
-  INNER JOIN @deleted${varName}Partials del
-    ON ${sourceUpdateConditions}
-  WHERE NOT EXISTS (
-    SELECT 1
-    FROM dbo.${config.tableName} bp
-    WHERE ${partialExistsConditions}
-  );
+    ON ${sourceUpdateConditions};
 END;
 
 -- Calculate notFound
