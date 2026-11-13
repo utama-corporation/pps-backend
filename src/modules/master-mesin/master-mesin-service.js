@@ -1693,6 +1693,7 @@ async function getSpannerByNoProduksi({
       CROSS JOIN CurrentCtx c
       WHERE sp.IdMesin = m.IdMesin
         AND CONVERT(date, sp.Tanggal) = c.CurrentDate
+        AND ISNULL(sp.IsComplete, 0) = 0
         AND sp.Shift = (SELECT TOP 1 NoShift FROM ActiveShift)
         AND (
           (
