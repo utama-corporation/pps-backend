@@ -33,7 +33,11 @@ router.get('/rekap-harian', verifyToken, ctrl.rekapHarian);
 router.get('/rekap-harian/pdf', verifyToken, ctrl.rekapProduksiPdf);
 router.get('/semua-label', verifyToken, ctrl.semuaLabel);
 router.get('/dashboard-produktifitas', verifyToken, ctrl.dashboardProduktifitas);
+router.get('/dashboard-produktifitas/pdf', verifyToken, ctrl.dashboardProduktifitasPdf);
 router.get('/hasil-produksi', verifyToken, ctrl.hasilProduksi);
+// PDF Produktivitas Broker (format Crystal Report). Harus sebelum rute generik.
+router.get('/produktivitas/broker/pdf', verifyToken, ctrl.produktivitasBrokerPdf);
+router.get('/produktivitas/washing/pdf', verifyToken, ctrl.produktivitasWashingPdf);
 router.get('/produktivitas/:jenis', verifyToken, ctrl.produktivitas);
 // Laporan Stok Barang Dagang (SP_LapStokBarangDagang)
 router.get('/barang-dagang/stok', verifyToken, ctrl.stokBarangDagang);

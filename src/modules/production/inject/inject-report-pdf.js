@@ -211,6 +211,7 @@ function buildInjectReportHtml({ main, downtime, by }) {
     .map(
       (r) => `<tr>
         <td class="txt">${escapeHtml(r.Jenis || "-")}</td>
+        <td class="txt center">${escapeHtml(r.NoLabel || "-")}</td>
         <td class="num">${r.Total == null ? "-" : fmtKg(r.Total)}</td>
         <td class="num">${pct(r.Total)}</td>
       </tr>`,
@@ -269,9 +270,9 @@ function buildInjectReportHtml({ main, downtime, by }) {
   .box-cols { display: flex; flex: 1; }
   .col { display: flex; flex-direction: column; min-width: 0; }
   .col + .col { border-left: 1px solid #111827; }
-  .col-1 { width: 28%; }
-  .col-2 { width: 43%; }
-  .col-3 { width: 29%; }
+  .col-1 { width: 37%; }
+  .col-2 { width: 36%; }
+  .col-3 { width: 27%; }
   .col-head { text-align: center; font-weight: 700; font-size: 9.5pt; padding: 5px 4px; border-bottom: 1px solid #111827; background: #F3F4F6; }
   .col-body { flex: 1; }
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
@@ -289,9 +290,9 @@ function buildInjectReportHtml({ main, downtime, by }) {
   .box-foot { display: flex; border-top: 1.5px solid #111827; }
   .foot { min-width: 0; }
   .foot + .foot { border-left: 1px solid #111827; }
-  .foot-1 { width: 28%; }
-  .foot-2 { width: 43%; }
-  .foot-3 { width: 29%; }
+  .foot-1 { width: 37%; }
+  .foot-2 { width: 36%; }
+  .foot-3 { width: 27%; }
   .box-foot table td { padding: 4px 5px; font-weight: 700; border-bottom: none; }
   .box-foot .lbl { text-align: right; }
   .box-foot .val { text-align: right; font-variant-numeric: tabular-nums; }
@@ -332,9 +333,9 @@ function buildInjectReportHtml({ main, downtime, by }) {
         <div class="col-head">Pemakaian Bahan</div>
         <div class="col-body">
           <table>
-            <colgroup><col style="width:62%" /><col style="width:18%" /><col style="width:20%" /></colgroup>
-            <thead><tr><th class="center">Nama Bahan</th><th class="center sub-h">Qty (Kg)</th><th class="center sub-h">%</th></tr></thead>
-            <tbody>${inputBody || `<tr><td class="txt">-</td><td class="num">-</td><td class="num">-</td></tr>`}</tbody>
+            <colgroup><col style="width:36%" /><col style="width:28%" /><col style="width:19%" /><col style="width:17%" /></colgroup>
+            <thead><tr><th class="center">Nama Bahan</th><th class="center sub-h">No Label</th><th class="center sub-h">Qty (Kg)</th><th class="center sub-h">%</th></tr></thead>
+            <tbody>${inputBody || `<tr><td class="txt">-</td><td class="center">-</td><td class="num">-</td><td class="num">-</td></tr>`}</tbody>
           </table>
         </div>
       </div>
@@ -376,8 +377,8 @@ function buildInjectReportHtml({ main, downtime, by }) {
     <div class="box-foot">
       <div class="foot foot-1">
         <table>
-          <colgroup><col style="width:62%" /><col style="width:18%" /><col style="width:20%" /></colgroup>
-          <tr><td class="lbl">Total</td><td class="val">${fmtKg(inputTotal)}</td><td></td></tr>
+          <colgroup><col style="width:36%" /><col style="width:28%" /><col style="width:19%" /><col style="width:17%" /></colgroup>
+          <tr><td class="lbl" colspan="2">Total</td><td class="val">${fmtKg(inputTotal)}</td><td></td></tr>
         </table>
       </div>
       <div class="foot foot-2">

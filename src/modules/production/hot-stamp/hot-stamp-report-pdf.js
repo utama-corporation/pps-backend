@@ -101,9 +101,15 @@ function mergeInputByJenis(rows) {
     if (prev) {
       prev.Total = (prev.Total || 0) + (r.Total || 0);
       prev.Total2 = (prev.Total2 || 0) + (r.Total2 || 0);
+      if (r.NoLabel && !prev.Labels.includes(r.NoLabel)) {
+        prev.Labels.push(r.NoLabel);
+        prev.NoLabel = prev.Labels.join(", ");
+      }
     } else {
       map.set(key, {
         Jenis: r.Jenis,
+        NoLabel: r.NoLabel || "",
+        Labels: r.NoLabel ? [r.NoLabel] : [],
         Total: r.Total || 0,
         Total2: r.Total2 || 0,
       });
@@ -134,6 +140,7 @@ function buildHotStampingReportHtml({ main, by }) {
     .map(
       (r) => `<tr>
         <td class="txt">${escapeHtml(r.Jenis)}</td>
+        <td class="center">${escapeHtml(r.NoLabel)}</td>
         <td class="num">${fmtInt(r.Total)}</td>
         <td class="num">${fmt2(r.Total2)}</td>
       </tr>`,
@@ -170,9 +177,9 @@ function buildHotStampingReportHtml({ main, by }) {
   .box-cols { display: flex; flex: 1; }
   .col { display: flex; flex-direction: column; min-width: 0; }
   .col + .col { border-left: 1px solid #111827; }
-  .col-1 { width: 27.2%; }
-  .col-2 { width: 48.4%; }
-  .col-3 { width: 24.4%; }
+  .col-1 { width: 36%; }
+  .col-2 { width: 40%; }
+  .col-3 { width: 24%; }
   .col-head { text-align: center; font-weight: 700; font-size: 9.5pt; padding: 1px 4px; border-bottom: 1px solid #111827; background: #F3F4F6; }
   /* Garis pemisah kolom = satu elemen .vl per garis, membentang dari header sampai
      baris total, jadi tidak putus dan selalu lurus. Posisi (%) = lebar <col>. */
@@ -238,18 +245,18 @@ function buildHotStampingReportHtml({ main, by }) {
       <div class="col col-1">
         <div class="col-head">Pemakaian Bahan</div>
         <div class="col-inner">
-          <i class="vl" style="left:61.7%"></i><i class="vl" style="left:81.1%"></i>
+          <i class="vl" style="left:40%"></i><i class="vl" style="left:64%"></i><i class="vl" style="left:82%"></i>
           <div class="col-body">
             <table>
-              <colgroup><col style="width:61.7%" /><col style="width:19.4%" /><col style="width:18.9%" /></colgroup>
-              <thead><tr><th>Nama Bahan</th><th class="center">Qty<br />(Pcs)</th><th class="center">Berat<br />(Kg)</th></tr></thead>
+              <colgroup><col style="width:40%" /><col style="width:24%" /><col style="width:18%" /><col style="width:18%" /></colgroup>
+              <thead><tr><th>Nama Bahan</th><th class="center">No Label</th><th class="center">Qty<br />(Pcs)</th><th class="center">Berat<br />(Kg)</th></tr></thead>
               <tbody>${inputBody}</tbody>
             </table>
           </div>
           <div class="col-foot">
             <table>
-              <colgroup><col style="width:61.7%" /><col style="width:19.4%" /><col style="width:18.9%" /></colgroup>
-              <tr><td></td><td class="val">${fmtInt(inputQtyTotal)}</td><td class="val">${fmt2(inputBeratTotal)}</td></tr>
+              <colgroup><col style="width:40%" /><col style="width:24%" /><col style="width:18%" /><col style="width:18%" /></colgroup>
+              <tr><td></td><td></td><td class="val">${fmtInt(inputQtyTotal)}</td><td class="val">${fmt2(inputBeratTotal)}</td></tr>
             </table>
           </div>
         </div>

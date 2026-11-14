@@ -161,6 +161,7 @@ function buildWashingReportHtml({ main, downtime, by }) {
     .map(
       (r) => `<tr>
         <td class="txt">${escapeHtml(r.Jenis || "-")}</td>
+        <td class="txt center">${escapeHtml(r.NoLabel || "-")}</td>
         <td class="num">${fmtNumber(r.Brt)}</td>
       </tr>`,
     )
@@ -207,9 +208,9 @@ function buildWashingReportHtml({ main, downtime, by }) {
   .box { border: 1.5px solid #111827; display: flex; margin-bottom: 20px; flex: 1 0 auto; }
   .col { display: flex; flex-direction: column; min-width: 0; }
   .col + .col { border-left: 1px solid #111827; }
-  .col-1 { width: 25%; }
-  .col-2 { width: 45%; }
-  .col-3 { width: 30%; }
+  .col-1 { width: 30%; }
+  .col-2 { width: 43%; }
+  .col-3 { width: 27%; }
   .col-head { text-align: center; font-weight: 700; font-size: 9.5pt; padding: 5px 4px; border-bottom: 1px solid #111827; background: #F3F4F6; }
   .col-body { flex: 1; }
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
@@ -263,15 +264,15 @@ function buildWashingReportHtml({ main, downtime, by }) {
       <div class="col-head">Pemakaian Bahan Baku</div>
       <div class="col-body">
         <table>
-          <colgroup><col style="width:68%" /><col style="width:32%" /></colgroup>
-          <thead><tr><th class="center">Nama Bahan</th><th class="center sub-h">Qty (Kg)</th></tr></thead>
-          <tbody>${inputBody || `<tr><td class="txt">-</td><td class="num">-</td></tr>`}</tbody>
+          <colgroup><col style="width:40%" /><col style="width:33%" /><col style="width:27%" /></colgroup>
+          <thead><tr><th class="center">Nama Bahan</th><th class="center sub-h">No Label</th><th class="center sub-h">Qty (Kg)</th></tr></thead>
+          <tbody>${inputBody || `<tr><td class="txt">-</td><td class="center">-</td><td class="num">-</td></tr>`}</tbody>
         </table>
       </div>
       <div class="col-foot">
         <table>
-          <colgroup><col style="width:68%" /><col style="width:32%" /></colgroup>
-          <tr><td class="lbl">Total</td><td class="val">${fmtNumber(inputTotal)}</td></tr>
+          <colgroup><col style="width:40%" /><col style="width:33%" /><col style="width:27%" /></colgroup>
+          <tr><td class="lbl" colspan="2">Total</td><td class="val">${fmtNumber(inputTotal)}</td></tr>
         </table>
       </div>
     </div>

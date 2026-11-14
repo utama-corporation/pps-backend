@@ -3,6 +3,18 @@ const puppeteer = require('puppeteer');
 const { poolPromise } = require('../../core/config/db');
 const { badReq, notFound } = require('../../core/utils/http-error');
 const { buildRekapHtml, buildRekapHarianHtml, HARIAN_LABEL, renderRekapPdf } = require('./rekap/rekap-pdf');
+const {
+  buildProduktivitasBrokerHtml,
+  renderProduktivitasBrokerPdf,
+} = require('./produktivitas/produktivitas-broker-pdf');
+const {
+  buildProduktivitasWashingHtml,
+  renderProduktivitasWashingPdf,
+} = require('./produktivitas/produktivitas-washing-pdf');
+const {
+  buildDashboardProduktifitasHtml,
+  renderDashboardProduktifitasPdf,
+} = require('./produktivitas/dashboard-produktifitas-pdf');
 const { buildMutasiHtml, renderMutasiPdf } = require('./mutasi/mutasi-pdf');
 
 function parseDate(value, label) {
@@ -739,6 +751,12 @@ async function dashboardProduktifitas({ tglAkhir }) {
   return runSp('sp_LapDashboardProduktifitas', [{ name: 'Tanggal', type: sql.Date, value: tanggal }]);
 }
 
+async function getDashboardProduktifitasPdf({ tglAkhir }) {
+  const data = await dashboardProduktifitas({ tglAkhir });
+  const html = buildDashboardProduktifitasHtml({ rows: data.rows });
+  return renderDashboardProduktifitasPdf({ html });
+}
+
 async function hasilProduksi({ tglAwal, tglAkhir }) {
   const start = parseDate(tglAwal, 'Tanggal awal');
   const end = parseDate(tglAkhir, 'Tanggal akhir');
@@ -762,6 +780,30 @@ async function produktivitas(jenis, { tglAwal, tglAkhir }) {
     { name: cfg.start, type: sql.Date, value: start },
     { name: cfg.end, type: sql.Date, value: end },
   ]);
+}
+
+async function getProduktivitasBrokerPdf({ tglAwal, tglAkhir }) {
+  const awal = parseDate(tglAwal, 'Tanggal awal');
+  const akhir = parseDate(tglAkhir, 'Tanggal akhir');
+  const data = await produktivitas('broker', { tglAwal: awal, tglAkhir: akhir });
+  const html = buildProduktivitasBrokerHtml({
+    tglAwal: awal,
+    tglAkhir: akhir,
+    rows: data.rows,
+  });
+  return renderProduktivitasBrokerPdf({ html });
+}
+
+async function getProduktivitasWashingPdf({ tglAwal, tglAkhir, username }) {
+  const awal = parseDate(tglAwal, 'Tanggal awal');
+  const akhir = parseDate(tglAkhir, 'Tanggal akhir');
+  const data = await produktivitas('washing', { tglAwal: awal, tglAkhir: akhir });
+  const html = buildProduktivitasWashingHtml({
+    tglAwal: awal,
+    tglAkhir: akhir,
+    rows: data.rows,
+  });
+  return renderProduktivitasWashingPdf({ html, username });
 }
 
 async function rekapHarian({ jenis, tglAkhir }) {
@@ -1023,8 +1065,11 @@ module.exports = {
   getMutasiResult,
   semuaLabel,
   dashboardProduktifitas,
+  getDashboardProduktifitasPdf,
   hasilProduksi,
   produktivitas,
+  getProduktivitasBrokerPdf,
+  getProduktivitasWashingPdf,
   rekapHarian,
   stokBarangDagang,
   getStokBarangDagangPdf,

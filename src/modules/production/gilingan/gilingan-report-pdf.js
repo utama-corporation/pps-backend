@@ -177,6 +177,7 @@ function buildGilinganReportHtml({ main, downtime, by }) {
     .map(
       (r) => `<tr>
         <td class="txt">${escapeHtml(r.Jenis)}</td>
+        <td class="center">${escapeHtml(r.NoLabel)}</td>
         <td class="num">${r.Berat == null ? "" : fmtKg(r.Berat)}</td>
       </tr>`,
     )
@@ -224,8 +225,8 @@ function buildGilinganReportHtml({ main, downtime, by }) {
   .box-cols { display: flex; flex: 1; }
   .col { display: flex; flex-direction: column; min-width: 0; }
   .col + .col { border-left: 1px solid #111827; }
-  .col-1 { width: 29.6%; }
-  .col-2 { width: 43.2%; }
+  .col-1 { width: 38%; }
+  .col-2 { width: 34.8%; }
   .col-3 { width: 27.2%; }
   .col-head { text-align: center; font-weight: 700; font-size: 9.5pt; padding: 0 4px; border-bottom: 1px solid #111827; background: #F3F4F6; }
   .col-body { flex: 1; }
@@ -252,8 +253,8 @@ function buildGilinganReportHtml({ main, downtime, by }) {
   .box-foot { display: flex; border-top: 1.5px solid #111827; }
   .foot { min-width: 0; }
   .foot + .foot { border-left: 1px solid #111827; }
-  .foot-1 { width: 29.6%; }
-  .foot-2 { width: 43.2%; }
+  .foot-1 { width: 38%; }
+  .foot-2 { width: 34.8%; }
   .foot-3 { width: 27.2%; }
   .box-foot table td { padding: 4px 5px; font-weight: 700; border-bottom: none; border-right: 1px solid #111827; }
   .box-foot table td:last-child { border-right: none; }
@@ -292,8 +293,8 @@ function buildGilinganReportHtml({ main, downtime, by }) {
         <div class="col-head">Pemakaian Bahan</div>
         <div class="col-body">
           <table>
-            <colgroup><col style="width:81%" /><col style="width:19%" /></colgroup>
-            <thead><tr><th class="center">Nama Bahan</th><th class="center">Qty<br />(Kg)</th></tr></thead>
+            <colgroup><col style="width:42%" /><col style="width:34%" /><col style="width:24%" /></colgroup>
+            <thead><tr><th class="center">Nama Bahan</th><th class="center">No Label</th><th class="center">Qty<br />(Kg)</th></tr></thead>
             <tbody>${inputBody}</tbody>
           </table>
         </div>
@@ -335,8 +336,8 @@ function buildGilinganReportHtml({ main, downtime, by }) {
     <div class="box-foot">
       <div class="foot foot-1">
         <table>
-          <colgroup><col style="width:81%" /><col style="width:19%" /></colgroup>
-          <tr><td></td><td class="val">${fmtKg(inputTotal)}</td></tr>
+          <colgroup><col style="width:42%" /><col style="width:34%" /><col style="width:24%" /></colgroup>
+          <tr><td></td><td></td><td class="val">${fmtKg(inputTotal)}</td></tr>
         </table>
       </div>
       <div class="foot foot-2">

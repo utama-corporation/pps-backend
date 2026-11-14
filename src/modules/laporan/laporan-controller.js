@@ -230,12 +230,61 @@ async function dashboardProduktifitas(req, res) {
   }
 }
 
+async function dashboardProduktifitasPdf(req, res) {
+  const { tglAkhir } = req.query;
+  try {
+    const buffer = await service.getDashboardProduktifitasPdf({ tglAkhir });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="Laporan-Dashboard-Produktifitas-${tglAkhir}.pdf"`,
+    );
+    return res.send(Buffer.from(buffer));
+  } catch (error) {
+    return fail(res, error, 'dashboard produktifitas pdf');
+  }
+}
+
 async function hasilProduksi(req, res) {
   try {
     const data = await service.hasilProduksi(req.query);
     return sendData(res, data, 'Laporan Hasil Produksi berhasil diambil');
   } catch (error) {
     return fail(res, error, 'hasil produksi');
+  }
+}
+
+async function produktivitasBrokerPdf(req, res) {
+  const { tglAwal, tglAkhir } = req.query;
+  try {
+    const buffer = await service.getProduktivitasBrokerPdf({ tglAwal, tglAkhir });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="Laporan-Produktivitas-Broker-${tglAwal}-${tglAkhir}.pdf"`,
+    );
+    return res.send(Buffer.from(buffer));
+  } catch (error) {
+    return fail(res, error, 'produktivitas broker pdf');
+  }
+}
+
+async function produktivitasWashingPdf(req, res) {
+  const { tglAwal, tglAkhir } = req.query;
+  try {
+    const buffer = await service.getProduktivitasWashingPdf({
+      tglAwal,
+      tglAkhir,
+      username: req.username,
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="Laporan-Produktivitas-Washing-${tglAwal}-${tglAkhir}.pdf"`,
+    );
+    return res.send(Buffer.from(buffer));
+  } catch (error) {
+    return fail(res, error, 'produktivitas washing pdf');
   }
 }
 
@@ -304,8 +353,11 @@ module.exports = {
   rekapProduksiPdf,
   semuaLabel,
   dashboardProduktifitas,
+  dashboardProduktifitasPdf,
   hasilProduksi,
   produktivitas,
+  produktivitasBrokerPdf,
+  produktivitasWashingPdf,
   rekapHarian,
   stokBarangDagang,
   stokBarangDagangPdf,

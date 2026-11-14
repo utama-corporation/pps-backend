@@ -104,8 +104,20 @@ function mergeInputByJenis(rows) {
   for (const r of rows) {
     const key = `${isGroup(r, "MTERIAL") ? "M" : "F"}|${r.Jenis}`;
     const prev = map.get(key);
-    if (prev) prev.Total = (prev.Total || 0) + (r.Total || 0);
-    else map.set(key, { Jenis: r.Jenis, Total: r.Total || 0 });
+    if (prev) {
+      prev.Total = (prev.Total || 0) + (r.Total || 0);
+      if (r.NoLabel && !prev.Labels.includes(r.NoLabel)) {
+        prev.Labels.push(r.NoLabel);
+        prev.NoLabel = prev.Labels.join(", ");
+      }
+    } else {
+      map.set(key, {
+        Jenis: r.Jenis,
+        NoLabel: r.NoLabel || "",
+        Labels: r.NoLabel ? [r.NoLabel] : [],
+        Total: r.Total || 0,
+      });
+    }
   }
   return [...map.values()];
 }
@@ -142,6 +154,7 @@ function buildKeyFittingReportHtml({
     .map(
       (r) => `<tr>
         <td class="txt">${escapeHtml(r.Jenis)}</td>
+        <td class="lbl-no">${escapeHtml(r.NoLabel)}</td>
         <td class="num">${fmtPcs(r.Total)}</td>
       </tr>`,
     )
@@ -186,9 +199,9 @@ function buildKeyFittingReportHtml({
   .box-cols { display: flex; flex: 1; }
   .col { display: flex; flex-direction: column; min-width: 0; }
   .col + .col { border-left: 1px solid #111827; }
-  .col-1 { width: 24%; }
-  .col-2 { width: 38%; }
-  .col-3 { width: 38%; }
+  .col-1 { width: 36%; }
+  .col-2 { width: 32%; }
+  .col-3 { width: 32%; }
   .col-head { text-align: center; font-weight: 700; font-size: 9.5pt; padding: 0 4px; border-bottom: 1px solid #111827; background: #F3F4F6; }
   /* Garis pemisah kolom = satu elemen .vl per garis, membentang dari header sampai
      baris total, jadi lurus dan tidak putus. Posisi (%) = lebar <col>. */
@@ -234,18 +247,18 @@ function buildKeyFittingReportHtml({
       <div class="col col-1">
         <div class="col-head">Pemakaian Bahan</div>
         <div class="col-inner">
-          <i class="vl" style="left:80%"></i>
+          <i class="vl" style="left:40%"></i><i class="vl" style="left:76%"></i>
           <div class="col-body">
             <table>
-              <colgroup><col style="width:80%" /><col style="width:20%" /></colgroup>
-              <thead><tr><th>Nama Bahan</th><th>Qty<br />(Pcs)</th></tr></thead>
+              <colgroup><col style="width:40%" /><col style="width:36%" /><col style="width:24%" /></colgroup>
+              <thead><tr><th>Nama Bahan</th><th>No Label</th><th>Qty<br />(Pcs)</th></tr></thead>
               <tbody>${inputBody}</tbody>
             </table>
           </div>
           <div class="col-foot">
             <table>
-              <colgroup><col style="width:80%" /><col style="width:20%" /></colgroup>
-              <tr><td></td><td class="val">${fmtPcs(inputTotal)}</td></tr>
+              <colgroup><col style="width:40%" /><col style="width:36%" /><col style="width:24%" /></colgroup>
+              <tr><td></td><td></td><td class="val">${fmtPcs(inputTotal)}</td></tr>
             </table>
           </div>
         </div>

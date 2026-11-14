@@ -105,9 +105,15 @@ function mergeInputByJenis(rows) {
     if (prev) {
       prev.Total = (prev.Total || 0) + (r.Total || 0);
       prev.Total2 = (prev.Total2 || 0) + (r.Total2 || 0);
+      if (r.NoLabel && !prev.Labels.includes(r.NoLabel)) {
+        prev.Labels.push(r.NoLabel);
+        prev.NoLabel = prev.Labels.join(", ");
+      }
     } else {
       map.set(key, {
         Jenis: r.Jenis,
+        NoLabel: r.NoLabel || "",
+        Labels: r.NoLabel ? [r.NoLabel] : [],
         Total: r.Total || 0,
         Total2: r.Total2 || 0,
       });
@@ -139,6 +145,7 @@ function buildPackingReportHtml({ main, by }) {
     .map(
       (r) => `<tr>
         <td class="txt">${escapeHtml(r.Jenis)}</td>
+        <td class="center">${escapeHtml(r.NoLabel)}</td>
         <td class="num">${fmtPcs(r.Total)}</td>
         <td class="num">${fmtKg(r.Total2)}</td>
       </tr>`,
@@ -175,8 +182,8 @@ function buildPackingReportHtml({ main, by }) {
   .box-cols { display: flex; flex: 1; }
   .col { display: flex; flex-direction: column; min-width: 0; }
   .col + .col { border-left: 1px solid #111827; }
-  .col-1 { width: 45%; }
-  .col-2 { width: 55%; }
+  .col-1 { width: 55%; }
+  .col-2 { width: 45%; }
   .col-head { text-align: center; font-weight: 700; font-size: 9.5pt; padding: 0 4px; border-bottom: 1px solid #111827; background: #F3F4F6; }
   .col-body { flex: 1; }
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
@@ -191,8 +198,8 @@ function buildPackingReportHtml({ main, by }) {
   .box-foot { display: flex; border-top: 1.5px solid #111827; }
   .foot { min-width: 0; }
   .foot + .foot { border-left: 1px solid #111827; }
-  .foot-1 { width: 45%; }
-  .foot-2 { width: 55%; }
+  .foot-1 { width: 55%; }
+  .foot-2 { width: 45%; }
   .box-foot table td { padding: 4px 5px; font-weight: 700; border-right: 1px solid #111827; }
   .box-foot table td:last-child { border-right: none; }
   .box-foot .val { text-align: right; font-variant-numeric: tabular-nums; }
@@ -224,8 +231,8 @@ function buildPackingReportHtml({ main, by }) {
         <div class="col-head">Pemakaian Bahan</div>
         <div class="col-body">
           <table>
-            <colgroup><col style="width:60%" /><col style="width:20%" /><col style="width:20%" /></colgroup>
-            <thead><tr><th>Nama Bahan</th><th>Qty<br />(Pcs)</th><th>Berat<br />(Kg)</th></tr></thead>
+            <colgroup><col style="width:40%" /><col style="width:22%" /><col style="width:18%" /><col style="width:20%" /></colgroup>
+            <thead><tr><th>Nama Bahan</th><th>No Label</th><th>Qty<br />(Pcs)</th><th>Berat<br />(Kg)</th></tr></thead>
             <tbody>${inputBody}</tbody>
           </table>
         </div>
@@ -246,8 +253,8 @@ function buildPackingReportHtml({ main, by }) {
     <div class="box-foot">
       <div class="foot foot-1">
         <table>
-          <colgroup><col style="width:60%" /><col style="width:20%" /><col style="width:20%" /></colgroup>
-          <tr><td></td><td class="val">${fmtPcs(inputPcs)}</td><td class="val">${fmtKg(inputKg)}</td></tr>
+          <colgroup><col style="width:40%" /><col style="width:22%" /><col style="width:18%" /><col style="width:20%" /></colgroup>
+          <tr><td></td><td></td><td class="val">${fmtPcs(inputPcs)}</td><td class="val">${fmtKg(inputKg)}</td></tr>
         </table>
       </div>
       <div class="foot foot-2">

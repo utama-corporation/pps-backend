@@ -169,6 +169,7 @@ function buildBrokerReportHtml({ main, downtime, by }) {
     .map(
       (r) => `<tr>
         <td class="txt">${escapeHtml(r.Jenis || "-")}</td>
+        <td class="txt center">${escapeHtml(r.NoLabel || "-")}</td>
         <td class="num">${fmtNumber(r.Berat)}</td>
         <td class="num">${pct(r.Berat)}</td>
       </tr>`,
@@ -216,9 +217,9 @@ function buildBrokerReportHtml({ main, downtime, by }) {
   .box { border: 1.5px solid #111827; display: flex; margin-bottom: 20px; flex: 1 0 auto; }
   .col { display: flex; flex-direction: column; min-width: 0; }
   .col + .col { border-left: 1px solid #111827; }
-  .col-1 { width: 24%; }
-  .col-2 { width: 44%; }
-  .col-3 { width: 32%; }
+  .col-1 { width: 32%; }
+  .col-2 { width: 42%; }
+  .col-3 { width: 26%; }
   .col-head { text-align: center; font-weight: 700; font-size: 9.5pt; padding: 5px 4px; border-bottom: 1px solid #111827; background: #F3F4F6; }
   .col-body { flex: 1; }
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
@@ -272,15 +273,15 @@ function buildBrokerReportHtml({ main, downtime, by }) {
       <div class="col-head">Pemakaian Bahan</div>
       <div class="col-body">
         <table>
-          <colgroup><col style="width:62%" /><col style="width:23%" /><col style="width:15%" /></colgroup>
-          <thead><tr><th class="center">Nama Bahan</th><th class="center sub-h">Qty (Kg)</th><th class="center sub-h">%</th></tr></thead>
-          <tbody>${inputBody || `<tr><td class="txt">-</td><td class="num">-</td><td class="num">-</td></tr>`}</tbody>
+          <colgroup><col style="width:34%" /><col style="width:28%" /><col style="width:22%" /><col style="width:16%" /></colgroup>
+          <thead><tr><th class="center">Nama Bahan</th><th class="center sub-h">No Label</th><th class="center sub-h">Qty (Kg)</th><th class="center sub-h">%</th></tr></thead>
+          <tbody>${inputBody || `<tr><td class="txt">-</td><td class="center">-</td><td class="num">-</td><td class="num">-</td></tr>`}</tbody>
         </table>
       </div>
       <div class="col-foot">
         <table>
-          <colgroup><col style="width:62%" /><col style="width:23%" /><col style="width:15%" /></colgroup>
-          <tr><td class="lbl">Total</td><td class="val">${fmtNumber(inputTotal)}</td><td></td></tr>
+          <colgroup><col style="width:34%" /><col style="width:28%" /><col style="width:22%" /><col style="width:16%" /></colgroup>
+          <tr><td class="lbl" colspan="2">Total</td><td class="val">${fmtNumber(inputTotal)}</td><td></td></tr>
         </table>
       </div>
     </div>
