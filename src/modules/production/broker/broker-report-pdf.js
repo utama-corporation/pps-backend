@@ -344,9 +344,9 @@ function buildBrokerReportHtml({ main, downtime, by }) {
         </thead>
         <tbody>
           <tr>
-            <td class="sign-role">Operator</td>
-            <td class="sign-role">Ka Regu Broker</td>
-            <td class="sign-role">Ka. Div. Cuci &amp; Broker</td>
+            <td class="sign-role">Tally/Stock Controller</td>
+            <td class="sign-role">Ka. Regu Produksi</td>
+            <td class="sign-role">Ka. Div. Stock</td>
             <td class="sign-role">Ka. Dept. Produksi</td>
           </tr>
           <tr>

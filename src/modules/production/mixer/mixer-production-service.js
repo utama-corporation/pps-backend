@@ -1095,11 +1095,11 @@ async function fetchInputs(noProduksi) {
       CAST(NULL AS decimal(18,3)) AS BeratAct,
       br.IsPartial AS IsPartial,
       bh.IdJenisPlastik AS IdJenis,
-      jp.Jenis          AS NamaJenis
+      jp.Nama          AS NamaJenis
     FROM dbo.MixerProduksiInputBroker ib WITH (NOLOCK)
     LEFT JOIN dbo.Broker_d br        WITH (NOLOCK) ON br.NoBroker = ib.NoBroker AND br.NoSak = ib.NoSak
     LEFT JOIN dbo.Broker_h bh        WITH (NOLOCK) ON bh.NoBroker = ib.NoBroker
-    LEFT JOIN dbo.MstJenisPlastik jp WITH (NOLOCK) ON jp.IdJenisPlastik = bh.IdJenisPlastik
+    LEFT JOIN dbo.MstBroker jp WITH (NOLOCK) ON jp.IdBroker = bh.IdJenisPlastik
     WHERE ib.NoProduksi=@no
 
     UNION ALL
@@ -1115,14 +1115,14 @@ async function fetchInputs(noProduksi) {
       bb.BeratAct AS BeratAct,
       bb.IsPartial AS IsPartial,
       bbh.IdJenisPlastik AS IdJenis,
-      jpb.Jenis          AS NamaJenis
+      jpb.Nama          AS NamaJenis
     FROM dbo.MixerProduksiInputBB ibb WITH (NOLOCK)
     LEFT JOIN dbo.BahanBaku_d bb            WITH (NOLOCK)
       ON bb.NoBahanBaku = ibb.NoBahanBaku AND bb.NoPallet = ibb.NoPallet AND bb.NoSak = ibb.NoSak
     LEFT JOIN dbo.BahanBakuPallet_h bbh     WITH (NOLOCK)
       ON bbh.NoBahanBaku = ibb.NoBahanBaku AND bbh.NoPallet = ibb.NoPallet
-    LEFT JOIN dbo.MstJenisPlastik jpb       WITH (NOLOCK)
-      ON jpb.IdJenisPlastik = bbh.IdJenisPlastik
+    LEFT JOIN dbo.MstBahanBaku jpb       WITH (NOLOCK)
+      ON jpb.IdBB = bbh.IdJenisPlastik
     WHERE ibb.NoProduksi=@no
 
     UNION ALL
@@ -1199,14 +1199,14 @@ async function fetchInputs(noProduksi) {
       pdet.NoSak,
       pdet.Berat,
       bbh.IdJenisPlastik AS IdJenis,
-      jpp.Jenis          AS NamaJenis
+      jpp.Nama          AS NamaJenis
     FROM dbo.MixerProduksiInputBBPartial pmap WITH (NOLOCK)
     LEFT JOIN dbo.BahanBakuPartial pdet WITH (NOLOCK)
       ON pdet.NoBBPartial = pmap.NoBBPartial
     LEFT JOIN dbo.BahanBakuPallet_h bbh WITH (NOLOCK)
       ON bbh.NoBahanBaku = pdet.NoBahanBaku AND bbh.NoPallet = pdet.NoPallet
-    LEFT JOIN dbo.MstJenisPlastik jpp WITH (NOLOCK)
-      ON jpp.IdJenisPlastik = bbh.IdJenisPlastik
+    LEFT JOIN dbo.MstBahanBaku jpp WITH (NOLOCK)
+      ON jpp.IdBB = bbh.IdJenisPlastik
     WHERE pmap.NoProduksi = @no
     ORDER BY pmap.NoBBPartial DESC;
 
@@ -1250,14 +1250,14 @@ async function fetchInputs(noProduksi) {
       bdet.NoSak,
       bdet.Berat,
       bh.IdJenisPlastik AS IdJenis,
-      jp.Jenis          AS NamaJenis
+      jp.Nama          AS NamaJenis
     FROM dbo.MixerProduksiInputBrokerPartial bmap WITH (NOLOCK)
     LEFT JOIN dbo.BrokerPartial bdet WITH (NOLOCK)
       ON bdet.NoBrokerPartial = bmap.NoBrokerPartial
     LEFT JOIN dbo.Broker_h bh WITH (NOLOCK)
       ON bh.NoBroker = bdet.NoBroker
-    LEFT JOIN dbo.MstJenisPlastik jp WITH (NOLOCK)
-      ON jp.IdJenisPlastik = bh.IdJenisPlastik
+    LEFT JOIN dbo.MstBroker jp WITH (NOLOCK)
+      ON jp.IdBroker = bh.IdJenisPlastik
     WHERE bmap.NoProduksi = @no
     ORDER BY bmap.NoBrokerPartial DESC;
   `;
@@ -1517,7 +1517,7 @@ async function validateLabel(labelCode) {
           d.DateUsage,
           d.IsPartial,
           ph.IdJenisPlastik      AS idJenis,
-          jp.Jenis               AS namaJenis
+          jp.Nama               AS namaJenis
 
         FROM dbo.BahanBaku_d AS d WITH (NOLOCK)
         LEFT JOIN PartialAgg AS pa
@@ -1527,8 +1527,8 @@ async function validateLabel(labelCode) {
         LEFT JOIN dbo.BahanBakuPallet_h AS ph WITH (NOLOCK)
           ON ph.NoBahanBaku = d.NoBahanBaku
          AND ph.NoPallet    = d.NoPallet
-        LEFT JOIN dbo.MstJenisPlastik AS jp WITH (NOLOCK)
-          ON jp.IdJenisPlastik = ph.IdJenisPlastik
+        LEFT JOIN dbo.MstBahanBaku AS jp WITH (NOLOCK)
+          ON jp.IdBB = ph.IdJenisPlastik
         WHERE d.NoBahanBaku = @noBahanBaku
           AND d.NoPallet    = @noPallet
           AND d.DateUsage IS NULL
@@ -1563,12 +1563,12 @@ async function validateLabel(labelCode) {
           d.DateUsage,
           d.IdLokasi,
           h.IdJenisPlastik AS idJenis,
-          jp.Jenis         AS namaJenis
+          jp.Nama         AS namaJenis
         FROM dbo.Washing_d AS d WITH (NOLOCK)
         LEFT JOIN dbo.Washing_h AS h WITH (NOLOCK)
           ON h.NoWashing = d.NoWashing
-        LEFT JOIN dbo.MstJenisPlastik AS jp WITH (NOLOCK)
-          ON jp.IdJenisPlastik = h.IdJenisPlastik
+        LEFT JOIN dbo.MstWashing AS jp WITH (NOLOCK)
+          ON jp.IdWashing = h.IdJenisPlastik
         WHERE d.NoWashing = @labelCode
           AND d.DateUsage IS NULL
         ORDER BY d.NoWashing, d.NoSak;
@@ -1600,15 +1600,15 @@ async function validateLabel(labelCode) {
             ELSE CAST(0 AS bit) 
           END                           AS isPartial,
           h.IdJenisPlastik              AS idJenis,
-          jp.Jenis                      AS namaJenis
+          jp.Nama                      AS namaJenis
       FROM dbo.Broker_d AS d WITH (NOLOCK)
       LEFT JOIN PartialSum AS ps
         ON ps.NoBroker = d.NoBroker
        AND ps.NoSak    = d.NoSak
       LEFT JOIN dbo.Broker_h AS h WITH (NOLOCK)
         ON h.NoBroker = d.NoBroker
-      LEFT JOIN dbo.MstJenisPlastik AS jp WITH (NOLOCK)
-        ON jp.IdJenisPlastik = h.IdJenisPlastik
+      LEFT JOIN dbo.MstBroker AS jp WITH (NOLOCK)
+        ON jp.IdBroker = h.IdJenisPlastik
       WHERE d.NoBroker = @labelCode
         AND d.DateUsage IS NULL
         AND (d.Berat - ISNULL(ps.BeratPartial, 0)) > 0

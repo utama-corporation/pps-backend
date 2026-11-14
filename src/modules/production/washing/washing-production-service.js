@@ -1493,14 +1493,14 @@ async function queryRawInputs(noProduksi) {
       CAST(NULL AS decimal(18,3)) AS BeratAct,
       CAST(NULL AS bit) AS IsPartial,
       wh.IdJenisPlastik AS IdJenis,
-      jp.Jenis          AS NamaJenis
+      jp.Nama          AS NamaJenis
     FROM dbo.WashingProduksiInputWashing iw WITH (NOLOCK)
     LEFT JOIN dbo.Washing_d wd         WITH (NOLOCK)
       ON wd.NoWashing = iw.NoWashing AND wd.NoSak = iw.NoSak
     LEFT JOIN dbo.Washing_h wh         WITH (NOLOCK)
       ON wh.NoWashing = iw.NoWashing
-    LEFT JOIN dbo.MstJenisPlastik jp   WITH (NOLOCK)
-      ON jp.IdJenisPlastik = wh.IdJenisPlastik
+    LEFT JOIN dbo.MstWashing jp   WITH (NOLOCK)
+      ON jp.IdWashing = wh.IdJenisPlastik
     WHERE iw.NoProduksi = @no
 
     UNION ALL
@@ -1800,7 +1800,7 @@ async function fetchOutputs(noProduksi) {
       o.NoProduksi,
       o.NoWashing,
       h.IdJenisPlastik AS IdJenis,
-      jp.Jenis AS NamaJenis,
+      jp.Nama AS NamaJenis,
       ISNULL(h.HasBeenPrinted, 0) AS HasBeenPrinted,
       o.NoSak,
       d.Berat,
@@ -1812,8 +1812,8 @@ async function fetchOutputs(noProduksi) {
      AND d.NoSak = o.NoSak
     LEFT JOIN dbo.Washing_h h WITH (NOLOCK)
       ON h.NoWashing = o.NoWashing
-    LEFT JOIN dbo.MstJenisPlastik jp WITH (NOLOCK)
-      ON jp.IdJenisPlastik = h.IdJenisPlastik
+    LEFT JOIN dbo.MstWashing jp WITH (NOLOCK)
+      ON jp.IdWashing = h.IdJenisPlastik
     WHERE o.NoProduksi = @no
     ORDER BY o.NoWashing DESC, d.NoSak;
   `;
@@ -2034,12 +2034,12 @@ async function validateLabel(labelCode) {
           d.DateUsage,
           d.IdLokasi,
           h.IdJenisPlastik AS idJenis,
-          jp.Jenis         AS namaJenis
+          jp.Nama         AS namaJenis
         FROM dbo.Washing_d AS d WITH (NOLOCK)
         LEFT JOIN dbo.Washing_h AS h WITH (NOLOCK)
           ON h.NoWashing = d.NoWashing
-        LEFT JOIN dbo.MstJenisPlastik AS jp WITH (NOLOCK)
-          ON jp.IdJenisPlastik = h.IdJenisPlastik
+        LEFT JOIN dbo.MstWashing AS jp WITH (NOLOCK)
+          ON jp.IdWashing = h.IdJenisPlastik
         WHERE d.NoWashing = @labelCode
           AND d.DateUsage IS NULL
         ORDER BY d.NoWashing, d.NoSak;

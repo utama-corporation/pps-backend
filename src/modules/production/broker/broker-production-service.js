@@ -266,11 +266,11 @@ async function queryRawInputs(noProduksi) {
       CAST(NULL AS decimal(18,3)) AS BeratAct,
       br.IsPartial AS IsPartial,
       bh.IdJenisPlastik AS IdJenis,
-      jp.Jenis          AS NamaJenis
+      jp.Nama          AS NamaJenis
     FROM dbo.BrokerProduksiInputBroker ib WITH (NOLOCK)
     LEFT JOIN dbo.Broker_d br        WITH (NOLOCK) ON br.NoBroker = ib.NoBroker AND br.NoSak = ib.NoSak
     LEFT JOIN dbo.Broker_h bh        WITH (NOLOCK) ON bh.NoBroker = ib.NoBroker
-    LEFT JOIN dbo.MstJenisPlastik jp WITH (NOLOCK) ON jp.IdJenisPlastik = bh.IdJenisPlastik
+    LEFT JOIN dbo.MstBroker jp WITH (NOLOCK) ON jp.IdBroker = bh.IdJenisPlastik
     WHERE ib.NoProduksi=@no
 
     UNION ALL
@@ -305,11 +305,11 @@ async function queryRawInputs(noProduksi) {
       CAST(NULL AS decimal(18,3)) AS BeratAct,
       CAST(NULL AS bit) AS IsPartial,
       wh.IdJenisPlastik AS IdJenis,
-      jpw.Jenis          AS NamaJenis
+      jpw.Nama          AS NamaJenis
     FROM dbo.BrokerProduksiInputWashing iw WITH (NOLOCK)
     LEFT JOIN dbo.Washing_d wd         WITH (NOLOCK) ON wd.NoWashing = iw.NoWashing AND wd.NoSak = iw.NoSak
     LEFT JOIN dbo.Washing_h wh         WITH (NOLOCK) ON wh.NoWashing = iw.NoWashing
-    LEFT JOIN dbo.MstJenisPlastik jpw  WITH (NOLOCK) ON jpw.IdJenisPlastik = wh.IdJenisPlastik
+    LEFT JOIN dbo.MstWashing jpw  WITH (NOLOCK) ON jpw.IdWashing = wh.IdJenisPlastik
     WHERE iw.NoProduksi=@no
 
     UNION ALL
@@ -464,14 +464,14 @@ async function queryRawInputs(noProduksi) {
       bdet.NoSak,
       bdet.Berat,
       bh.IdJenisPlastik AS IdJenis,
-      jp.Jenis          AS NamaJenis
+      jp.Nama          AS NamaJenis
     FROM dbo.BrokerProduksiInputBrokerPartial bmap WITH (NOLOCK)
     LEFT JOIN dbo.BrokerPartial bdet WITH (NOLOCK)
       ON bdet.NoBrokerPartial = bmap.NoBrokerPartial
     LEFT JOIN dbo.Broker_h bh WITH (NOLOCK)
       ON bh.NoBroker = bdet.NoBroker
-    LEFT JOIN dbo.MstJenisPlastik jp WITH (NOLOCK)
-      ON jp.IdJenisPlastik = bh.IdJenisPlastik
+    LEFT JOIN dbo.MstBroker jp WITH (NOLOCK)
+      ON jp.idBroker = bh.IdJenisPlastik
     WHERE bmap.NoProduksi = @no
     ORDER BY NoBrokerPartial DESC; 
   `;
@@ -875,7 +875,7 @@ async function fetchOutputs(noProduksi) {
       o.NoProduksi,
       o.NoBroker,
       h.IdJenisPlastik AS IdJenis,
-      COALESCE(mb.Nama, jp.Jenis) AS NamaJenis,
+      COALESCE(mb.Nama, jp.Nama) AS NamaJenis,
       ISNULL(h.HasBeenPrinted, 0) AS HasBeenPrinted,
       o.NoSak,
       d.Berat,
@@ -887,8 +887,8 @@ async function fetchOutputs(noProduksi) {
       ON h.NoBroker = o.NoBroker
     LEFT JOIN dbo.MstBroker mb WITH (NOLOCK)
       ON mb.IdBroker = h.IdJenisPlastik
-    LEFT JOIN dbo.MstJenisPlastik jp WITH (NOLOCK)
-      ON jp.IdJenisPlastik = h.IdJenisPlastik
+    LEFT JOIN dbo.MstBroker jp WITH (NOLOCK)
+      ON jp.IdBroker = h.IdJenisPlastik
     LEFT JOIN dbo.Broker_d d WITH (NOLOCK)
       ON d.NoBroker = o.NoBroker
      AND d.NoSak = o.NoSak
@@ -2529,12 +2529,12 @@ async function validateLabel(labelCode) {
           d.DateUsage,
           d.IdLokasi,
           h.IdJenisPlastik AS idJenis,
-          jp.Jenis         AS namaJenis
+          jp.Nama         AS namaJenis
         FROM dbo.Washing_d AS d WITH (NOLOCK)
         LEFT JOIN dbo.Washing_h AS h WITH (NOLOCK)
           ON h.NoWashing = d.NoWashing
-        LEFT JOIN dbo.MstJenisPlastik AS jp WITH (NOLOCK)
-          ON jp.IdJenisPlastik = h.IdJenisPlastik
+        LEFT JOIN dbo.MstWashing AS jp WITH (NOLOCK)
+          ON jp.IdWashing = h.IdJenisPlastik
         WHERE d.NoWashing = @labelCode
           AND d.DateUsage IS NULL
         ORDER BY d.NoWashing, d.NoSak;
@@ -2566,15 +2566,15 @@ async function validateLabel(labelCode) {
             ELSE CAST(0 AS bit) 
           END                           AS isPartial,
           h.IdJenisPlastik              AS idJenis,
-          jp.Jenis                      AS namaJenis
+          jp.Nama                      AS namaJenis
       FROM dbo.Broker_d AS d WITH (NOLOCK)
       LEFT JOIN PartialSum AS ps
         ON ps.NoBroker = d.NoBroker
        AND ps.NoSak    = d.NoSak
       LEFT JOIN dbo.Broker_h AS h WITH (NOLOCK)
         ON h.NoBroker = d.NoBroker
-      LEFT JOIN dbo.MstJenisPlastik AS jp WITH (NOLOCK)
-        ON jp.IdJenisPlastik = h.IdJenisPlastik
+      LEFT JOIN dbo.MstBroker AS jp WITH (NOLOCK)
+        ON jp.IdBroker = h.IdJenisPlastik
       WHERE d.NoBroker = @labelCode
         AND d.DateUsage IS NULL
         AND (d.Berat - ISNULL(ps.BeratPartial, 0)) > 0

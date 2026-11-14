@@ -272,9 +272,9 @@ function buildPackingReportHtml({ main, by }) {
         </thead>
         <tbody>
           <tr>
-            <td class="sign-role">Operator</td>
-            <td class="sign-role">Ka. Regu Packing</td>
-            <td class="sign-role">Ka. Div, Produksi Inject</td>
+            <td class="sign-role">Tally/Stock Controller</td>
+            <td class="sign-role">Ka. Regu Produksi</td>
+            <td class="sign-role">Ka. Div. Stock</td>
             <td class="sign-role">Ka. Dept, Produksi</td>
           </tr>
           <tr>

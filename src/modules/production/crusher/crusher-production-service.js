@@ -1242,7 +1242,7 @@ async function fetchInputs(noCrusherProduksi) {
       bb.BeratAct AS BeratAct,
       bb.IsPartial AS IsPartial,
       bbh.IdJenisPlastik AS IdJenis,
-      jp.Jenis           AS NamaJenis
+      jp.Nama           AS NamaJenis
     FROM dbo.CrusherProduksiInputBB ibb WITH (NOLOCK)
     LEFT JOIN dbo.BahanBaku_d bb WITH (NOLOCK)
       ON bb.NoBahanBaku = ibb.NoBahanBaku 
@@ -1251,8 +1251,8 @@ async function fetchInputs(noCrusherProduksi) {
     LEFT JOIN dbo.BahanBakuPallet_h bbh WITH (NOLOCK)
       ON bbh.NoBahanBaku = ibb.NoBahanBaku 
       AND bbh.NoPallet = ibb.NoPallet
-    LEFT JOIN dbo.MstJenisPlastik jp WITH (NOLOCK)
-      ON jp.IdJenisPlastik = bbh.IdJenisPlastik
+    LEFT JOIN dbo.MstBahanBaku jp WITH (NOLOCK)
+      ON jp.IdBB = bbh.IdJenisPlastik
     WHERE ibb.NoCrusherProduksi = @no
 
     UNION ALL
@@ -1332,15 +1332,15 @@ async function fetchInputs(noCrusherProduksi) {
       pdet.NoSak,
       pdet.Berat,
       bbh.IdJenisPlastik AS IdJenis,
-      jp.Jenis           AS NamaJenis
+      jp.Nama           AS NamaJenis
     FROM dbo.CrusherProduksiInputBBPartial pmap WITH (NOLOCK)
     LEFT JOIN dbo.BahanBakuPartial pdet WITH (NOLOCK)
       ON pdet.NoBBPartial = pmap.NoBBPartial
     LEFT JOIN dbo.BahanBakuPallet_h bbh WITH (NOLOCK)
       ON bbh.NoBahanBaku = pdet.NoBahanBaku 
       AND bbh.NoPallet = pdet.NoPallet
-    LEFT JOIN dbo.MstJenisPlastik jp WITH (NOLOCK)
-      ON jp.IdJenisPlastik = bbh.IdJenisPlastik
+    LEFT JOIN dbo.MstBahanBaku jp WITH (NOLOCK)
+      ON jp.IdBB = bbh.IdJenisPlastik
     WHERE pmap.NoCrusherProduksi = @no
     ORDER BY pmap.NoBBPartial DESC;
 
@@ -1656,7 +1656,7 @@ async function validateLabel(labelCode) {
           d.DateUsage,
           d.IsPartial,
           ph.IdJenisPlastik      AS idJenis,
-          jp.Jenis               AS namaJenis
+          jp.Nama               AS namaJenis
 
         FROM dbo.BahanBaku_d AS d WITH (NOLOCK)
         LEFT JOIN PartialAgg AS pa
@@ -1666,8 +1666,8 @@ async function validateLabel(labelCode) {
         LEFT JOIN dbo.BahanBakuPallet_h AS ph WITH (NOLOCK)
           ON ph.NoBahanBaku = d.NoBahanBaku
          AND ph.NoPallet    = d.NoPallet
-        LEFT JOIN dbo.MstJenisPlastik AS jp WITH (NOLOCK)
-          ON jp.IdJenisPlastik = ph.IdJenisPlastik
+        LEFT JOIN dbo.MstBahanBaku AS jp WITH (NOLOCK)
+          ON jp.IdBB = ph.IdJenisPlastik
         WHERE d.NoBahanBaku = @noBahanBaku
           AND d.NoPallet    = @noPallet
           AND d.DateUsage IS NULL

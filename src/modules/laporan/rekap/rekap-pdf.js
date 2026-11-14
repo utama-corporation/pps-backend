@@ -240,8 +240,189 @@ function buildRekapHtml({ jenis, tglAkhir, rows }) {
 </html>`;
 }
 
-async function renderRekapPdf({ html, username }) {
+// ---------------------------------------------------------------------------
+// Layout khusus Rekap Washing (meniru RekapWashing.pdf versi Crystal Report):
+// portrait, 5 seksi tetap, header abu-abu, footer "Print by ... on ...".
+// ---------------------------------------------------------------------------
+const HARIAN_SECTIONS = (label, extra = []) => [
+  { key: "output", title: `Output Produksi Harian (${label})` },
+  { key: "input", title: "Input" },
+  { key: "waste", title: "Waste" },
+  { key: "bsusunoutput", title: "BSusun Output" },
+  { key: "bsusuninput", title: "BSusun Input" },
+  ...extra.map((title) => ({ key: tipeKey(title), title })),
+];
+
+// Seksi baku yang tidak ditampilkan untuk jenis tertentu (bila tidak ada
+// barisnya; baris yang ada tetap muncul lewat seksi cadangan di bawah).
+const HARIAN_SKIP = {
+  packing: ["bsusunoutput", "bsusuninput"],
+  "hot-stamping": ["bsusunoutput", "bsusuninput"],
+  spanner: ["bsusunoutput", "bsusuninput"],
+  "pasang-kunci": ["bsusunoutput", "bsusuninput"],
+};
+
+// Seksi tambahan (selalu tampil walau kosong) untuk jenis tertentu.
+const HARIAN_EXTRA = {
+  "inject-bj": ["Sortir Reject Output", "Sortir Reject Input"],
+};
+
+// Jenis rekap yang memakai layout "Laporan Produksi Harian" ini.
+const HARIAN_LABEL = {
+  washing: "Washing",
+  broker: "Broker",
+  crusher: "Crusher",
+  gilingan: "Gilingan",
+  mixer: "Mixer",
+  "inject-bj": "Inject - Barang Jadi",
+  "inject-fwip": "Inject - Furniture WIP",
+  packing: "Packing - Barang Jadi",
+  "hot-stamping": "Hot Stamping - FWIP",
+  spanner: "Spanner - FWIP",
+  "pasang-kunci": "Pasang Kunci - FWIP",
+};
+
+function tipeKey(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function formatDateDMY(value) {
+  const raw = String(value ?? "").slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : raw || "-";
+}
+
+function formatPrintedAt(date = new Date()) {
+  const p = (n) => String(n).padStart(2, "0");
+  return (
+    `${p(date.getDate())}/${p(date.getMonth() + 1)}/${date.getFullYear()} ` +
+    `${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`
+  );
+}
+
+function buildRekapHarianHtml({ jenis, label, tglAkhir, rows }) {
+  const data = Array.isArray(rows) ? rows : [];
+  const skip = new Set(HARIAN_SKIP[jenis] ?? []);
+  const base = HARIAN_SECTIONS(label, HARIAN_EXTRA[jenis]).filter(
+    (s) => !skip.has(s.key),
+  );
+  const known = new Set(base.map((s) => s.key));
+  const sections = [...base];
+  // DimType di luar 5 seksi baku tetap ditampilkan agar data tidak hilang.
+  for (const r of data) {
+    const k = tipeKey(r.DimType);
+    if (k && !known.has(k)) {
+      known.add(k);
+      sections.push({ key: k, title: String(r.DimType).trim() });
+    }
+  }
+
+  const body = sections
+    .map((sec) => {
+      const secRows = data
+        .filter((r) => tipeKey(r.DimType) === sec.key)
+        .sort(
+          (a, b) =>
+            String(a.Jenis ?? "").localeCompare(String(b.Jenis ?? ""), "id", {
+              numeric: true,
+              sensitivity: "base",
+            }) ||
+            String(a.ItemCode ?? "").localeCompare(String(b.ItemCode ?? ""), "id", {
+              numeric: true,
+            }),
+        );
+      const detail = secRows.length
+        ? secRows
+            .map(
+              (r) => `<tr>
+          <td class="kode">${escapeHtml(r.ItemCode ?? "")}</td>
+          <td>${escapeHtml(r.Jenis ?? "")}</td>
+          <td class="num">${formatNumber(r.Pcs ?? 0, 0)}</td>
+          <td class="num">${formatNumber(r.Berat ?? 0, 2)}</td>
+          <td class="wh">${escapeHtml(r.IdWarehouse ?? "")}</td>
+        </tr>`,
+            )
+            .join("")
+        : '<tr><td class="blank" colspan="5">&nbsp;</td></tr>';
+      return `<div class="sec-title">${escapeHtml(sec.title)}</div>
+      <table>
+        <colgroup>
+          <col style="width:17%" /><col style="width:43%" /><col style="width:10%" />
+          <col style="width:16%" /><col style="width:14%" />
+        </colgroup>
+        <thead><tr>
+          <th class="kode">Kode Barang</th><th>Jenis</th>
+          <th class="num">Pcs</th><th class="num">Berat</th><th class="wh">Warehouse</th>
+        </tr></thead>
+        <tbody>${detail}</tbody>
+      </table>`;
+    })
+    .join("");
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Calibri, 'Segoe UI', Arial, sans-serif; font-size: 10px; color: #000; }
+  .title { font-size: 15px; font-weight: 700; }
+  .date { font-size: 10px; margin: 2px 0 22px; }
+  .sec-title {
+    font-size: 10px; font-weight: 700; padding-bottom: 3px;
+    border-bottom: 1px solid #000; margin-top: 18px; margin-bottom: 8px;
+  }
+  table { width: calc(100% - 14px); margin-left: 14px; border-collapse: collapse; table-layout: fixed; }
+  thead th {
+    background: #eeeeee; font-weight: 400; font-size: 10px;
+    padding: 3px 8px; text-align: left;
+  }
+  td { padding: 4px 8px; border-bottom: 1px solid #e3e3e3; font-size: 10px; }
+  td.blank { height: 22px; }
+  th.kode, td.kode { text-align: left; }
+  th.num, td.num { text-align: right; }
+  th.wh, td.wh { text-align: center; }
+  tr { page-break-inside: avoid; }
+</style>
+</head>
+<body>
+  <div class="title">Laporan Produksi Harian</div>
+  <div class="date">Tanggal : ${escapeHtml(formatDateDMY(tglAkhir))}</div>
+  ${body}
+</body>
+</html>`;
+}
+
+async function renderRekapPdf({ html, username, portrait = false }) {
   const who = String(username ?? "-").trim() || "-";
+
+  if (portrait) {
+    await acquirePageSlot();
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+    try {
+      await page.setContent(html, { waitUntil: "domcontentloaded" });
+      return Buffer.from(
+        await page.pdf({
+          format: "A4",
+          printBackground: true,
+          displayHeaderFooter: true,
+          headerTemplate: "<span></span>",
+          footerTemplate: `
+            <div style="width:100%; font-size:8px; font-style:italic; font-family:Arial,sans-serif; padding:0 10mm;">
+              Print by ${escapeHtml(who)} on ${escapeHtml(formatPrintedAt())}
+            </div>`,
+          margin: { top: "12mm", right: "8mm", bottom: "14mm", left: "8mm" },
+        }),
+      );
+    } finally {
+      await page.close();
+      releasePageSlot();
+    }
+  }
+
   const printedAt = new Date().toLocaleString("id-ID", {
     weekday: "long",
     day: "2-digit",
@@ -281,6 +462,8 @@ async function renderRekapPdf({ html, username }) {
 
 module.exports = {
   buildRekapHtml,
+  buildRekapHarianHtml,
+  HARIAN_LABEL,
   renderRekapPdf,
   getRekapTitle,
   REKAP_TITLE,
