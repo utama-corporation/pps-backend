@@ -31,7 +31,8 @@ const {
 } = require("../../../core/config/produksi-input-mapping.config");
 const { toSisaOutputList } = require("../../../core/utils/parse");
 
-// Maksimal jenis bonggolan / reject yang boleh dikirim dalam satu batch.
+// Maksimal entri bonggolan / reject (baris) yang boleh dikirim dalam satu
+// batch. Jenis boleh berulang (tiap entri dibuatkan labelnya sendiri).
 const MAX_SISA_JENIS_PER_KATEGORI = 5;
 
 // MstShiftHourSet.IdBagian di-hardcode = 4 (bagian Inject) — samakan dengan
@@ -2527,13 +2528,16 @@ async function submitInjectBatch(payload, ctx, { forceClose = false, tx: existin
   let isLastBatch =
     bonggolanList.length > 0 || rejectList.length > 0 || forceClose;
 
+  // Jenis yang sama boleh muncul di beberapa entri dalam satu batch
+  // (mis. 2 karung bonggolan jenis A ditimbang terpisah) — tiap entri
+  // akan dibuatkan label sendiri. Hanya batas jumlah entri per batch
+  // yang dipertahankan.
   const validateSisaList = (entries, { label, idKey }) => {
     if (entries.length > MAX_SISA_JENIS_PER_KATEGORI) {
       throw badReq(
-        `maksimal ${MAX_SISA_JENIS_PER_KATEGORI} jenis ${label} per batch`,
+        `maksimal ${MAX_SISA_JENIS_PER_KATEGORI} entri ${label} per batch`,
       );
     }
-    const seen = new Set();
     entries.forEach((entry, index) => {
       const id = Number(entry[idKey]);
       if (!Number.isInteger(id) || id <= 0) {
@@ -2543,10 +2547,6 @@ async function submitInjectBatch(payload, ctx, { forceClose = false, tx: existin
       if (!Number.isFinite(berat) || berat <= 0) {
         throw badReq(`${label}[${index}].berat harus angka > 0`);
       }
-      if (seen.has(id)) {
-        throw badReq(`${label} tidak boleh memiliki ${idKey} duplikat: ${id}`);
-      }
-      seen.add(id);
     });
   };
 
