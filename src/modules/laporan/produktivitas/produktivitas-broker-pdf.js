@@ -32,10 +32,10 @@ function fmtDec(value, digits = 2) {
   return n < 0 && rounded !== 0 ? `(${s})` : s;
 }
 
-function fmtPct(part, total) {
-  if (!total) return "0%";
-  const p = Math.round((part / total) * 100);
-  return p < 0 ? `(${Math.abs(p)}%)` : `${p}%`;
+function fmtPct(part, total, digits = 0) {
+  if (!total) return `${(0).toFixed(digits)}%`;
+  const p = Number(((part / total) * 100).toFixed(digits));
+  return p < 0 ? `(${Math.abs(p).toFixed(digits)}%)` : `${p.toFixed(digits)}%`;
 }
 
 function fmtDateDMY(value) {
@@ -106,7 +106,7 @@ function buildProduktivitasBrokerHtml({ tglAwal, tglAkhir, rows }) {
                 waste: `<td class="n m"${span}>${fmtDec(g.waste)}</td>`,
                 susut: `<td class="n m"${span}>${fmtDec(g.susut)}</td>`,
                 pHasil: `<td class="c m"${span}>${fmtPct(g.outP, g.bahanTotal)}</td>`,
-                pSusut: `<td class="c m"${span}>${fmtPct(g.susut, g.bahanTotal)}</td>`,
+                pSusut: `<td class="c m"${span}>${fmtPct(g.susut, g.bahanTotal, 1)}</td>`,
               }
             : {};
           return `<tr${first ? ' class="first"' : ""}>
@@ -142,7 +142,7 @@ function buildProduktivitasBrokerHtml({ tglAwal, tglAkhir, rows }) {
         <td class="n b">${fmtDec(grand.waste)}</td>
         <td class="n b">${fmtDec(grand.susut)}</td>
         <td class="c b">${fmtPct(grand.outP, grand.qty)}</td>
-        <td class="c b">${fmtPct(grand.susut, grand.qty)}</td>
+        <td class="c b">${fmtPct(grand.susut, grand.qty, 1)}</td>
       </tr></tbody>`
     : "";
 
