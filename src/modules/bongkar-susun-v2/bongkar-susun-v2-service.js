@@ -957,9 +957,9 @@ exports.getDetail = async (noBongkarSusun) => {
       INNER JOIN dbo.BahanBakuPallet_h ph
         ON ph.NoBahanBaku = ib.NoBahanBaku
        AND ph.NoPallet = ib.NoPallet
-      INNER JOIN dbo.MstJenisPlastik jp
+      LEFT JOIN dbo.MstJenisPlastik jp
         ON jp.IdJenisPlastik = ph.IdJenisPlastik
-      INNER JOIN dbo.MstWarehouse w
+      LEFT JOIN dbo.MstWarehouse w
         ON w.IdWarehouse = ph.IdWarehouse
       INNER JOIN dbo.BahanBaku_d d
         ON d.NoBahanBaku = ib.NoBahanBaku

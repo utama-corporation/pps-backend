@@ -68,6 +68,25 @@ async function mutasiBahanBaku(req, res) {
   }
 }
 
+async function mutasiBahanBakuPdf(req, res) {
+  try {
+    const { tglAwal, tglAkhir } = req.query;
+    const buffer = await service.getMutasiBahanBakuPdf({
+      tglAwal,
+      tglAkhir,
+      username: req.username,
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="Laporan-Mutasi-Bahan-Baku-${tglAwal}-${tglAkhir}.pdf"`,
+    );
+    return res.send(Buffer.from(buffer));
+  } catch (error) {
+    return fail(res, error, 'mutasi bahan baku pdf');
+  }
+}
+
 async function penerimaanBahanBaku(req, res) {
   try {
     const data = await service.penerimaanBahanBaku(req.query);
@@ -339,6 +358,7 @@ module.exports = {
   stokBahanBaku,
   stokBahanBakuPdf,
   mutasiBahanBaku,
+  mutasiBahanBakuPdf,
   penerimaanBahanBaku,
   kartuStokBahanBaku,
   umurBahanBaku,
