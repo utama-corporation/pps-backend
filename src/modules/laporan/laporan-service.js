@@ -16,6 +16,10 @@ const {
   renderDashboardProduktifitasPdf,
 } = require('./produktivitas/dashboard-produktifitas-pdf');
 const { buildMutasiHtml, renderMutasiPdf } = require('./mutasi/mutasi-pdf');
+const {
+  buildMutasiBahanBakuHtml,
+  renderMutasiBahanBakuPdf,
+} = require('./mutasi/mutasi-bahan-baku-pdf');
 
 function parseDate(value, label) {
   const raw = String(value ?? '').trim();
@@ -286,6 +290,14 @@ async function mutasiBahanBaku({ tglAwal, tglAkhir }) {
     { name: 'StartDate', type: sql.Date, value: start },
     { name: 'EndDate', type: sql.Date, value: end },
   ]);
+}
+
+async function getMutasiBahanBakuPdf({ tglAwal, tglAkhir, username }) {
+  const start = parseDate(tglAwal, 'Tanggal awal');
+  const end = parseDate(tglAkhir, 'Tanggal akhir');
+  const data = await mutasiBahanBaku({ tglAwal: start, tglAkhir: end });
+  const html = buildMutasiBahanBakuHtml({ tglAwal: start, tglAkhir: end, rows: data.rows });
+  return renderMutasiBahanBakuPdf({ html, username });
 }
 
 const STOK_SP = {
@@ -1074,6 +1086,7 @@ module.exports = {
   stokBarangDagang,
   getStokBarangDagangPdf,
   getStokBahanBakuPdf,
+  getMutasiBahanBakuPdf,
   getStokUmumPdf,
   getPdfBrowser,
   escapeHtml,

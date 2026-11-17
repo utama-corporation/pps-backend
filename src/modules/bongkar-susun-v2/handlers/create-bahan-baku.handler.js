@@ -16,7 +16,7 @@ function parseInputLabel(labelCode) {
   const noBahanBaku = `${prefix}${parts[0].trim()}`;
   const noPallet = Number.parseInt(parts[1], 10);
   if (!noBahanBaku || !Number.isFinite(noPallet) || noPallet <= 0) return null;
-  return { noBahanBaku, noPallet };
+  return { prefix, noBahanBaku, noPallet };
 }
 
 function normalizeSaks(saks, outputIndex) {
@@ -166,6 +166,8 @@ exports.createBongkarSusunBahanBaku = async (payload, ctx) => {
           ph.HasBeenPrinted,
           ph.Blok,
           ph.IdLokasi,
+          bh.IdSupplier,
+          bh.NoPlat,
           CASE
             WHEN d.IsPartial = 1 THEN
               CASE
@@ -181,6 +183,8 @@ exports.createBongkarSusunBahanBaku = async (payload, ctx) => {
         INNER JOIN InputCodes ic
           ON ic.noBahanBaku = d.NoBahanBaku
          AND ic.noPallet = d.NoPallet
+        LEFT JOIN dbo.BahanBaku_h bh
+          ON bh.NoBahanBaku = d.NoBahanBaku
         LEFT JOIN PartialAgg pa
           ON pa.NoBahanBaku = d.NoBahanBaku
          AND pa.NoPallet = d.NoPallet
@@ -336,17 +340,47 @@ exports.createBongkarSusunBahanBaku = async (payload, ctx) => {
         WHERE d.DateUsage IS NULL
       `);
 
-    const maxPalletRes = await new sql.Request(tx).input(
-      "NoBahanBaku",
-      sql.VarChar(50),
-      refRow.NoBahanBaku,
-    ).query(`
-        SELECT ISNULL(MAX(TRY_CONVERT(int, NoPallet)), 0) AS MaxNoPallet
-        FROM dbo.BahanBakuPallet_h WITH (UPDLOCK, HOLDLOCK)
-        WHERE NoBahanBaku = @NoBahanBaku
+    // Label output memakai NoBahanBaku BARU (header baru) dengan DateCreate
+    // = tanggal bongkar susun. Prefix (A./AB.) mengikuti label input.
+    const outPrefix = parsedInputs[0].prefix;
+    const genBb = () =>
+      generateNextCode(tx, {
+        tableName: "dbo.BahanBaku_h",
+        columnName: "NoBahanBaku",
+        prefix: outPrefix,
+        width: 10,
+      });
+    const bbExists = async (code) => {
+      const r = await new sql.Request(tx)
+        .input("Code", sql.VarChar(50), code)
+        .query(
+          `SELECT 1 FROM dbo.BahanBaku_h WITH (UPDLOCK, HOLDLOCK) WHERE NoBahanBaku = @Code`,
+        );
+      return r.recordset.length > 0;
+    };
+
+    let newNoBahanBaku = await genBb();
+    if (await bbExists(newNoBahanBaku)) {
+      newNoBahanBaku = await genBb();
+      if (await bbExists(newNoBahanBaku)) {
+        throw conflict("Gagal generate NoBahanBaku unik, coba lagi");
+      }
+    }
+
+    await new sql.Request(tx)
+      .input("NoBahanBaku", sql.VarChar(50), newNoBahanBaku)
+      .input("IdSupplier", sql.Int, refRow.IdSupplier ?? null)
+      .input("NoPlat", sql.VarChar(20), refRow.NoPlat ?? null)
+      .input("DateCreate", sql.Date, nowDate)
+      .input("CreateBy", sql.VarChar(100), actorUsername || null)
+      .input("DateTimeCreate", sql.DateTime, nowDate).query(`
+        INSERT INTO dbo.BahanBaku_h
+          (NoBahanBaku, IdSupplier, NoPlat, DateCreate, CreateBy, DateTimeCreate)
+        VALUES
+          (@NoBahanBaku, @IdSupplier, @NoPlat, @DateCreate, @CreateBy, @DateTimeCreate)
       `);
-    let nextNoPallet =
-      Number(maxPalletRes.recordset?.[0]?.MaxNoPallet || 0) + 1;
+
+    let nextNoPallet = 1;
 
     const createdOutputs = [];
     for (const out of normalizedOutputs) {
@@ -358,7 +392,7 @@ exports.createBongkarSusunBahanBaku = async (payload, ctx) => {
       const saksJson = JSON.stringify(saks);
 
       await new sql.Request(tx)
-        .input("NoBahanBaku", sql.VarChar(50), refRow.NoBahanBaku)
+        .input("NoBahanBaku", sql.VarChar(50), newNoBahanBaku)
         .input("NoPallet", sql.Int, noPallet)
         .input("IdJenisPlastik", sql.Int, Math.trunc(Number(out.idJenis)))
         .input("IdWarehouse", sql.Int, refRow.IdWarehouse ?? null)
@@ -387,7 +421,7 @@ exports.createBongkarSusunBahanBaku = async (payload, ctx) => {
         `);
 
       await new sql.Request(tx)
-        .input("NoBahanBaku", sql.VarChar(50), refRow.NoBahanBaku)
+        .input("NoBahanBaku", sql.VarChar(50), newNoBahanBaku)
         .input("NoPallet", sql.Int, noPallet)
         .input("TimeCreate", sql.DateTime, nowDate)
         .input("IdLokasi", sql.Int, 1)
@@ -416,7 +450,7 @@ exports.createBongkarSusunBahanBaku = async (payload, ctx) => {
 
       await new sql.Request(tx)
         .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
-        .input("NoBahanBaku", sql.VarChar(50), refRow.NoBahanBaku)
+        .input("NoBahanBaku", sql.VarChar(50), newNoBahanBaku)
         .input("NoPallet", sql.Int, noPallet)
         .input("SaksJson", sql.NVarChar(sql.MAX), saksJson).query(`
           INSERT INTO dbo.BongkarSusunOutputBahanBaku (
@@ -428,7 +462,7 @@ exports.createBongkarSusunBahanBaku = async (payload, ctx) => {
         `);
 
       createdOutputs.push({
-        noBahanBaku: refRow.NoBahanBaku,
+        noBahanBaku: newNoBahanBaku,
         noPallet,
         idJenis: Number(out.idJenis),
         jumlahSak: saks.length,
