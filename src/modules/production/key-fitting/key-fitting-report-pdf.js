@@ -214,7 +214,7 @@ function buildKeyFittingReportHtml({
   tbody td { padding: 1px 5px; vertical-align: top; font-size: 7.7pt; line-height: 1.05; }
   td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   td.center { text-align: center; }
-  td.lbl-no { text-align: center; white-space: nowrap; padding-left: 2px; padding-right: 2px; }
+  td.lbl-no { text-align: center; overflow-wrap: break-word; padding-left: 2px; padding-right: 2px; }
   td.txt { word-break: break-word; }
   .col-foot td { padding: 4px 5px; font-weight: 700; height: 22px; }
   .col-foot .val { text-align: right; font-variant-numeric: tabular-nums; }
