@@ -4,6 +4,10 @@ const {
   acquirePageSlot,
   releasePageSlot,
 } = require("../../../core/utils/pdf/browser");
+const {
+  COLUMNS_AS_TABLE_CSS,
+  setReportContent,
+} = require("../../../core/utils/pdf/report-layout");
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -242,9 +246,9 @@ function buildGilinganReportHtml({ main, downtime, by }) {
   .col-3 thead th:not(:last-child),
   .col-2 thead tr:first-child th:first-child,
   .col-2 thead tr:last-child th:not(:last-child) { border-right: 1px solid #111827; }
-  .col-1 .col-body { background-image: linear-gradient(#111827,#111827); background-size: 1px 100%; background-position: 81% 0; background-repeat: no-repeat; }
-  .col-2 .col-body { background-image: linear-gradient(#111827,#111827), linear-gradient(#111827,#111827), linear-gradient(#111827,#111827); background-size: 1px 100%, 1px 100%, 1px 100%; background-position: 53.31% 0, 72.66% 0, 88.17% 0; background-repeat: no-repeat; }
-  .col-3 .col-body { background-image: linear-gradient(#111827,#111827), linear-gradient(#111827,#111827); background-size: 1px 100%, 1px 100%; background-position: 21.81% 0, 35.61% 0; background-repeat: no-repeat; }
+  .box-cols > .col-1 { background-image: linear-gradient(#111827,#111827); background-size: 1px 100%; background-position: 81% 0; background-repeat: no-repeat; }
+  .box-cols > .col-2 { background-image: linear-gradient(#111827,#111827), linear-gradient(#111827,#111827), linear-gradient(#111827,#111827); background-size: 1px 100%, 1px 100%, 1px 100%; background-position: 53.31% 0, 72.66% 0, 88.17% 0; background-repeat: no-repeat; }
+  .box-cols > .col-3 { background-image: linear-gradient(#111827,#111827), linear-gradient(#111827,#111827); background-size: 1px 100%, 1px 100%; background-position: 21.81% 0, 35.61% 0; background-repeat: no-repeat; }
   tbody tr:last-child td { border-bottom: none; }
   td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   td.center { text-align: center; }
@@ -274,6 +278,7 @@ function buildGilinganReportHtml({ main, downtime, by }) {
   .anggota tr:last-child td { border-bottom: none; padding: 19px 6px 9px; }
   .printby { margin-top: auto; padding-top: 47px; font-size: 7.5pt; color: #6B7280; }
   tr { break-inside: avoid; }
+  ${COLUMNS_AS_TABLE_CSS}
 </style>
 </head>
 <body>
@@ -408,8 +413,10 @@ async function renderGilinganReportPdf({ main, downtime, by }) {
   const browser = await getBrowser();
   const page = await browser.newPage();
   try {
-    await page.setViewport({ width: 1400, height: 1000 });
-    await page.setContent(html, { waitUntil: "domcontentloaded" });
+    await setReportContent(page, html, {
+      contentHeightMm: 203,
+      stretchSelector: ".box-cols",
+    });
     const pdf = await page.pdf({
       format: "A4",
       landscape: true,

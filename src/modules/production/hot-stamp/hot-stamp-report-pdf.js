@@ -4,6 +4,10 @@ const {
   acquirePageSlot,
   releasePageSlot,
 } = require("../../../core/utils/pdf/browser");
+const {
+  COLUMNS_AS_TABLE_CSS,
+  setReportContent,
+} = require("../../../core/utils/pdf/report-layout");
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -181,12 +185,14 @@ function buildHotStampingReportHtml({ main, by }) {
   .col-2 { width: 40%; }
   .col-3 { width: 24%; }
   .col-head { text-align: center; font-weight: 700; font-size: 9.5pt; padding: 1px 4px; border-bottom: 1px solid #111827; background: #F3F4F6; }
-  /* Garis pemisah kolom = satu elemen .vl per garis, membentang dari header sampai
-     baris total, jadi tidak putus dan selalu lurus. Posisi (%) = lebar <col>. */
-  .col-inner { flex: 1; position: relative; display: flex; flex-direction: column; }
-  .col-inner .vl { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid #111827; pointer-events: none; }
-  .col-2 .col-inner .vl.sub { top: 22px; }
-  .col-body { flex: 1; }
+  /* Garis pemisah kolom di badan & baris total = background gradient pada sel
+     kolom (posisi % = lebar <col>), jadi lurus sampai bawah walau isi kolom
+     pendek dan ikut terpotong rapi antar halaman. Di header pakai border th. */
+  .box-cols > .col-1, .box-foot > .col-1 { background-image: linear-gradient(#111827,#111827), linear-gradient(#111827,#111827), linear-gradient(#111827,#111827); background-size: 1px 100%, 1px 100%, 1px 100%; background-position: 40% 0, 64% 0, 82% 0; background-repeat: no-repeat; }
+  .box-cols > .col-2, .box-foot > .col-2 { background-image: linear-gradient(#111827,#111827), linear-gradient(#111827,#111827), linear-gradient(#111827,#111827); background-size: 1px 100%, 1px 100%, 1px 100%; background-position: 63.8% 0, 79.7% 0, 89.3% 0; background-repeat: no-repeat; }
+  .box-cols > .col-3, .box-foot > .col-3 { background-image: linear-gradient(#111827,#111827), linear-gradient(#111827,#111827); background-size: 1px 100%, 1px 100%; background-position: 21.9% 0, 35.8% 0; background-repeat: no-repeat; }
+  .col-1 thead th + th, .col-3 thead th + th,
+  .col-2 thead tr:first-child th + th, .col-2 thead tr:last-child th { border-left: 1px solid #111827; }
   .col-foot { border-top: 1.5px solid #111827; }
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
   thead th { font-weight: 700; font-size: 8pt; padding: 4px 5px; border-bottom: 1px solid #111827; text-align: left; vertical-align: bottom; background: #FAFAFA; }
@@ -227,6 +233,7 @@ function buildHotStampingReportHtml({ main, by }) {
   .anggota td { height: 30px; vertical-align: middle; }
   .printby { margin-top: 7px; font-size: 7.5pt; color: #6B7280; }
   tr { break-inside: avoid; }
+  ${COLUMNS_AS_TABLE_CSS}
 </style>
 </head>
 <body>
@@ -244,72 +251,63 @@ function buildHotStampingReportHtml({ main, by }) {
     <div class="box-cols">
       <div class="col col-1">
         <div class="col-head">Pemakaian Bahan</div>
-        <div class="col-inner">
-          <i class="vl" style="left:40%"></i><i class="vl" style="left:64%"></i><i class="vl" style="left:82%"></i>
-          <div class="col-body">
-            <table>
-              <colgroup><col style="width:40%" /><col style="width:24%" /><col style="width:18%" /><col style="width:18%" /></colgroup>
-              <thead><tr><th>Nama Bahan</th><th class="center">No Label</th><th class="center">Qty<br />(Pcs)</th><th class="center">Berat<br />(Kg)</th></tr></thead>
-              <tbody>${inputBody}</tbody>
-            </table>
-          </div>
-          <div class="col-foot">
-            <table>
-              <colgroup><col style="width:40%" /><col style="width:24%" /><col style="width:18%" /><col style="width:18%" /></colgroup>
-              <tr><td></td><td></td><td class="val">${fmtInt(inputQtyTotal)}</td><td class="val">${fmt2(inputBeratTotal)}</td></tr>
-            </table>
-          </div>
+        <div class="col-body">
+          <table>
+            <colgroup><col style="width:40%" /><col style="width:24%" /><col style="width:18%" /><col style="width:18%" /></colgroup>
+            <thead><tr><th>Nama Bahan</th><th class="center">No Label</th><th class="center">Qty<br />(Pcs)</th><th class="center">Berat<br />(Kg)</th></tr></thead>
+            <tbody>${inputBody}</tbody>
+          </table>
         </div>
       </div>
-
       <div class="col col-2">
         <div class="col-head">Hasil Hot Stamping</div>
-        <div class="col-inner">
-          <i class="vl" style="left:63.8%"></i><i class="vl sub" style="left:79.7%"></i><i class="vl sub" style="left:89.3%"></i>
-          <div class="col-body">
-            <table>
-              <colgroup><col style="width:63.8%" /><col style="width:15.9%" /><col style="width:9.6%" /><col style="width:10.7%" /></colgroup>
-              <thead>
-                <tr>
-                  <th rowspan="2" class="center" style="vertical-align:middle; padding-bottom:10px">Nama Barang</th>
-                  <th colspan="3" class="center">Bagus</th>
-                </tr>
-                <tr>
-                  <th class="center">Jumlah<br />Label</th>
-                  <th class="center">Qty<br />(Pcs)</th>
-                  <th class="center">Berat<br />(Kg)</th>
-                </tr>
-              </thead>
-              <tbody>${outputBody}</tbody>
-            </table>
-          </div>
-          <div class="col-foot">
-            <table>
-              <colgroup><col style="width:63.8%" /><col style="width:15.9%" /><col style="width:9.6%" /><col style="width:10.7%" /></colgroup>
-              <tr><td></td><td></td><td class="val">${fmtInt(outputQtyTotal)}</td><td class="val">${fmt2(outputBeratTotal)}</td></tr>
-            </table>
-          </div>
+        <div class="col-body">
+          <table>
+            <colgroup><col style="width:63.8%" /><col style="width:15.9%" /><col style="width:9.6%" /><col style="width:10.7%" /></colgroup>
+            <thead>
+              <tr>
+                <th rowspan="2" class="center" style="vertical-align:middle; padding-bottom:10px">Nama Barang</th>
+                <th colspan="3" class="center">Bagus</th>
+              </tr>
+              <tr>
+                <th class="center">Jumlah<br />Label</th>
+                <th class="center">Qty<br />(Pcs)</th>
+                <th class="center">Berat<br />(Kg)</th>
+              </tr>
+            </thead>
+            <tbody>${outputBody}</tbody>
+          </table>
         </div>
       </div>
-
       <div class="col col-3">
         <div class="col-head">Downtime</div>
-        <div class="col-inner">
-          <i class="vl" style="left:21.9%"></i><i class="vl" style="left:35.8%"></i>
-          <div class="col-body">
-            <table>
-              <colgroup><col style="width:21.9%" /><col style="width:13.9%" /><col style="width:64.2%" /></colgroup>
-              <thead><tr><th class="center">Jam<br />Berhenti</th><th class="center">Durasi</th><th class="center">Keterangan</th></tr></thead>
-              <tbody></tbody>
-            </table>
-          </div>
-          <div class="col-foot">
-            <table>
-              <colgroup><col style="width:21.9%" /><col style="width:13.9%" /><col style="width:64.2%" /></colgroup>
-              <tr><td></td><td></td><td></td></tr>
-            </table>
-          </div>
+        <div class="col-body">
+          <table>
+            <colgroup><col style="width:21.9%" /><col style="width:13.9%" /><col style="width:64.2%" /></colgroup>
+            <thead><tr><th class="center">Jam<br />Berhenti</th><th class="center">Durasi</th><th class="center">Keterangan</th></tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
+      </div>
+    </div>
+    <div class="box-foot">
+      <div class="col col-1 col-foot">
+        <table>
+          <colgroup><col style="width:40%" /><col style="width:24%" /><col style="width:18%" /><col style="width:18%" /></colgroup>
+          <tr><td></td><td></td><td class="val">${fmtInt(inputQtyTotal)}</td><td class="val">${fmt2(inputBeratTotal)}</td></tr>
+        </table>
+      </div>
+      <div class="col col-2 col-foot">
+        <table>
+          <colgroup><col style="width:63.8%" /><col style="width:15.9%" /><col style="width:9.6%" /><col style="width:10.7%" /></colgroup>
+          <tr><td></td><td></td><td class="val">${fmtInt(outputQtyTotal)}</td><td class="val">${fmt2(outputBeratTotal)}</td></tr>
+        </table>
+      </div>
+      <div class="col col-3 col-foot">
+        <table>
+          <colgroup><col style="width:21.9%" /><col style="width:13.9%" /><col style="width:64.2%" /></colgroup>
+          <tr><td></td><td></td><td></td></tr>
+        </table>
       </div>
     </div>
   </div>
@@ -367,8 +365,10 @@ async function renderHotStampingReportPdf({ main, by }) {
   const browser = await getBrowser();
   const page = await browser.newPage();
   try {
-    await page.setViewport({ width: 1400, height: 1000 });
-    await page.setContent(html, { waitUntil: "domcontentloaded" });
+    await setReportContent(page, html, {
+      contentHeightMm: 194,
+      stretchSelector: ".box-cols",
+    });
     const pdf = await page.pdf({
       format: "A4",
       landscape: true,

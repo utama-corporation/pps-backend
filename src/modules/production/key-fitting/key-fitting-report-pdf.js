@@ -4,6 +4,7 @@ const {
   acquirePageSlot,
   releasePageSlot,
 } = require("../../../core/utils/pdf/browser");
+const { setReportContent } = require("../../../core/utils/pdf/report-layout");
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -150,33 +151,54 @@ function buildKeyFittingReportHtml({
   const checkBy2 = firstNonNull(main, "CheckBy2");
   const approveBy = firstNonNull(main, "ApproveBy");
 
-  const inputBody = inputRows
+  // Layout: tabel luar 3 sel (Bahan / Hasil / Reject), tiap sel berisi tabel
+  // sendiri yang mengalir mandiri (baris antar grup tidak disejajarkan).
+  // Sengaja pakai SEL TABEL, bukan kolom flex: saat isi terpotong antar halaman
+  // (thead berulang + break-inside: avoid), Chrome tidak menambah tinggi flex
+  // item sehingga kolom panjang (mis. nama barang Spanner yang wrap 3 baris)
+  // tumpah menimpa baris total & kotak tanda tangan. Sel tabel ikut memanjang.
+  // Garis kolom dalam = background gradient di sel luar (posisi % = lebar
+  // <col>), jadi tetap lurus sampai bawah walau isi grup lebih pendek.
+  const groups = [
+    { cols: [40, 36, 24], rows: inputRows, fmt: fmtPcs, total: fmtPcs(inputTotal),
+      head: ["Nama Bahan", "No Label", "Qty<br />(Pcs)"] },
+    { cols: [46, 32, 22], rows: outputRows, fmt: fmtPcs, total: fmtPcs(outputTotal),
+      head: ["Nama Barang", "Nomor<br />Label", "Qty<br />(Pcs)"] },
+    { cols: [40, 34, 26], rows: rejectRows, fmt: fmtKg, total: fmtKg(rejectTotal),
+      head: ["Nama Reject", "Nomor<br />Label", "Berat<br />(Kg)"] },
+  ];
+  const colgroup = (g) =>
+    `<colgroup>${g.cols.map((w) => `<col style="width:${w}%" />`).join("")}</colgroup>`;
+  const linesStyle = (g) =>
+    `background-position:${g.cols[0]}% 0,${g.cols[0] + g.cols[1]}% 0`;
+  const bodyCells = groups
     .map(
-      (r) => `<tr>
-        <td class="txt">${escapeHtml(r.Jenis)}</td>
-        <td class="lbl-no">${escapeHtml(r.NoLabel)}</td>
-        <td class="num">${fmtPcs(r.Total)}</td>
-      </tr>`,
+      (g) => `<td class="grp" style="${linesStyle(g)}">
+        <table class="inner">${colgroup(g)}
+          <thead><tr>${g.head.map((h) => `<th>${h}</th>`).join("")}</tr></thead>
+          <tbody>${g.rows
+            .map(
+              (r) => `<tr>
+              <td class="txt">${escapeHtml(r.Jenis)}</td>
+              <td class="lbl-no">${escapeHtml(r.NoLabel)}</td>
+              <td class="num">${g.fmt(r.Total)}</td>
+            </tr>`,
+            )
+            .join("")}</tbody>
+        </table>
+      </td>`,
     )
     .join("");
-
-  const outputBody = outputRows
-    .map(
-      (r) => `<tr>
-        <td class="txt">${escapeHtml(r.Jenis)}</td>
-        <td class="lbl-no">${escapeHtml(r.NoLabel)}</td>
-        <td class="num">${fmtPcs(r.Total)}</td>
-      </tr>`,
-    )
+  const fillerCells = groups
+    .map((g) => `<td class="grp" style="${linesStyle(g)}"></td>`)
     .join("");
-
-  const rejectBody = rejectRows
+  const totalCells = groups
     .map(
-      (r) => `<tr>
-        <td class="txt">${escapeHtml(r.Jenis)}</td>
-        <td class="lbl-no">${escapeHtml(r.NoLabel)}</td>
-        <td class="num">${fmtKg(r.Total)}</td>
-      </tr>`,
+      (g) => `<td class="grp" style="${linesStyle(g)}">
+        <table class="inner">${colgroup(g)}
+          <tr><td></td><td></td><td class="val">${g.total}</td></tr>
+        </table>
+      </td>`,
     )
     .join("");
 
@@ -190,34 +212,27 @@ function buildKeyFittingReportHtml({
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; color: #111827; }
-  .page { display: flex; flex-direction: column; min-height: 203mm; }
   .title { text-align: center; font-size: 14pt; font-weight: 700; margin-bottom: 14px; letter-spacing: .2px; }
   .meta { display: grid; grid-template-columns: max-content max-content 1fr; gap: 1px 0; width: max-content; margin-bottom: 30px; font-size: 9pt; line-height: 1.08; }
   .meta .lbl { padding-right: 6px; }
   .meta .sep { padding-right: 8px; }
-  .box { border: 1.5px solid #111827; display: flex; flex-direction: column; flex: 1 0 auto; }
-  .box-cols { display: flex; flex: 1; }
-  .col { display: flex; flex-direction: column; min-width: 0; }
-  .col + .col { border-left: 1px solid #111827; }
-  .col-1 { width: 36%; }
-  .col-2 { width: 32%; }
-  .col-3 { width: 32%; }
-  .col-head { text-align: center; font-weight: 700; font-size: 9.5pt; padding: 0 4px; border-bottom: 1px solid #111827; background: #F3F4F6; }
-  /* Garis pemisah kolom = satu elemen .vl per garis, membentang dari header sampai
-     baris total, jadi lurus dan tidak putus. Posisi (%) = lebar <col>. */
-  .col-inner { flex: 1; position: relative; display: flex; flex-direction: column; }
-  .col-inner .vl { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid #111827; pointer-events: none; }
-  .col-body { flex: 1; }
-  .col-foot { border-top: 1.5px solid #111827; }
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-  thead th { font-weight: 700; font-size: 8pt; padding: 4px 5px; border-bottom: 1px solid #111827; text-align: center; vertical-align: bottom; background: #FAFAFA; height: 34px; }
-  tbody td { padding: 1px 5px; vertical-align: top; font-size: 7.7pt; line-height: 1.05; }
+  .grid { border: 1.5px solid #111827; }
+  .grid > thead > tr > th { text-align: center; font-weight: 700; font-size: 9.5pt; padding: 0 4px; border-bottom: 1px solid #111827; background: #F3F4F6; }
+  .grid > thead > tr > th + th, .grid > tbody > tr > td + td { border-left: 1px solid #111827; }
+  .grid > tbody > tr > td.grp { padding: 0; vertical-align: top;
+    background-image: linear-gradient(#111827, #111827), linear-gradient(#111827, #111827);
+    background-size: 1px 100%; background-repeat: no-repeat; }
+  .grid > tbody > tr.filler > td { height: 0; }
+  .grid > tbody > tr.total > td { border-top: 1.5px solid #111827; }
+  .inner thead th { font-weight: 700; font-size: 8pt; padding: 4px 5px; border-bottom: 1px solid #111827; text-align: center; vertical-align: bottom; height: 34px; }
+  .inner tbody td { padding: 1px 5px; vertical-align: top; font-size: 7.7pt; line-height: 1.05; }
+  .total .inner td { padding: 4px 5px; font-weight: 700; height: 22px; }
+  .total .inner td.val { text-align: right; font-variant-numeric: tabular-nums; }
   td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   td.center { text-align: center; }
   td.lbl-no { text-align: center; overflow-wrap: break-word; padding-left: 2px; padding-right: 2px; }
-  td.txt { word-break: break-word; }
-  .col-foot td { padding: 4px 5px; font-weight: 700; height: 22px; }
-  .col-foot .val { text-align: right; font-variant-numeric: tabular-nums; }
+  td.txt { overflow-wrap: break-word; word-break: break-word; }
   .sign { display: flex; border: 1.5px solid #111827; margin-top: 23px; }
   .sign-tbl { flex: 1; min-width: 0; }
   .sign-tbl th { font-size: 8.5pt; font-weight: 700; text-align: center; padding: 5px 6px 3px; border-bottom: 1px solid #111827; }
@@ -227,8 +242,9 @@ function buildKeyFittingReportHtml({
   .sign-tbl th:not(:last-child), .sign-role:not(:last-child) { border-right: 1px solid #111827; }
   .sign-name { border-right: 1px solid #111827; }
   .sign-tbl tr td:last-child { border-right: none; }
-  .printby { margin-top: auto; padding-top: 47px; font-size: 7.5pt; color: #6B7280; }
-  tr { break-inside: avoid; }
+  .printby { padding-top: 47px; font-size: 7.5pt; color: #6B7280; }
+  .footer-block { break-inside: avoid; }
+  .inner tr, .grid > thead > tr, .grid > tbody > tr.total { break-inside: avoid; }
 </style>
 </head>
 <body>
@@ -242,70 +258,23 @@ function buildKeyFittingReportHtml({
     <span class="lbl">Shift</span><span class="sep">:</span><span>${shift == null ? "" : escapeHtml(shift)}</span>
   </div>
 
-  <div class="box">
-    <div class="box-cols">
-      <div class="col col-1">
-        <div class="col-head">Pemakaian Bahan</div>
-        <div class="col-inner">
-          <i class="vl" style="left:40%"></i><i class="vl" style="left:76%"></i>
-          <div class="col-body">
-            <table>
-              <colgroup><col style="width:40%" /><col style="width:36%" /><col style="width:24%" /></colgroup>
-              <thead><tr><th>Nama Bahan</th><th>No Label</th><th>Qty<br />(Pcs)</th></tr></thead>
-              <tbody>${inputBody}</tbody>
-            </table>
-          </div>
-          <div class="col-foot">
-            <table>
-              <colgroup><col style="width:40%" /><col style="width:36%" /><col style="width:24%" /></colgroup>
-              <tr><td></td><td></td><td class="val">${fmtPcs(inputTotal)}</td></tr>
-            </table>
-          </div>
-        </div>
-      </div>
+  <table class="grid">
+    <colgroup><col style="width:36%" /><col style="width:32%" /><col style="width:32%" /></colgroup>
+    <thead>
+      <tr>
+        <th>Pemakaian Bahan</th>
+        <th>${escapeHtml(hasilLabel)}</th>
+        <th>Reject</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="body">${bodyCells}</tr>
+      <tr class="filler">${fillerCells}</tr>
+      <tr class="total">${totalCells}</tr>
+    </tbody>
+  </table>
 
-      <div class="col col-2">
-        <div class="col-head">${escapeHtml(hasilLabel)}</div>
-        <div class="col-inner">
-          <i class="vl" style="left:46%"></i><i class="vl" style="left:78%"></i>
-          <div class="col-body">
-            <table>
-              <colgroup><col style="width:46%" /><col style="width:32%" /><col style="width:22%" /></colgroup>
-              <thead><tr><th>Nama Barang</th><th>Nomor<br />Label</th><th>Qty<br />(Pcs)</th></tr></thead>
-              <tbody>${outputBody}</tbody>
-            </table>
-          </div>
-          <div class="col-foot">
-            <table>
-              <colgroup><col style="width:46%" /><col style="width:32%" /><col style="width:22%" /></colgroup>
-              <tr><td colspan="2"></td><td class="val">${fmtPcs(outputTotal)}</td></tr>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <div class="col col-3">
-        <div class="col-head">Reject</div>
-        <div class="col-inner">
-          <i class="vl" style="left:40%"></i><i class="vl" style="left:74%"></i>
-          <div class="col-body">
-            <table>
-              <colgroup><col style="width:40%" /><col style="width:34%" /><col style="width:26%" /></colgroup>
-              <thead><tr><th>Nama Reject</th><th>Nomor<br />Label</th><th>Berat<br />(Kg)</th></tr></thead>
-              <tbody>${rejectBody}</tbody>
-            </table>
-          </div>
-          <div class="col-foot">
-            <table>
-              <colgroup><col style="width:40%" /><col style="width:34%" /><col style="width:26%" /></colgroup>
-              <tr><td colspan="2"></td><td class="val">${fmtKg(rejectTotal)}</td></tr>
-            </table>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
+  <div class="footer-block">
   <div class="sign">
     <div class="sign-tbl">
       <table>
@@ -337,6 +306,7 @@ function buildKeyFittingReportHtml({
 
   <div class="printby">Print by ${escapeHtml(by || "-")} on ${printDate}</div>
   </div>
+  </div>
 </body>
 </html>`;
 }
@@ -348,8 +318,12 @@ async function renderKeyFittingReportPdf({ main, by, ...labels }) {
   const browser = await getBrowser();
   const page = await browser.newPage();
   try {
-    await page.setViewport({ width: 1400, height: 1000 });
-    await page.setContent(html, { waitUntil: "domcontentloaded" });
+    // Laporan 1 halaman: baris filler dipanjangkan agar garis kolom turun
+    // sampai kotak tanda tangan. 203mm = 210mm - margin atas/bawah 7mm.
+    await setReportContent(page, html, {
+      contentHeightMm: 203,
+      stretchSelector: ".grid tr.filler > td",
+    });
     const pdf = await page.pdf({
       format: "A4",
       landscape: true,

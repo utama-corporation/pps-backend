@@ -4,6 +4,10 @@ const {
   acquirePageSlot,
   releasePageSlot,
 } = require("../../../core/utils/pdf/browser");
+const {
+  COLUMNS_AS_TABLE_CSS,
+  setReportContent,
+} = require("../../../core/utils/pdf/report-layout");
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -255,6 +259,7 @@ function buildBrokerReportHtml({ main, downtime, by }) {
   .anggota tr:last-child td { border-bottom: none; }
   .printby { margin-top: 7px; font-size: 7.5pt; color: #6B7280; }
   tr { break-inside: avoid; }
+  ${COLUMNS_AS_TABLE_CSS}
 </style>
 </head>
 <body>
@@ -269,65 +274,67 @@ function buildBrokerReportHtml({ main, downtime, by }) {
   </div>
 
   <div class="box">
-    <div class="col col-1">
-      <div class="col-head">Pemakaian Bahan</div>
-      <div class="col-body">
-        <table>
-          <colgroup><col style="width:34%" /><col style="width:28%" /><col style="width:22%" /><col style="width:16%" /></colgroup>
-          <thead><tr><th class="center">Nama Bahan</th><th class="center sub-h">No Label</th><th class="center sub-h">Qty (Kg)</th><th class="center sub-h">%</th></tr></thead>
-          <tbody>${inputBody || `<tr><td class="txt">-</td><td class="center">-</td><td class="num">-</td><td class="num">-</td></tr>`}</tbody>
-        </table>
+    <div class="box-cols">
+      <div class="col col-1">
+        <div class="col-head">Pemakaian Bahan</div>
+        <div class="col-body">
+          <table>
+            <colgroup><col style="width:34%" /><col style="width:28%" /><col style="width:22%" /><col style="width:16%" /></colgroup>
+            <thead><tr><th class="center">Nama Bahan</th><th class="center sub-h">No Label</th><th class="center sub-h">Qty (Kg)</th><th class="center sub-h">%</th></tr></thead>
+            <tbody>${inputBody || `<tr><td class="txt">-</td><td class="center">-</td><td class="num">-</td><td class="num">-</td></tr>`}</tbody>
+          </table>
+        </div>
       </div>
-      <div class="col-foot">
-        <table>
-          <colgroup><col style="width:34%" /><col style="width:28%" /><col style="width:22%" /><col style="width:16%" /></colgroup>
-          <tr><td class="lbl" colspan="2">Total</td><td class="val">${fmtNumber(inputTotal)}</td><td></td></tr>
-        </table>
+      <div class="col col-2">
+        <div class="col-head">Hasil Broker</div>
+        <div class="col-body">
+          <table>
+            <colgroup><col style="width:34%" /><col style="width:21%" /><col style="width:14%" /><col style="width:17%" /><col style="width:14%" /></colgroup>
+            <thead>
+              <tr>
+                <th rowspan="2" class="center" style="vertical-align:middle">Nama Barang</th>
+                <th colspan="3" class="center sub-h">Bagus</th>
+                <th rowspan="2" class="center sub-h">Reject</th>
+              </tr>
+              <tr>
+                <th class="center sub-h">No Label</th>
+                <th class="center sub-h">Qty (Kg)</th>
+                <th class="center sub-h">Hasil Cek QC</th>
+              </tr>
+            </thead>
+            <tbody>${bagusBody || ""}${rejectBody || ""}${(!bagusRows.length && !rejectRows.length) ? `<tr><td class="txt">-</td><td class="center">-</td><td class="num">-</td><td class="center">-</td><td class="num">-</td></tr>` : ""}</tbody>
+          </table>
+        </div>
+      </div>
+      <div class="col col-3">
+        <div class="col-head">Downtime</div>
+        <div class="col-body">
+          <table>
+            <colgroup><col style="width:30%" /><col style="width:17%" /><col style="width:53%" /></colgroup>
+            <thead><tr><th class="center">Jam Berhenti</th><th class="center">Durasi (Menit)</th><th>Keterangan</th></tr></thead>
+            <tbody>${downBody || `<tr><td class="center">-</td><td class="center">-</td><td class="txt">-</td></tr>`}</tbody>
+          </table>
+        </div>
       </div>
     </div>
-
-    <div class="col col-2">
-      <div class="col-head">Hasil Broker</div>
-      <div class="col-body">
-        <table>
-          <colgroup><col style="width:34%" /><col style="width:21%" /><col style="width:14%" /><col style="width:17%" /><col style="width:14%" /></colgroup>
-          <thead>
-            <tr>
-              <th rowspan="2" class="center" style="vertical-align:middle">Nama Barang</th>
-              <th colspan="3" class="center sub-h">Bagus</th>
-              <th rowspan="2" class="center sub-h">Reject</th>
-            </tr>
-            <tr>
-              <th class="center sub-h">No Label</th>
-              <th class="center sub-h">Qty (Kg)</th>
-              <th class="center sub-h">Hasil Cek QC</th>
-            </tr>
-          </thead>
-          <tbody>${bagusBody || ""}${rejectBody || ""}${(!bagusRows.length && !rejectRows.length) ? `<tr><td class="txt">-</td><td class="center">-</td><td class="num">-</td><td class="center">-</td><td class="num">-</td></tr>` : ""}</tbody>
-        </table>
+    <div class="box-foot">
+      <div class="col col-1 col-foot">
+          <table>
+            <colgroup><col style="width:34%" /><col style="width:28%" /><col style="width:22%" /><col style="width:16%" /></colgroup>
+            <tr><td class="lbl" colspan="2">Total</td><td class="val">${fmtNumber(inputTotal)}</td><td></td></tr>
+          </table>
       </div>
-      <div class="col-foot">
-        <table>
-          <colgroup><col style="width:34%" /><col style="width:21%" /><col style="width:14%" /><col style="width:17%" /><col style="width:14%" /></colgroup>
-          <tr><td class="lbl" colspan="2">Total</td><td class="val">${fmtNumber(bagusTotal)}</td><td></td><td class="val">${fmtNumber(rejectTotal)}</td></tr>
-        </table>
+      <div class="col col-2 col-foot">
+          <table>
+            <colgroup><col style="width:34%" /><col style="width:21%" /><col style="width:14%" /><col style="width:17%" /><col style="width:14%" /></colgroup>
+            <tr><td class="lbl" colspan="2">Total</td><td class="val">${fmtNumber(bagusTotal)}</td><td></td><td class="val">${fmtNumber(rejectTotal)}</td></tr>
+          </table>
       </div>
-    </div>
-
-    <div class="col col-3">
-      <div class="col-head">Downtime</div>
-      <div class="col-body">
-        <table>
-          <colgroup><col style="width:30%" /><col style="width:17%" /><col style="width:53%" /></colgroup>
-          <thead><tr><th class="center">Jam Berhenti</th><th class="center">Durasi (Menit)</th><th>Keterangan</th></tr></thead>
-          <tbody>${downBody || `<tr><td class="center">-</td><td class="center">-</td><td class="txt">-</td></tr>`}</tbody>
-        </table>
-      </div>
-      <div class="col-foot">
-        <table>
-          <colgroup><col style="width:30%" /><col style="width:17%" /><col style="width:53%" /></colgroup>
-          <tr><td class="lbl">Total</td><td class="val" style="text-align:center">${escapeHtml(totalDurasiLabel)}</td><td></td></tr>
-        </table>
+      <div class="col col-3 col-foot">
+          <table>
+            <colgroup><col style="width:30%" /><col style="width:17%" /><col style="width:53%" /></colgroup>
+            <tr><td class="lbl">Total</td><td class="val" style="text-align:center">${escapeHtml(totalDurasiLabel)}</td><td></td></tr>
+          </table>
       </div>
     </div>
   </div>
@@ -384,8 +391,10 @@ async function renderBrokerReportPdf({ main, downtime, by }) {
   const browser = await getBrowser();
   const page = await browser.newPage();
   try {
-    await page.setViewport({ width: 1400, height: 1000 });
-    await page.setContent(html, { waitUntil: "domcontentloaded" });
+    await setReportContent(page, html, {
+      contentHeightMm: 194,
+      stretchSelector: ".box-cols",
+    });
     const pdf = await page.pdf({
       format: "A4",
       landscape: true,

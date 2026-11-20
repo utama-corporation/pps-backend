@@ -4,6 +4,10 @@ const {
   acquirePageSlot,
   releasePageSlot,
 } = require("../../../core/utils/pdf/browser");
+const {
+  COLUMNS_AS_TABLE_CSS,
+  setReportContent,
+} = require("../../../core/utils/pdf/report-layout");
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -314,6 +318,7 @@ function buildInjectReportHtml({ main, downtime, by }) {
   .anggota tr:last-child td { border-bottom: none; }
   .printby { margin-top: 7px; font-size: 7.5pt; color: #6B7280; }
   tr { break-inside: avoid; }
+  ${COLUMNS_AS_TABLE_CSS}
 </style>
 </head>
 <body>
@@ -456,8 +461,10 @@ async function renderInjectReportPdf({ main, downtime, by }) {
   const browser = await getBrowser();
   const page = await browser.newPage();
   try {
-    await page.setViewport({ width: 1400, height: 1000 });
-    await page.setContent(html, { waitUntil: "domcontentloaded" });
+    await setReportContent(page, html, {
+      contentHeightMm: 194,
+      stretchSelector: ".box-cols",
+    });
     const pdf = await page.pdf({
       format: "A4",
       landscape: true,
