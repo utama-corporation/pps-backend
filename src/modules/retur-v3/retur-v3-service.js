@@ -26,10 +26,13 @@ const {
   generateBarangDagangLabel,
 } = require("./handlers/generate-barang-dagang.handler");
 const {
+  generateBahanPendukungLabel,
+} = require("./handlers/generate-bahan-pendukung.handler");
+const {
   generateRejectLabel,
 } = require("./handlers/generate-reject.handler");
 
-const ALLOWED_KODE_KATEGORI = ["barangjadi", "furniturewip", "barangdagang"];
+const ALLOWED_KODE_KATEGORI = ["barangjadi", "furniturewip", "barangdagang", "bahanpendukung"];
 const ALLOWED_KATEGORI_INPUT = ["BAGUS", "REJECT"];
 
 function assertKodeKategori(value, field = "kodeKategori") {
@@ -66,6 +69,10 @@ async function jenisExists(tx, kodeKategori, idJenis) {
   }
   if (kodeKategori === "barangdagang") {
     const r = await rq.query(`SELECT 1 FROM dbo.MstBarangDagang WHERE IdBarangDagang=@Id`);
+    return r.recordset.length > 0;
+  }
+  if (kodeKategori === "bahanpendukung") {
+    const r = await rq.query(`SELECT 1 FROM dbo.MstCabinetMaterial WHERE IdCabinetMaterial=@Id`);
     return r.recordset.length > 0;
   }
   const r = await rq.query(`SELECT 1 FROM dbo.MstCabinetWIP WHERE IdCabinetWIP=@Id`);
@@ -191,12 +198,14 @@ exports.getDetail = async (noRetur) => {
           WHEN it.KodeKategori = 'barangjadi' THEN mbj.NamaBJ
           WHEN it.KodeKategori = 'furniturewip' THEN mcw.Nama
           WHEN it.KodeKategori = 'barangdagang' THEN mbd.NamaBarangDagang
+          WHEN it.KodeKategori = 'bahanpendukung' THEN mcm.Nama
         END AS NamaJenis,
         mr.NamaReject
       FROM dbo.BJReturV3Item_d it
       LEFT JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = it.IdJenis AND it.KodeKategori = 'barangjadi'
       LEFT JOIN dbo.MstCabinetWIP mcw ON mcw.IdCabinetWIP = it.IdJenis AND it.KodeKategori = 'furniturewip'
       LEFT JOIN dbo.MstBarangDagang mbd ON mbd.IdBarangDagang = it.IdJenis AND it.KodeKategori = 'barangdagang'
+      LEFT JOIN dbo.MstCabinetMaterial mcm ON mcm.IdCabinetMaterial = it.IdJenis AND it.KodeKategori = 'bahanpendukung'
       LEFT JOIN dbo.MstReject mr ON mr.IdReject = it.IdReject
       WHERE it.NoRetur = @No
       ORDER BY it.IdItem ASC
@@ -600,12 +609,14 @@ exports.addItems = async (noRetur, items, ctx) => {
           WHEN it.KodeKategori = 'barangjadi' THEN mbj.NamaBJ
           WHEN it.KodeKategori = 'furniturewip' THEN mcw.Nama
           WHEN it.KodeKategori = 'barangdagang' THEN mbd.NamaBarangDagang
+          WHEN it.KodeKategori = 'bahanpendukung' THEN mcm.Nama
         END AS NamaJenis,
         mr.NamaReject
       FROM dbo.BJReturV3Item_d it
       LEFT JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = it.IdJenis AND it.KodeKategori = 'barangjadi'
       LEFT JOIN dbo.MstCabinetWIP mcw ON mcw.IdCabinetWIP = it.IdJenis AND it.KodeKategori = 'furniturewip'
       LEFT JOIN dbo.MstBarangDagang mbd ON mbd.IdBarangDagang = it.IdJenis AND it.KodeKategori = 'barangdagang'
+      LEFT JOIN dbo.MstCabinetMaterial mcm ON mcm.IdCabinetMaterial = it.IdJenis AND it.KodeKategori = 'bahanpendukung'
       LEFT JOIN dbo.MstReject mr ON mr.IdReject = it.IdReject
       WHERE it.IdItem IN (
         SELECT j.id FROM OPENJSON(@IdsJson) WITH (id int '$.id') AS j
@@ -702,12 +713,14 @@ exports.updateItem = async (noRetur, idItem, payload, ctx) => {
             WHEN it.KodeKategori = 'barangjadi' THEN mbj.NamaBJ
             WHEN it.KodeKategori = 'furniturewip' THEN mcw.Nama
             WHEN it.KodeKategori = 'barangdagang' THEN mbd.NamaBarangDagang
+            WHEN it.KodeKategori = 'bahanpendukung' THEN mcm.Nama
           END AS NamaJenis,
           mr.NamaReject
         FROM dbo.BJReturV3Item_d it
         LEFT JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = it.IdJenis AND it.KodeKategori = 'barangjadi'
         LEFT JOIN dbo.MstCabinetWIP mcw ON mcw.IdCabinetWIP = it.IdJenis AND it.KodeKategori = 'furniturewip'
         LEFT JOIN dbo.MstBarangDagang mbd ON mbd.IdBarangDagang = it.IdJenis AND it.KodeKategori = 'barangdagang'
+        LEFT JOIN dbo.MstCabinetMaterial mcm ON mcm.IdCabinetMaterial = it.IdJenis AND it.KodeKategori = 'bahanpendukung'
         LEFT JOIN dbo.MstReject mr ON mr.IdReject = it.IdReject
         WHERE it.IdItem = @Id
       `);
@@ -805,9 +818,10 @@ async function exportToGsuInTx(tx, noRetur, actorUsername) {
       LEFT JOIN dbo.MstBarangJadi BJ ON BJ.IdBJ = B.IdJenis AND B.KodeKategori = 'barangjadi'
       LEFT JOIN dbo.MstCabinetWIP D ON D.IdCabinetWIP = B.IdJenis AND B.KodeKategori = 'furniturewip'
       LEFT JOIN dbo.MstBarangDagang BD ON BD.IdBarangDagang = B.IdJenis AND B.KodeKategori = 'barangdagang'
+      LEFT JOIN dbo.MstCabinetMaterial CM ON CM.IdCabinetMaterial = B.IdJenis AND B.KodeKategori = 'bahanpendukung'
       LEFT JOIN dbo.MstPembeli E ON E.IdPembeli = A.IdPembeli
       LEFT JOIN ${GSU_TRANSIT_DB}.AR_Customers F ON F.CustomerCode = E.CustomerCode
-      INNER JOIN ${GSU_TRANSIT_DB}.IC_Items G ON G.ItemCode = COALESCE(BJ.ItemCode, D.ItemCode, BD.ItemCode)
+      INNER JOIN ${GSU_TRANSIT_DB}.IC_Items G ON G.ItemCode = COALESCE(BJ.ItemCode, D.ItemCode, BD.ItemCode, CM.ItemCode)
       WHERE A.NoRetur = @No
     `);
   const rows = dataRes.recordset || [];
@@ -1078,6 +1092,9 @@ exports.generateLabel = async (noRetur, idItem, body, ctx) => {
   if (item.KodeKategori === "barangdagang") {
     return generateBarangDagangLabel(no, idItemNum, ctx);
   }
+  if (item.KodeKategori === "bahanpendukung") {
+    return generateBahanPendukungLabel(no, idItemNum, ctx);
+  }
   if (item.KategoriInput === "REJECT") {
     return generateRejectLabel(no, idItemNum, body, ctx);
   }
@@ -1108,24 +1125,25 @@ exports.getOutputs = async (noRetur) => {
     .input("No", sql.VarChar(50), no).query(`
       SELECT
         it.GeneratedLabelCode AS LabelCode,
-        COALESCE(bj.DateCreate, fw.DateCreate, CAST(bd.CreatedAt AS date), r.DateCreate) AS DateCreate,
-        COALESCE(mbj.NamaBJ, mcw.Nama, mbd.NamaBarangDagang, mr.NamaReject) AS NamaJenis,
+        COALESCE(bj.DateCreate, fw.DateCreate, CAST(bd.CreatedAt AS date), CAST(bp.CreatedAt AS date), r.DateCreate) AS DateCreate,
+        COALESCE(mbj.NamaBJ, mcw.Nama, mbd.NamaBarangDagang, mcmo.Nama, mr.NamaReject) AS NamaJenis,
         -- Barang dagang rusak tetap label barang dagang (bukan label reject).
         CASE WHEN it.KategoriInput = 'REJECT' AND it.KodeKategori <> 'barangdagang' THEN N'reject' ELSE it.KodeKategori END AS KodeKategori,
         CASE
           WHEN it.KategoriInput = 'REJECT' AND it.KodeKategori <> 'barangdagang' THEN N'Reject'
           WHEN it.KodeKategori = 'barangjadi' THEN N'Barang Jadi'
           WHEN it.KodeKategori = 'barangdagang' THEN N'Barang Dagang'
+          WHEN it.KodeKategori = 'bahanpendukung' THEN N'Bahan Pendukung'
           ELSE N'Furniture WIP'
         END AS Kategori,
         CASE WHEN it.KategoriInput = 'REJECT' AND it.KodeKategori <> 'barangdagang' THEN N'kg' ELSE N'pcs' END AS Uom,
-        COALESCE(bj.Blok, fw.Blok, bd.Blok, r.Blok) AS Blok,
-        COALESCE(bj.IdLokasi, fw.IdLokasi, bd.IdLokasi, r.IdLokasi) AS IdLokasi,
+        COALESCE(bj.Blok, fw.Blok, bd.Blok, bp.Blok, r.Blok) AS Blok,
+        COALESCE(bj.IdLokasi, fw.IdLokasi, bd.IdLokasi, bp.IdLokasi, r.IdLokasi) AS IdLokasi,
         CASE
           WHEN it.KategoriInput = 'REJECT' AND it.KodeKategori <> 'barangdagang' THEN ISNULL(r.Berat, 0)
-          ELSE ISNULL(COALESCE(bj.Pcs, fw.Pcs, bd.Qty), 0)
+          ELSE ISNULL(COALESCE(bj.Pcs, fw.Pcs, bd.Qty, bp.Qty), 0)
         END AS Qty,
-        ISNULL(CAST(COALESCE(bj.HasBeenPrinted, fw.HasBeenPrinted, bd.HasBeenPrinted, r.HasBeenPrinted) AS int), 0) AS HasBeenPrinted
+        ISNULL(CAST(COALESCE(bj.HasBeenPrinted, fw.HasBeenPrinted, bd.HasBeenPrinted, bp.HasBeenPrinted, r.HasBeenPrinted) AS int), 0) AS HasBeenPrinted
       FROM dbo.BJReturV3Item_d it
       LEFT JOIN dbo.BarangJadi bj
         ON bj.NoBJ = it.GeneratedLabelCode AND it.KodeKategori = 'barangjadi' AND it.KategoriInput = 'BAGUS'
@@ -1136,6 +1154,9 @@ exports.getOutputs = async (noRetur) => {
       LEFT JOIN dbo.BarangDagang bd
         ON bd.NoBarangDagang = it.GeneratedLabelCode AND it.KodeKategori = 'barangdagang'
       LEFT JOIN dbo.MstBarangDagang mbd ON mbd.IdBarangDagang = bd.IdBarangDagang
+      LEFT JOIN dbo.BahanPendukung bp
+        ON bp.NoBahanPendukung = it.GeneratedLabelCode AND it.KodeKategori = 'bahanpendukung'
+      LEFT JOIN dbo.MstCabinetMaterial mcmo ON mcmo.IdCabinetMaterial = bp.IdCabinetMaterial
       LEFT JOIN dbo.RejectV2 r
         ON r.NoReject = it.GeneratedLabelCode AND it.KategoriInput = 'REJECT' AND it.KodeKategori <> 'barangdagang'
       LEFT JOIN dbo.MstReject mr ON mr.IdReject = r.IdReject
@@ -1216,6 +1237,17 @@ exports.scanTurnoverAuto = async (noRetur, labelCode, ctx, options = {}) => {
         if (bdRes.recordset.length > 0) {
           kodeKategori = "barangdagang";
           label = bdRes.recordset[0];
+        } else {
+          const bpRes = await new sql.Request(tx).input("Code", sql.VarChar(50), code)
+            .query(`
+              SELECT NoBahanPendukung AS Code, IdCabinetMaterial AS IdJenis, ISNULL(Qty, 0) AS Pcs, DateUsage
+              FROM dbo.BahanPendukung WITH (UPDLOCK, HOLDLOCK)
+              WHERE NoBahanPendukung = @Code
+            `);
+          if (bpRes.recordset.length > 0) {
+            kodeKategori = "bahanpendukung";
+            label = bpRes.recordset[0];
+          }
         }
       }
     }
@@ -1225,7 +1257,13 @@ exports.scanTurnoverAuto = async (noRetur, labelCode, ctx, options = {}) => {
 
     // Sisa pcs label yang masih tersedia (Pcs parent dikurangi partial yang
     // sudah pernah dipecah dari label ini) — sama seperti penjualan.
-    const parentAvail = await lockParentAndAvailablePcs(tx, kodeKategori, code);
+    const parentAvail =
+      kodeKategori === "bahanpendukung"
+        ? {
+            parentPcs: Number(label.Pcs),
+            availablePcs: Math.round(Number(label.Pcs)),
+          }
+        : await lockParentAndAvailablePcs(tx, kodeKategori, code);
     if (!parentAvail) {
       throw badReq(`Label ${code} tidak ditemukan atau sudah terpakai`);
     }
@@ -1265,7 +1303,15 @@ exports.scanTurnoverAuto = async (noRetur, labelCode, ctx, options = {}) => {
       // Pcs label pas atau kurang dari sisa kebutuhan item — pakai semua sisa
       // pcs label ini, tandai parent fully-consumed.
       consumedPcs = parentAvail.availablePcs;
-      await markParentFullyUsed(tx, kodeKategori, code);
+      if (kodeKategori === "bahanpendukung") {
+        await new sql.Request(tx)
+          .input("Code", sql.VarChar(50), code)
+          .query(
+            `UPDATE dbo.BahanPendukung SET DateUsage = GETDATE() WHERE NoBahanPendukung = @Code AND DateUsage IS NULL`,
+          );
+      } else {
+        await markParentFullyUsed(tx, kodeKategori, code);
+      }
       // Kalau label ini SUDAH pernah dipecah sebelumnya, sisa terakhirnya
       // pun dicatat sebagai baris partial — supaya SETIAP konsumsi atas
       // label ber-partial punya NoPartial (paritas dengan penjualan).
@@ -1273,6 +1319,10 @@ exports.scanTurnoverAuto = async (noRetur, labelCode, ctx, options = {}) => {
         noPartial = await createPartial(tx, kodeKategori, code, consumedPcs);
         wasPartialSplit = true;
       }
+    } else if (kodeKategori === "bahanpendukung") {
+      throw badReq(
+        `Label ${code} berisi ${parentAvail.availablePcs} pcs, melebihi sisa kebutuhan item (${remaining} pcs). Label bahan pendukung tidak bisa dipecah (partial).`,
+      );
     } else if (!confirmPartial) {
       // Pcs label melebihi sisa kebutuhan item — jangan langsung tolak, minta
       // konfirmasi user dulu apakah mau dipecah (partial) sejumlah sisa
@@ -1374,7 +1424,13 @@ exports.undoScan = async (noRetur, idTurnover, ctx) => {
 
     const cfg = PARTIAL_CONFIG[turnover.KodeKategori];
 
-    if (turnover.NoPartial) {
+    if (turnover.KodeKategori === "bahanpendukung") {
+      await new sql.Request(tx)
+        .input("Code", sql.VarChar(50), turnover.LabelCode)
+        .query(
+          `UPDATE dbo.BahanPendukung SET DateUsage = NULL WHERE NoBahanPendukung = @Code`,
+        );
+    } else if (turnover.NoPartial) {
       // Baris ini memecah partial. Urai: (1) tentukan dulu apakah label sudah
       // "fully accounted" (DateUsage ke-set & total partial >= Pcs parent) —
       // itu tanda scan ini yang men-stamp DateUsage lewat markParentFullyUsed;
@@ -1454,11 +1510,13 @@ exports.getTurnover = async (noRetur) => {
           WHEN it.KodeKategori = 'barangjadi' THEN mbj.NamaBJ
           WHEN it.KodeKategori = 'furniturewip' THEN mcw.Nama
           WHEN it.KodeKategori = 'barangdagang' THEN mbd.NamaBarangDagang
+          WHEN it.KodeKategori = 'bahanpendukung' THEN mcm.Nama
         END AS NamaJenis
       FROM dbo.BJReturV3Item_d it
       LEFT JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = it.IdJenis AND it.KodeKategori = 'barangjadi'
       LEFT JOIN dbo.MstCabinetWIP mcw ON mcw.IdCabinetWIP = it.IdJenis AND it.KodeKategori = 'furniturewip'
       LEFT JOIN dbo.MstBarangDagang mbd ON mbd.IdBarangDagang = it.IdJenis AND it.KodeKategori = 'barangdagang'
+      LEFT JOIN dbo.MstCabinetMaterial mcm ON mcm.IdCabinetMaterial = it.IdJenis AND it.KodeKategori = 'bahanpendukung'
       WHERE it.NoRetur=@No AND it.Decision = 'DIGANTI'
       ORDER BY it.IdItem ASC
     `);
