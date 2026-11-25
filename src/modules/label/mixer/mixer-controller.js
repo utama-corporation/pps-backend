@@ -370,13 +370,18 @@ exports.generateQcPdf = async (req, res) => {
         ? "-"
         : Number(value).toFixed(3);
 
+    const formatTemp = (value) =>
+      value == null || Number.isNaN(Number(value))
+        ? "-"
+        : String(Math.round(Number(value)));
+
     const minTemp = row.MinMeltTemp;
     const maxTemp = row.MaxMeltTemp;
     const meltTemp =
       minTemp == null && maxTemp == null
         ? "-"
-        : `${minTemp == null ? "-" : formatDecimal(minTemp)} - ${
-            maxTemp == null ? "-" : formatDecimal(maxTemp)
+        : `${minTemp == null ? "-" : formatTemp(minTemp)} - ${
+            maxTemp == null ? "-" : formatTemp(maxTemp)
           }`;
 
     const data = {
