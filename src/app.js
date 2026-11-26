@@ -65,7 +65,6 @@ const productionKeyFittingRoutes = require("./modules/production/key-fitting/key
 const productionSpannerRoutes = require("./modules/production/spanner/spanner-production-routes");
 const productionReturnRoutes = require("./modules/production/return/return-production-routes");
 const returV3Routes = require("./modules/retur-v3/retur-v3-routes");
-const returBeliRoutes = require("./modules/retur-beli/retur-beli-routes");
 const penerimaanBahanBakuRoutes = require("./modules/production/penerimaan-bahan-baku/penerimaan-bahan-baku-route");
 const penerimaanBahanPendukungRoutes = require("./modules/production/penerimaan-bahan-pendukung/penerimaan-bahan-pendukung-route");
 const penerimaanBarangDagangRoutes = require("./modules/production/penerimaan-barang-dagang/penerimaan-barang-dagang-route");
@@ -223,7 +222,6 @@ app.use("/api", mstPrinterRoutes);
 app.use("/api/audit", auditRoutes);
 app.use("/api/trade-in", tradeInRoutes);
 app.use("/api/retur-v3", returV3Routes);
-app.use("/api/retur-beli", returBeliRoutes);
 app.use("/api/laporan/broker", laporanBrokerRoutes);
 app.use("/api/laporan/barang-jadi", laporanBarangJadiRoutes);
 app.use("/api/laporan/barang-dagang", laporanBarangDagangRoutes);

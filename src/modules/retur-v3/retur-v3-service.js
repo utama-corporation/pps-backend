@@ -1127,20 +1127,20 @@ exports.getOutputs = async (noRetur) => {
         it.GeneratedLabelCode AS LabelCode,
         COALESCE(bj.DateCreate, fw.DateCreate, CAST(bd.CreatedAt AS date), CAST(bp.CreatedAt AS date), r.DateCreate) AS DateCreate,
         COALESCE(mbj.NamaBJ, mcw.Nama, mbd.NamaBarangDagang, mcmo.Nama, mr.NamaReject) AS NamaJenis,
-        -- Barang dagang rusak tetap label barang dagang (bukan label reject).
-        CASE WHEN it.KategoriInput = 'REJECT' AND it.KodeKategori <> 'barangdagang' THEN N'reject' ELSE it.KodeKategori END AS KodeKategori,
+        -- Barang dagang / bahan pendukung rusak tetap label kategorinya sendiri (bukan reject).
+        CASE WHEN it.KategoriInput = 'REJECT' AND it.KodeKategori NOT IN ('barangdagang','bahanpendukung') THEN N'reject' ELSE it.KodeKategori END AS KodeKategori,
         CASE
-          WHEN it.KategoriInput = 'REJECT' AND it.KodeKategori <> 'barangdagang' THEN N'Reject'
+          WHEN it.KategoriInput = 'REJECT' AND it.KodeKategori NOT IN ('barangdagang','bahanpendukung') THEN N'Reject'
           WHEN it.KodeKategori = 'barangjadi' THEN N'Barang Jadi'
           WHEN it.KodeKategori = 'barangdagang' THEN N'Barang Dagang'
           WHEN it.KodeKategori = 'bahanpendukung' THEN N'Bahan Pendukung'
           ELSE N'Furniture WIP'
         END AS Kategori,
-        CASE WHEN it.KategoriInput = 'REJECT' AND it.KodeKategori <> 'barangdagang' THEN N'kg' ELSE N'pcs' END AS Uom,
+        CASE WHEN it.KategoriInput = 'REJECT' AND it.KodeKategori NOT IN ('barangdagang','bahanpendukung') THEN N'kg' ELSE N'pcs' END AS Uom,
         COALESCE(bj.Blok, fw.Blok, bd.Blok, bp.Blok, r.Blok) AS Blok,
         COALESCE(bj.IdLokasi, fw.IdLokasi, bd.IdLokasi, bp.IdLokasi, r.IdLokasi) AS IdLokasi,
         CASE
-          WHEN it.KategoriInput = 'REJECT' AND it.KodeKategori <> 'barangdagang' THEN ISNULL(r.Berat, 0)
+          WHEN it.KategoriInput = 'REJECT' AND it.KodeKategori NOT IN ('barangdagang','bahanpendukung') THEN ISNULL(r.Berat, 0)
           ELSE ISNULL(COALESCE(bj.Pcs, fw.Pcs, bd.Qty, bp.Qty), 0)
         END AS Qty,
         ISNULL(CAST(COALESCE(bj.HasBeenPrinted, fw.HasBeenPrinted, bd.HasBeenPrinted, bp.HasBeenPrinted, r.HasBeenPrinted) AS int), 0) AS HasBeenPrinted
@@ -1158,7 +1158,7 @@ exports.getOutputs = async (noRetur) => {
         ON bp.NoBahanPendukung = it.GeneratedLabelCode AND it.KodeKategori = 'bahanpendukung'
       LEFT JOIN dbo.MstCabinetMaterial mcmo ON mcmo.IdCabinetMaterial = bp.IdCabinetMaterial
       LEFT JOIN dbo.RejectV2 r
-        ON r.NoReject = it.GeneratedLabelCode AND it.KategoriInput = 'REJECT' AND it.KodeKategori <> 'barangdagang'
+        ON r.NoReject = it.GeneratedLabelCode AND it.KategoriInput = 'REJECT' AND it.KodeKategori NOT IN ('barangdagang','bahanpendukung')
       LEFT JOIN dbo.MstReject mr ON mr.IdReject = r.IdReject
       WHERE it.NoRetur = @No AND it.GeneratedLabelCode IS NOT NULL
       ORDER BY it.GeneratedLabelCode ASC
