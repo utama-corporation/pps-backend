@@ -31,6 +31,7 @@ async function listAll({
     SELECT
       IdPembeli,
       NamaPembeli,
+      CustomerCode,
       Enable
     FROM [dbo].[MstPembeli]
     WHERE ${where}
