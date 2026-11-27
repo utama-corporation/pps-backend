@@ -42,7 +42,7 @@ router.patch(
 // Batalkan complete: IsComplete 1 -> 0 (produksi bisa diedit lagi).
 router.patch(
   "/mixer/:noProduksi/uncomplete",
-  requirePermission("produksi_mixer:lock"),
+  requirePermission("produksi_mixer:unlock"),
   mixerProduksiController.uncompleteProduksi,
 );
 

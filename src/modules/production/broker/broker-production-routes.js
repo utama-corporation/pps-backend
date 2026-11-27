@@ -40,7 +40,7 @@ router.patch(
   "/broker/:noProduksi/uncomplete",
   verifyToken,
   attachPermissions,
-  requirePermission("produksi_broker:lock"),
+  requirePermission("produksi_broker:unlock"),
   brokerProduksiController.uncompleteProduksi,
 );
 

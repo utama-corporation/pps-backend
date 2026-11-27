@@ -41,7 +41,7 @@ router.patch(
   "/washing/:noProduksi/uncomplete",
   verifyToken,
   attachPermissions,
-  requirePermission("produksi_washing:lock"),
+  requirePermission("produksi_washing:unlock"),
   washingProduksiController.uncompleteProduksi,
 );
 

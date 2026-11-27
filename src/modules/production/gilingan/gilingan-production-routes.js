@@ -36,7 +36,7 @@ router.patch(
   "/gilingan/:noProduksi/uncomplete",
   verifyToken,
   attachPermissions,
-  requirePermission("produksi_gilingan:lock"),
+  requirePermission("produksi_gilingan:unlock"),
   gilinganProduksiController.uncompleteProduksi,
 );
 

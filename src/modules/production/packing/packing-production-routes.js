@@ -40,7 +40,7 @@ router.patch(
   "/packing/:noPacking/uncomplete",
   verifyToken,
   attachPermissions,
-  requirePermission("packing:lock"),
+  requirePermission("packing:unlock"),
   packingController.uncompleteProduksi,
 );
 

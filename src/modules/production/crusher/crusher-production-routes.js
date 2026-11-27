@@ -41,7 +41,7 @@ router.patch(
   "/crusher/:noCrusherProduksi/uncomplete",
   verifyToken,
   attachPermissions,
-  requirePermission("produksi_crusher:lock"),
+  requirePermission("produksi_crusher:unlock"),
   ctrl.uncompleteProduksi,
 );
 

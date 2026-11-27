@@ -7,7 +7,7 @@ const getProfileService = async (username) => {
   const result = await pool.request()
     .input('username', sql.VarChar, username)
     .query(`
-      SELECT TOP 1 [Username], [FName], [LName], [Password]
+      SELECT TOP 1 [Username], [FName], [LName], [Password], [Nik], [CompanyID]
       FROM MstUsername
       WHERE Username = @username
     `);

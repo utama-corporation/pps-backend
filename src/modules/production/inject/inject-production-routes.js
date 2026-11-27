@@ -122,7 +122,7 @@ router.patch(
   "/inject/:noProduksi/uncomplete",
   verifyToken,
   attachPermissions,
-  requirePermission("injectproduksi:lock"),
+  requirePermission("injectproduksi:unlock"),
   injectProduksiController.uncompleteProduksi,
 );
 

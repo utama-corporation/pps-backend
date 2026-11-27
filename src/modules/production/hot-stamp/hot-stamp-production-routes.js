@@ -38,7 +38,7 @@ router.patch(
   "/hot-stamp/:noProduksi/uncomplete",
   verifyToken,
   attachPermissions,
-  requirePermission("hotstamping:lock"),
+  requirePermission("hotstamping:unlock"),
   hotStampingController.uncompleteProduksi,
 );
 

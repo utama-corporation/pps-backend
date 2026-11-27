@@ -27,7 +27,7 @@ router.post(
   keyFittingController.splitProduksiTime,
 );
 
-// Kunci produksi: IsComplete 0 -> 1. Butuh permission produksi_pasangkunci:lock.
+// Kunci produksi: IsComplete 0 -> 1. Butuh permission pasangkunci:lock.
 router.patch(
   "/key-fitting/:noProduksi/complete",
   verifyToken,
@@ -41,7 +41,7 @@ router.patch(
   "/key-fitting/:noProduksi/uncomplete",
   verifyToken,
   attachPermissions,
-  requirePermission("pasangkunci:lock"),
+  requirePermission("pasangkunci:unlock"),
   keyFittingController.uncompleteProduksi,
 );
 
